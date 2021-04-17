@@ -1,0 +1,75 @@
+package handler
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"github.com/gorilla/mux"
+)
+
+type DBViewInfo struct {
+	Base
+}
+
+func (s *DBViewInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	db := Database{Base: s.Base}.Do(w, r)
+	if db == nil {
+		return
+	}
+
+	if _, ok := (Authenticator{Base: s.Base}.DB(w, r, db)); !ok {
+		return
+	}
+
+	docID := "_design/" + mux.Vars(r)["docid"]
+	viewName := mux.Vars(r)["view"]
+
+	doc, err := db.GetDocument(r.Context(), docID) // WIP
+	if err != nil {
+		WriteError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	stats, err := db.ViewSize(r.Context(), viewName)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	response := &ViewInfoResponse{}
+	response.ViewIndex.Language = doc.Language()
+	response.ViewIndex.UpdatesPending.Total = stats.DocCount
+	response.ViewIndex.Sizes.File = stats.InUse
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+type ViewInfoResponse struct {
+	Name      string    `json:"name"`
+	ViewIndex ViewIndex `json:"view_index"`
+}
+type UpdatesPending struct {
+	Minimum   uint64 `json:"minimum"`
+	Preferred uint64 `json:"preferred"`
+	Total     uint64 `json:"total"`
+}
+type ViewSizes struct {
+	File     uint64 `json:"file"`
+	External uint64 `json:"external"`
+	Active   uint64 `json:"active"`
+}
+type ViewIndex struct {
+	UpdatesPending UpdatesPending `json:"updates_pending"`
+	WaitingCommit  bool           `json:"waiting_commit"`
+	WaitingClients int            `json:"waiting_clients"`
+	UpdaterRunning bool           `json:"updater_running"`
+	UpdateSeq      int            `json:"update_seq"`
+	Sizes          ViewSizes      `json:"sizes"`
+	Signature      string         `json:"signature"`
+	PurgeSeq       int            `json:"purge_seq"`
+	Language       string         `json:"language"`
+	CompactRunning bool           `json:"compact_running"`
+}

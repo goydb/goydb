@@ -1,0 +1,7 @@
+dbs
+client/node_modules
+
+tmp
+client/data.dump
+
+testdbs

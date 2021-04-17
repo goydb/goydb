@@ -1,0 +1,23 @@
+services:
+  goydb:
+    build: .
+    ports:
+      - "7070:7070"
+    volumes:
+      - data:/usr/local/var/goydb
+
+  couchdb:
+    image: couchdb:latest
+    ports:
+      - "5984:5984"
+    environment:
+    - COUCHDB_USER=admin
+    - COUCHDB_PASSWORD=secret
+    volumes:
+    - couchdbdata:/home/couchdb/data
+    - couchdbconf:/opt/couchdb/etc/local.d
+
+volumes:
+  data: {}
+  couchdbdata: {}
+  couchdbconf: {}
