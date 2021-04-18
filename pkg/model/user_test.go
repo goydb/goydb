@@ -11,7 +11,7 @@ func TestUserGeneratePBKDF2(t *testing.T) {
 	u := User{Password: "test"}
 	err := u.GeneratePBKDF2()
 	assert.NoError(t, err)
-	assert.Equal(t, u.Iterations, 4096)
+	assert.Equal(t, u.Iterations, 100000)
 	assert.NotEmpty(t, u.Salt)
 	assert.NotEmpty(t, u.DerivedKey)
 	assert.Empty(t, u.Password)
@@ -20,9 +20,9 @@ func TestUserGeneratePBKDF2(t *testing.T) {
 
 func TestUserVerifyPassword(t *testing.T) {
 	u := User{
-		Iterations: 4096,
-		DerivedKey: "801e3bd2caf360bbc9a3b2e4d6acb16337ed34c8fe6dbb080f82c89d1afc3614",
-		Salt:       "82d3004c96fab18065cb37e82b63800c0ad5ef857012ed3c1c1b0dee25c6aa77",
+		Iterations: 100000,
+		DerivedKey: "038a9dbe6d0fd90e38dfd829c7920b01755b7d96",
+		Salt:       "820af19388be1b9ec2e22f730e452c75",
 	}
 	ok, err := u.VerifyPassword("test")
 	assert.NoError(t, err)
