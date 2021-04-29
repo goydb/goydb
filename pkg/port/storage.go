@@ -139,3 +139,8 @@ type Index interface {
 	Put(tx Transaction, doc *model.Document) error
 	Iter(tx Transaction) (Iterator, error)
 }
+
+type SearchIndex interface {
+	Index(id string, data interface{}) error
+	Delete(id string) error
+}

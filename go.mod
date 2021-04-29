@@ -3,9 +3,9 @@ module github.com/goydb/goydb
 go 1.16
 
 require (
+	github.com/blevesearch/bleve v1.0.14
 	github.com/caarlos0/env/v6 v6.5.0
 	github.com/d5/tengo/v2 v2.6.2
-	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dlclark/regexp2 v1.4.0 // indirect
 	github.com/dop251/goja v0.0.0-20201221183957-6b6d5e2b5d80
 	github.com/fxamacker/cbor/v2 v2.2.0
