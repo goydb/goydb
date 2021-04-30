@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/blevesearch/bleve"
@@ -13,7 +14,8 @@ const SearchDir = "search_indices"
 var _ port.SearchIndex = (port.SearchIndex)(nil)
 
 type SearchIndex struct {
-	idx bleve.Index
+	idx  bleve.Index
+	path string
 }
 
 func (d *Database) SearchDir(docID, view string) string {
@@ -25,7 +27,10 @@ func (d *Database) OpenSearchIndex(path string) (port.SearchIndex, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open search index %q: %w", path, index)
 	}
-	return &SearchIndex{idx: index}, nil
+	return &SearchIndex{
+		idx:  index,
+		path: path,
+	}, nil
 }
 
 func (d *Database) CreateSearchIndex(path string) (port.SearchIndex, error) {
@@ -34,7 +39,14 @@ func (d *Database) CreateSearchIndex(path string) (port.SearchIndex, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create search index %q: %w", path, index)
 	}
-	return &SearchIndex{idx: index}, nil
+	return &SearchIndex{
+		idx:  index,
+		path: path,
+	}, nil
+}
+
+func (si *SearchIndex) Close() error {
+	return si.idx.Close()
 }
 
 func (si *SearchIndex) Index(id string, data interface{}) error {
@@ -43,4 +55,13 @@ func (si *SearchIndex) Index(id string, data interface{}) error {
 
 func (si *SearchIndex) Delete(id string) error {
 	return si.idx.Delete(id)
+}
+
+func (si *SearchIndex) Destroy() error {
+	err := si.Close()
+	if err != nil {
+		return err
+	}
+
+	return os.RemoveAll(si.path)
 }
