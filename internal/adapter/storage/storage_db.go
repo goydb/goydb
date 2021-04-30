@@ -23,6 +23,8 @@ type Database struct {
 	channels []chan *model.Document
 
 	indicies []port.Index
+
+	searchIndicies []port.SearchIndex
 }
 
 func (d Database) ChangesIndex() port.Index {
@@ -31,6 +33,10 @@ func (d Database) ChangesIndex() port.Index {
 
 func (d Database) Indicies() []port.Index {
 	return d.indicies
+}
+
+func (d Database) SearchIndicies() []port.SearchIndex {
+	return d.searchIndicies
 }
 
 func (d Database) Name() string {
@@ -79,6 +85,7 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 	}
 	s.dbs[name] = database
 
+	// create all required database indicies
 	err = database.Transaction(ctx, func(tx port.Transaction) error {
 		for _, index := range database.Indicies() {
 			err := index.Ensure(tx)
@@ -88,6 +95,12 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 		}
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	// open all search indicies
+	err = database.OpenSearchIndicies()
 	if err != nil {
 		return nil, err
 	}

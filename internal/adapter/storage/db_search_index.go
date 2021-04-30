@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -11,16 +12,45 @@ import (
 )
 
 const SearchDir = "search_indices"
+const indexExt = ".bleve"
 
 var _ port.SearchIndex = (port.SearchIndex)(nil)
 
-type SearchIndex struct {
-	idx  bleve.Index
-	path string
+// OpenSearchIndicies load all created database indicies
+func (d *Database) OpenSearchIndicies() error {
+	path := filepath.Join(d.databaseDir, SearchDir)
+
+	_, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to read search indices dir %q: %w", path, err)
+	}
+
+	dirEntries, err := os.ReadDir(path)
+	if err != nil {
+		return fmt.Errorf("failed to find search indices in %q: %w", path, err)
+	}
+
+	for _, entry := range dirEntries {
+		if filepath.Ext(entry.Name()) != indexExt {
+			continue
+		}
+
+		si, err := d.OpenSearchIndex(filepath.Join(path, entry.Name()))
+		if err != nil {
+			log.Printf("skipping, unable to open saearch index, possible corruption: %v", err)
+		}
+
+		d.searchIndicies = append(d.searchIndicies, si)
+	}
+
+	return nil
 }
 
 func (d *Database) SearchDir(docID, view string) string {
-	return filepath.Join(d.databaseDir, SearchDir, docID+"."+view+".bleve")
+	return filepath.Join(d.databaseDir, SearchDir, docID+"."+view+indexExt)
 }
 
 func (d *Database) OpenSearchIndex(path string) (port.SearchIndex, error) {
@@ -44,6 +74,11 @@ func (d *Database) CreateSearchIndex(path string) (port.SearchIndex, error) {
 		idx:  index,
 		path: path,
 	}, nil
+}
+
+type SearchIndex struct {
+	idx  bleve.Index
+	path string
 }
 
 func (si *SearchIndex) String() string {
