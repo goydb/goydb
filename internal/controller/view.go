@@ -98,6 +98,7 @@ func (v View) RebuildViews(ctx context.Context, task *model.Task) error {
 					i.SetSkip(j * batchSize)
 					i.SetLimit(batchSize)
 					i.SetSkipDesignDoc(true)
+					i.SetSkipLocalDoc(true)
 
 					for doc := i.First(); i.Continue(); doc = i.Next() {
 						docs = append(docs, doc)
