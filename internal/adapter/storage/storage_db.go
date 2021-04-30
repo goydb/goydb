@@ -24,7 +24,8 @@ type Database struct {
 
 	indicies []port.Index
 
-	searchIndicies []port.SearchIndex
+	searchIndicies   map[string]port.SearchIndex
+	muSearchIndicies sync.RWMutex
 }
 
 func (d Database) ChangesIndex() port.Index {
@@ -33,10 +34,6 @@ func (d Database) ChangesIndex() port.Index {
 
 func (d Database) Indicies() []port.Index {
 	return d.indicies
-}
-
-func (d Database) SearchIndicies() []port.SearchIndex {
-	return d.searchIndicies
 }
 
 func (d Database) Name() string {
@@ -82,6 +79,7 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 		indicies: []port.Index{
 			NewUniqueIndex("_changes", ChangesIndexKeyFunc, ChangesIndexValueFunc),
 		},
+		searchIndicies: make(map[string]port.SearchIndex),
 	}
 	s.dbs[name] = database
 

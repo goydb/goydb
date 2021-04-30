@@ -87,7 +87,7 @@ func (c Task) ProcessTask(ctx context.Context, task *model.Task) error {
 	if err != nil {
 		return err
 	}
-	vc := View{
+	vc := DesignDoc{
 		DB: db,
 	}
 
@@ -115,7 +115,7 @@ func (c Task) ProcessTask(ctx context.Context, task *model.Task) error {
 	}
 
 	for _, designDoc := range designDocs {
-		vc.ViewDoc = designDoc
+		vc.SourceDoc = designDoc
 		err = vc.Reset(ctx)
 		if err != nil {
 			return err
@@ -123,7 +123,7 @@ func (c Task) ProcessTask(ctx context.Context, task *model.Task) error {
 
 		switch task.Action {
 		case model.ActionUpdateView:
-			err = vc.RebuildViews(ctx, task)
+			err = vc.Rebuild(ctx, task)
 		default:
 			err = fmt.Errorf("unknown task action: %d", task.Action)
 		}

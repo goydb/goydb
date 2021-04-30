@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
@@ -41,7 +40,6 @@ func (s *DBDocGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else if s.Local {
 		docID = "_local/" + docID
 	}
-	log.Println(docID)
 
 	// options
 	opts := r.URL.Query()

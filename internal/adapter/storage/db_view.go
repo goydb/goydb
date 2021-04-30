@@ -11,25 +11,21 @@ import (
 	"gopkg.in/mgo.v2/bson"
 )
 
-func viewBucket(name string) []byte {
-	return []byte("view:" + name)
-}
+var indexBucket = []byte("_index")
 
-var indexBucket = viewBucket("_index")
-
-func (d *Database) ResetView(ctx context.Context, name string) error {
+func (d *Database) ResetView(ctx context.Context, ddfn *model.DesignDocFn) error {
 	err := d.Update(func(tx *bolt.Tx) error {
-		if tx.Bucket(viewBucket(name)) != nil {
-			return tx.DeleteBucket(viewBucket(name))
+		if tx.Bucket(ddfn.Bucket()) != nil {
+			return tx.DeleteBucket(ddfn.Bucket())
 		}
 		return nil
 	})
 	return err
 }
 
-func (d *Database) UpdateView(ctx context.Context, name string, docs []*model.Document) error {
+func (d *Database) UpdateView(ctx context.Context, ddfn *model.DesignDocFn, docs []*model.Document) error {
 	err := d.Update(func(tx *bolt.Tx) error {
-		bucketName := viewBucket(name)
+		bucketName := ddfn.Bucket()
 		bucket, err := tx.CreateBucketIfNotExists(bucketName)
 		if err != nil {
 			return err

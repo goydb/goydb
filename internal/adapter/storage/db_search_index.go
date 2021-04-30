@@ -1,13 +1,16 @@
 package storage
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/blevesearch/bleve"
+	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 )
 
@@ -38,56 +41,105 @@ func (d *Database) OpenSearchIndicies() error {
 			continue
 		}
 
-		si, err := d.OpenSearchIndex(filepath.Join(path, entry.Name()))
+		docID := strings.TrimSuffix(entry.Name(), indexExt)
+		si, err := d.OpenSearchIndex(docID)
 		if err != nil {
 			log.Printf("skipping, unable to open saearch index, possible corruption: %v", err)
 		}
 
-		d.searchIndicies = append(d.searchIndicies, si)
+		d.muSearchIndicies.Lock()
+		d.searchIndicies[si.Name()] = si
+		d.muSearchIndicies.Unlock()
 	}
 
 	return nil
 }
 
-func (d *Database) SearchDir(docID, view string) string {
-	return filepath.Join(d.databaseDir, SearchDir, docID+"."+view+indexExt)
+func (d *Database) EnsureSearchIndex(docID string) (port.SearchIndex, error) {
+	// check if the index already exists
+	d.muSearchIndicies.Lock()
+	si, ok := d.searchIndicies[docID]
+	d.muSearchIndicies.RUnlock()
+	if ok {
+		return si, nil
+	}
+
+	// index doesn't exist, create a new index
+	d.muSearchIndicies.Lock()
+	defer d.muSearchIndicies.Unlock()
+
+	// try to open search from fs
+	si, err := d.OpenSearchIndex(docID)
+	if err == nil {
+		d.searchIndicies[si.Name()] = si
+		return si, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+
+	// create new search index for the doc
+	si, err = d.CreateSearchIndex(docID)
+	if err != nil {
+		return nil, err
+	}
+
+	d.searchIndicies[si.Name()] = si
+	return si, nil
 }
 
-func (d *Database) OpenSearchIndex(path string) (port.SearchIndex, error) {
+func (d *Database) UpdateSearch(ctx context.Context, ddfn *model.DesignDocFn, docs []*model.Document) error {
+	return nil
+}
+
+func (d *Database) SearchIndex(docID string) string {
+	return filepath.Join(d.databaseDir, SearchDir, docID+indexExt)
+}
+
+func (d *Database) OpenSearchIndex(docID string) (port.SearchIndex, error) {
+	path := d.SearchIndex(docID)
 	index, err := bleve.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open search index %q: %w", path, index)
 	}
 	return &SearchIndex{
+		name: docID,
 		idx:  index,
 		path: path,
 	}, nil
 }
 
-func (d *Database) CreateSearchIndex(path string) (port.SearchIndex, error) {
+func (d *Database) CreateSearchIndex(docID string) (port.SearchIndex, error) {
+	path := d.SearchIndex(docID)
 	mapping := bleve.NewIndexMapping()
 	index, err := bleve.New(path, mapping)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create search index %q: %w", path, index)
 	}
 	return &SearchIndex{
+		name: docID,
 		idx:  index,
 		path: path,
 	}, nil
 }
 
 type SearchIndex struct {
+	name string
 	idx  bleve.Index
 	path string
 }
 
-func (si *SearchIndex) String() string {
+func (si SearchIndex) Name() string {
+	return si.name
+}
+
+func (si SearchIndex) String() string {
 	cnt, err := si.idx.DocCount()
 	if err != nil {
 		log.Printf("failed to get search index %s count: %v", si.path, err)
 	}
 
-	return fmt.Sprintf("<SearchIndex path=%q count=%v>", si.path, cnt)
+	return fmt.Sprintf("<SearchIndex name=%q count=%v>", si.name, cnt)
 }
 
 func (si *SearchIndex) Close() error {

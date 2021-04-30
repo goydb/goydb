@@ -18,7 +18,7 @@ func (d *Database) FindDocs(ctx context.Context, query model.FindQuery) ([]*mode
 	start := time.Now()
 	defer func() { stats.ExecutionTime = float64(time.Since(start)) / float64(time.Millisecond) }()
 
-	err := d.Iterator(ctx, "", func(i port.Iterator) error {
+	err := d.Iterator(ctx, nil, func(i port.Iterator) error {
 		total = i.Total()
 		if total == 0 {
 			return nil

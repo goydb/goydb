@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/internal/adapter/view/gojaview"
 	"github.com/goydb/goydb/internal/adapter/view/tengoview"
 	"github.com/goydb/goydb/pkg/model"
@@ -17,24 +16,25 @@ var ErrNoViewFunctions = errors.New("no view functions in the document")
 
 type ReducerFunc func(docs []*model.Document, doc *model.Document, group bool) []*model.Document
 
-type View struct {
-	DB       port.Database
-	ViewDoc  *model.Document
-	ViewName string
-	Doc      *model.Document
+type DesignDoc struct {
+	DB        port.Database
+	SourceDoc *model.Document
+	FnName    string
+	Doc       *model.Document
 }
 
-func (v View) Reset(ctx context.Context) error {
+func (v DesignDoc) Reset(ctx context.Context) error {
 	if v.Doc != nil {
 		return v.DB.ResetViewIndexForDoc(ctx, v.Doc.ID)
 	}
-	if v.ViewDoc != nil {
-		vfns := v.ViewDoc.ViewFunctions()
+	if v.SourceDoc != nil {
+		vfns := v.SourceDoc.ViewFunctions()
 		if len(vfns) == 0 {
 			return nil
 		}
 		for _, vfn := range vfns {
-			err := v.DB.ResetView(ctx, vfn.Name)
+			ddfn := model.DesignDocFn{Type: model.ViewFn, DesignDocID: v.SourceDoc.ID, FnName: vfn.Name}
+			err := v.DB.ResetView(ctx, &ddfn)
 			if err != nil {
 				return err
 			}
@@ -44,8 +44,8 @@ func (v View) Reset(ctx context.Context) error {
 	return nil
 }
 
-func (v View) ViewServer(fn string) (port.ViewServer, error) {
-	lang := v.ViewDoc.Language()
+func (v DesignDoc) ViewServer(fn string) (port.ViewServer, error) {
+	lang := v.SourceDoc.Language()
 	switch lang {
 	case "javascript", "":
 		return gojaview.NewViewServer(fn)
@@ -56,99 +56,158 @@ func (v View) ViewServer(fn string) (port.ViewServer, error) {
 	}
 }
 
-func (v View) RebuildViews(ctx context.Context, task *model.Task) error {
-	vfns := v.ViewDoc.ViewFunctions()
-	if vfns == nil {
-		return ErrNoViewFunctions
-	}
-	if len(vfns) == 0 {
-		return nil
-	}
+func (v DesignDoc) GetViewServer() (map[string]port.ViewServer, error) {
+	allViewServer := make(map[string]port.ViewServer)
+	vfns := v.SourceDoc.ViewFunctions()
 
 	for _, vfn := range vfns {
 		// filter for specific view function
-		if v.ViewName != "" && vfn.Name != v.ViewName {
+		if v.FnName != "" && vfn.Name != v.FnName {
 			continue
 		}
 
 		// create view server
 		server, err := v.ViewServer(vfn.MapFn)
 		if err != nil {
-			return err
+			return nil, err
+		}
+		allViewServer[vfn.Name] = server
+	}
+
+	return allViewServer, nil
+}
+
+func (v DesignDoc) GetSearchServer() (map[string]port.ViewServer, error) {
+	allViewServer := make(map[string]port.ViewServer)
+	sfns := v.SourceDoc.SearchFunctions()
+
+	for _, sfn := range sfns {
+		// filter for specific view function
+		if v.FnName != "" && sfn.Name != v.FnName {
+			continue
 		}
 
-		j := 0
-		batchSize := 1000
-		for {
-			var docs []*model.Document
-			if v.Doc == nil {
-				err := v.DB.Iterator(ctx, storage.NoView, func(i port.Iterator) error {
-					total := i.Total()
-					if total == 0 {
-						return nil
-					}
-					if task != nil {
-						if v.ViewName == "" { // no single view update
-							task.ProcessingTotal = total * len(vfns)
-						} else {
-							task.ProcessingTotal = total
-						}
-					}
+		// create view server
+		server, err := v.ViewServer(sfn.SearchFn)
+		if err != nil {
+			return nil, err
+		}
+		allViewServer[sfn.Name] = server
+	}
 
-					i.SetSkip(j * batchSize)
-					i.SetLimit(batchSize)
-					i.SetSkipDesignDoc(true)
-					i.SetSkipLocalDoc(true)
+	return allViewServer, nil
+}
 
-					for doc := i.First(); i.Continue(); doc = i.Next() {
-						docs = append(docs, doc)
-					}
+func (v DesignDoc) Rebuild(ctx context.Context, task *model.Task) error {
+	ddfn := model.DesignDocFn{DesignDocID: v.SourceDoc.ID}
+	vfns, err := v.GetViewServer()
+	if err != nil {
+		return fmt.Errorf("failed to view function: %w", err)
+	}
 
+	sfns, err := v.GetSearchServer()
+	if err != nil {
+		return fmt.Errorf("failed to search function: %w", err)
+	}
+
+	fns := len(vfns) + len(sfns)
+	if fns == 0 {
+		return nil
+	}
+
+	j := 0
+	batchSize := 1000
+	for {
+		var docs []*model.Document
+		if v.Doc == nil {
+			err := v.DB.Iterator(ctx, nil, func(i port.Iterator) error {
+				total := i.Total()
+				if total == 0 {
 					return nil
+				}
+				if task != nil {
+					if v.FnName == "" { // no single view update
+						task.ProcessingTotal = total * fns
+					} else {
+						task.ProcessingTotal = total
+					}
+				}
 
-				})
-				if err != nil {
-					return err
-				}
-				if len(docs) == 0 {
-					break
-				}
-			} else {
-				docs = []*model.Document{v.Doc}
-			}
+				i.SetSkip(j * batchSize)
+				i.SetLimit(batchSize)
+				i.SetSkipDesignDoc(true)
+				i.SetSkipLocalDoc(true)
 
-			if task != nil {
-				task.Processed += len(docs)
-				err := v.DB.UpdateTask(ctx, task)
-				if err != nil {
-					return err
+				for doc := i.First(); i.Continue(); doc = i.Next() {
+					docs = append(docs, doc)
 				}
-			}
-			viewDocs, err := server.Process(ctx, docs)
+
+				return nil
+
+			})
 			if err != nil {
 				return err
 			}
-
-			err = v.DB.UpdateView(ctx, vfn.Name, viewDocs)
-			if err != nil {
-				return err
-			}
-			j++
-			if len(docs) < batchSize {
+			if len(docs) == 0 {
 				break
 			}
+		} else {
+			docs = []*model.Document{v.Doc}
+		}
+
+		if task != nil {
+			task.Processed += len(docs)
+			err := v.DB.UpdateTask(ctx, task)
+			if err != nil {
+				return err
+			}
+		}
+
+		// update views
+		for vfnName, vfnServer := range vfns {
+			ddfn.Type = model.ViewFn
+			ddfn.FnName = vfnName
+			viewDocs, err := vfnServer.Process(ctx, docs)
+			if err != nil {
+				return err
+			}
+
+			err = v.DB.UpdateView(ctx, &ddfn, viewDocs)
+			if err != nil {
+				return err
+			}
+		}
+
+		// update search functions
+		for sfnName, sfnServer := range vfns {
+			ddfn.Type = model.SearchFn
+			ddfn.FnName = sfnName
+			viewDocs, err := sfnServer.Process(ctx, docs)
+			if err != nil {
+				return err
+			}
+
+			err = v.DB.UpdateSearch(ctx, &ddfn, viewDocs)
+			if err != nil {
+				return err
+			}
+		}
+
+		j++
+		if len(docs) < batchSize {
+			break
 		}
 	}
 
 	return nil
 }
 
-func (v View) ViewFunctions() (*model.ViewFunctions, error) {
-	if v.ViewName == storage.NoView {
+func (v DesignDoc) ViewFunctions() (*model.ViewFunction, error) {
+	if v.FnName == "" {
 		panic("can only be called with ViewName defined")
 	}
 
-	vfns := v.ViewDoc.ViewFunctions()
+	vfns := v.SourceDoc.ViewFunctions()
 	if vfns == nil {
 		return nil, ErrNoViewFunctions
 	}
@@ -158,17 +217,17 @@ func (v View) ViewFunctions() (*model.ViewFunctions, error) {
 
 	for _, vfn := range vfns {
 		// filter for specific view function
-		if v.ViewName != "" && vfn.Name != v.ViewName {
+		if v.FnName != "" && vfn.Name != v.FnName {
 			continue
 		}
 
 		return vfn, nil
 	}
 
-	return nil, fmt.Errorf("view function %q not found", v.ViewName)
+	return nil, fmt.Errorf("view function %q not found", v.FnName)
 }
 
-func (v View) ReduceDocs(ctx context.Context, opts port.AllDocsQuery) ([]*model.Document, int, error) {
+func (v DesignDoc) ReduceDocs(ctx context.Context, opts port.AllDocsQuery) ([]*model.Document, int, error) {
 	vfn, err := v.ViewFunctions()
 	if err != nil {
 		return nil, 0, err
@@ -231,7 +290,8 @@ func (v View) ReduceDocs(ctx context.Context, opts port.AllDocsQuery) ([]*model.
 
 	var total int
 	var docs []*model.Document
-	err = v.DB.Iterator(ctx, v.ViewName, func(i port.Iterator) error {
+	ddfn := model.DesignDocFn{Type: model.ViewFn, DesignDocID: v.SourceDoc.ID, FnName: v.FnName}
+	err = v.DB.Iterator(ctx, &ddfn, func(i port.Iterator) error {
 		total = i.Total()
 		if total == 0 {
 			return nil

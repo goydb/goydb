@@ -10,8 +10,6 @@ import (
 	"gopkg.in/mgo.v2/bson"
 )
 
-const NoView = ""
-
 type Iterator struct {
 	Skip     int
 	Limit    int
@@ -33,10 +31,10 @@ func (i *Iterator) Total() int {
 	return i.bucket.Stats().KeyN
 }
 
-func newIterator(tx *bolt.Tx, view string) *Iterator {
+func newIterator(tx *bolt.Tx, ddfn *model.DesignDocFn) *Iterator {
 	var bucket *bolt.Bucket
-	if view != NoView {
-		bucket = tx.Bucket(viewBucket(view))
+	if ddfn != nil {
+		bucket = tx.Bucket(ddfn.Bucket())
 	} else {
 		bucket = tx.Bucket(docsBucket)
 	}
@@ -186,9 +184,9 @@ func (i *Iterator) SetEndKey(v []byte) {
 	i.EndKey = v
 }
 
-func (d *Database) Iterator(ctx context.Context, viewName string, fn func(i port.Iterator) error) error {
+func (d *Database) Iterator(ctx context.Context, ddfn *model.DesignDocFn, fn func(i port.Iterator) error) error {
 	return d.View(func(tx *bolt.Tx) error {
-		iter := newIterator(tx, viewName)
+		iter := newIterator(tx, ddfn)
 		if iter == nil {
 			return nil
 		}

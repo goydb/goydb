@@ -76,17 +76,21 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var q port.AllDocsQuery
 	q.Skip = intOption("skip", 0, options)
 	q.Limit = intOption("limit", 0, options)
-	q.ViewName = viewName
+	q.DDFN = &model.DesignDocFn{
+		Type:        model.ViewFn,
+		DesignDocID: docID,
+		FnName:      viewName,
+	}
 	q.IncludeDocs = boolOption("include_docs", false, options)
 	q.ViewGroup = boolOption("group", false, options)
 
 	var total int
 	var docs []*model.Document
 	if boolOption("reduce", true, options) {
-		docs, total, err = controller.View{
-			DB:       db,
-			ViewDoc:  doc,
-			ViewName: viewName,
+		docs, total, err = controller.DesignDoc{
+			DB:        db,
+			SourceDoc: doc,
+			FnName:    viewName,
 		}.ReduceDocs(r.Context(), q)
 	} else {
 		docs, total, err = db.AllDocs(r.Context(), q)
