@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -45,6 +46,15 @@ func (d *Database) CreateSearchIndex(path string) (port.SearchIndex, error) {
 	}, nil
 }
 
+func (si *SearchIndex) String() string {
+	cnt, err := si.idx.DocCount()
+	if err != nil {
+		log.Printf("failed to get search index %s count: %v", si.path, err)
+	}
+
+	return fmt.Sprintf("<SearchIndex path=%q count=%v>", si.path, cnt)
+}
+
 func (si *SearchIndex) Close() error {
 	return si.idx.Close()
 }
@@ -60,7 +70,7 @@ func (si *SearchIndex) Delete(id string) error {
 func (si *SearchIndex) Destroy() error {
 	err := si.Close()
 	if err != nil {
-		return err
+		log.Printf("failed to close search index %s before destroy: %v", si.path, err)
 	}
 
 	return os.RemoveAll(si.path)

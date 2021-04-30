@@ -39,6 +39,7 @@ func (router Router) Build(r *mux.Router) error {
 	r.Methods("PUT").Path("/{db}/_security").Handler(&DBSecurityPut{Base: b})
 
 	r.Methods("GET").Path("/{db}/_design/{docid}/_view/{view}").Handler(&DBView{Base: b})
+	r.Methods("GET").Path("/{db}/_design/{docid}/_search/{index}").Handler(&DBSearch{Base: b})
 	r.Methods("GET").Path("/{db}/_design/{docid}/_info").Handler(&DBViewInfo{Base: b})
 	r.Methods("GET").Path("/{db}/_design/{docid}").Handler(&DBDocGet{Base: b, Design: true})
 	r.Methods("PUT").Path("/{db}/_design/{docid}").Handler(&DBDocPut{Base: b})
