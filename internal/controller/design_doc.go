@@ -182,12 +182,13 @@ func (v DesignDoc) Rebuild(ctx context.Context, task *model.Task) error {
 		for sfnName, sfnServer := range vfns {
 			ddfn.Type = model.SearchFn
 			ddfn.FnName = sfnName
-			viewDocs, err := sfnServer.Process(ctx, docs)
+			/*viewDocs, err := sfnServer.Process(ctx, docs)
 			if err != nil {
 				return err
-			}
+			}*/
+			_ = sfnServer
 
-			err = v.DB.UpdateSearch(ctx, &ddfn, viewDocs)
+			err = v.DB.UpdateSearch(ctx, &ddfn, nil)
 			if err != nil {
 				return err
 			}

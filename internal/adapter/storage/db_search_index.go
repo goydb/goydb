@@ -55,6 +55,50 @@ func (d *Database) OpenSearchIndicies() error {
 	return nil
 }
 
+func (d *Database) UpdateSearch(ctx context.Context, ddfn *model.DesignDocFn, docs []*model.SearchIndexDoc) error {
+	si, err := d.EnsureSearchIndex(ddfn.String())
+	if err != nil {
+		return err
+	}
+
+	err = si.UpdateMapping(docs)
+	if err != nil {
+		return err
+	}
+
+	// update search index
+	err = si.Tx(func(tx port.SearchIndexTx) error {
+		for _, doc := range docs {
+			err := tx.Index(doc.ID, doc.Fields)
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+
+	// add documents to index bucket to update
+	// index correctly on delete / file update see ResetViewIndexForDoc
+	/*err := d.Update(func(tx *bolt.Tx) error {
+		viewIndexBucket, err := d.Update().CreateBucketIfNotExists(indexBucket)
+		if err != nil {
+			return err
+		}
+
+		for _, doc := range docs {
+			err = addDocKeyToView(viewIndexBucket, doc, bucketName, key)
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})*/
+
+	return err
+}
+
 func (d *Database) EnsureSearchIndex(docID string) (port.SearchIndex, error) {
 	// check if the index already exists
 	d.muSearchIndicies.Lock()
@@ -88,37 +132,32 @@ func (d *Database) EnsureSearchIndex(docID string) (port.SearchIndex, error) {
 	return si, nil
 }
 
-func (d *Database) UpdateSearch(ctx context.Context, ddfn *model.DesignDocFn, docs []*model.Document) error {
-
-	return nil
+func (d *Database) SearchIndex(name string) string {
+	return filepath.Join(d.databaseDir, SearchDir, name+indexExt)
 }
 
-func (d *Database) SearchIndex(docID string) string {
-	return filepath.Join(d.databaseDir, SearchDir, docID+indexExt)
-}
-
-func (d *Database) OpenSearchIndex(docID string) (port.SearchIndex, error) {
-	path := d.SearchIndex(docID)
+func (d *Database) OpenSearchIndex(name string) (port.SearchIndex, error) {
+	path := d.SearchIndex(name)
 	index, err := bleve.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open search index %q: %w", path, index)
 	}
 	return &SearchIndex{
-		name: docID,
+		name: name,
 		idx:  index,
 		path: path,
 	}, nil
 }
 
-func (d *Database) CreateSearchIndex(docID string) (port.SearchIndex, error) {
-	path := d.SearchIndex(docID)
+func (d *Database) CreateSearchIndex(name string) (port.SearchIndex, error) {
+	path := d.SearchIndex(name)
 	mapping := bleve.NewIndexMapping()
 	index, err := bleve.New(path, mapping)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create search index %q: %w", path, index)
 	}
 	return &SearchIndex{
-		name: docID,
+		name: name,
 		idx:  index,
 		path: path,
 	}, nil
@@ -128,6 +167,11 @@ type SearchIndex struct {
 	name string
 	idx  bleve.Index
 	path string
+}
+
+type SearchIndexTx struct {
+	si *SearchIndex
+	tx *bleve.Batch
 }
 
 func (si SearchIndex) Name() string {
@@ -147,12 +191,35 @@ func (si *SearchIndex) Close() error {
 	return si.idx.Close()
 }
 
-func (si *SearchIndex) Index(id string, data interface{}) error {
-	return si.idx.Index(id, data)
+func (si *SearchIndex) UpdateMapping(docs []*model.SearchIndexDoc) error {
+	// TODO update the mapping based on docs[*].Options
+	return nil
 }
 
-func (si *SearchIndex) Delete(id string) error {
-	return si.idx.Delete(id)
+func (si *SearchIndex) Tx(fn func(tx port.SearchIndexTx) error) error {
+	b := si.idx.NewBatch()
+	tx := SearchIndexTx{
+		si: si,
+		tx: b,
+	}
+
+	// fill batch
+	err := fn(&tx)
+	if err != nil {
+		return err
+	}
+
+	// execute batch
+	return si.idx.Batch(b)
+}
+
+func (si *SearchIndexTx) Index(id string, data map[string]interface{}) error {
+	return si.tx.Index(id, data)
+}
+
+func (si *SearchIndexTx) Delete(id string) error {
+	si.tx.Delete(id)
+	return nil
 }
 
 func (si *SearchIndex) Destroy() error {

@@ -95,7 +95,7 @@ type Database interface {
 	TaskCount(ctx context.Context) (int, error)
 	ResetView(ctx context.Context, ddfn *model.DesignDocFn) error
 	UpdateView(ctx context.Context, ddfn *model.DesignDocFn, docs []*model.Document) error
-	UpdateSearch(ctx context.Context, ddfn *model.DesignDocFn, docs []*model.Document) error
+	UpdateSearch(ctx context.Context, ddfn *model.DesignDocFn, docs []*model.SearchIndexDoc) error
 	ResetViewIndex() error
 	ResetViewIndexForDoc(ctx context.Context, docID string) error
 	ChangesIndex() Index
@@ -143,6 +143,11 @@ type Index interface {
 
 type SearchIndex interface {
 	Name() string
-	Index(id string, data interface{}) error
+	UpdateMapping(docs []*model.SearchIndexDoc) error
+	Tx(func(tx SearchIndexTx) error) error
+}
+
+type SearchIndexTx interface {
+	Index(id string, data map[string]interface{}) error
 	Delete(id string) error
 }
