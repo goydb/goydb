@@ -7,6 +7,13 @@ import (
 	"strings"
 )
 
+type DocPrefix string
+
+var (
+	DesignDocPrefix DocPrefix = "_design/"
+	LocalDocPrefix  DocPrefix = "_local/"
+)
+
 type Document struct {
 	ID          string                 `json:"_id,omitempty"`
 	Rev         string                 `json:"_rev,omitempty"`
@@ -95,11 +102,11 @@ func (doc Document) Language() string {
 }
 
 func (doc Document) IsDesignDoc() bool {
-	return strings.HasPrefix(doc.ID, "_design/")
+	return strings.HasPrefix(doc.ID, string(DesignDocPrefix))
 }
 
 func (doc Document) IsLocalDoc() bool {
-	return strings.HasPrefix(doc.ID, "_local/")
+	return strings.HasPrefix(doc.ID, string(LocalDocPrefix))
 }
 
 type ViewFunction struct {

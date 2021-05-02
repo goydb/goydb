@@ -89,6 +89,7 @@ func (d *Database) EnsureSearchIndex(docID string) (port.SearchIndex, error) {
 }
 
 func (d *Database) UpdateSearch(ctx context.Context, ddfn *model.DesignDocFn, docs []*model.Document) error {
+
 	return nil
 }
 

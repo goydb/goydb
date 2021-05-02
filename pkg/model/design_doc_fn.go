@@ -1,5 +1,7 @@
 package model
 
+import "strings"
+
 type FnType string
 
 const (
@@ -14,7 +16,8 @@ type DesignDocFn struct {
 }
 
 func (ddfn DesignDocFn) String() string {
-	return string(ddfn.Type) + ":" + ddfn.DesignDocID + ":" + ddfn.FnName
+	docName := strings.TrimPrefix(ddfn.DesignDocID, string(DesignDocPrefix))
+	return string(ddfn.Type) + ":" + docName + ":" + ddfn.FnName
 }
 
 func (ddfn DesignDocFn) Bucket() []byte {

@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"github.com/goydb/goydb/pkg/model"
 )
 
 type DBSearch struct {
@@ -24,7 +25,7 @@ func (s *DBSearch) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	docID := "_design/" + mux.Vars(r)["docid"]
+	docID := string(model.DesignDocPrefix) + mux.Vars(r)["docid"]
 	index := mux.Vars(r)["index"]
 
 	doc, err := db.GetDocument(r.Context(), docID)
