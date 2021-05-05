@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestViewServer_Process(t *testing.T) {
+func TestViewServer_ExecuteView(t *testing.T) {
 	tests := []struct {
 		name    string
 		script  string
@@ -23,7 +23,7 @@ func TestViewServer_Process(t *testing.T) {
 			name:   "empty emit",
 			script: `function(doc) {}`,
 			docs: []*model.Document{
-				&model.Document{ID: "1", Rev: "0-REV", Data: map[string]interface{}{
+				{ID: "1", Rev: "0-REV", Data: map[string]interface{}{
 					"test": 1,
 				}},
 			},
@@ -37,15 +37,17 @@ func TestViewServer_Process(t *testing.T) {
 			}`,
 			options: url.Values{},
 			docs: []*model.Document{
-				&model.Document{ID: "1", Rev: "0-REV", Data: map[string]interface{}{
+				{ID: "1", Rev: "0-REV", Data: map[string]interface{}{
 					"test": 1,
 				}},
 			},
-			want: []*model.Document{&model.Document{
-				ID:    "1",
-				Key:   int64(1),
-				Value: int64(1),
-			}},
+			want: []*model.Document{
+				{
+					ID:    "1",
+					Key:   int64(1),
+					Value: int64(1),
+				},
+			},
 			wantErr: false,
 		},
 		{
@@ -55,22 +57,24 @@ func TestViewServer_Process(t *testing.T) {
 			}`,
 			options: url.Values{},
 			docs: []*model.Document{
-				&model.Document{ID: "1", Rev: "0-REV", Data: map[string]interface{}{
+				{ID: "1", Rev: "0-REV", Data: map[string]interface{}{
 					"test": 1,
 				}},
-				&model.Document{ID: "2", Rev: "0-REV", Data: map[string]interface{}{
+				{ID: "2", Rev: "0-REV", Data: map[string]interface{}{
 					"test": 123,
 				}},
 			},
-			want: []*model.Document{&model.Document{
-				ID:    "1",
-				Key:   "1",
-				Value: int64(1),
-			}, &model.Document{
-				ID:    "2",
-				Key:   "2",
-				Value: int64(1),
-			}},
+			want: []*model.Document{
+				{
+					ID:    "1",
+					Key:   "1",
+					Value: int64(1),
+				}, {
+					ID:    "2",
+					Key:   "2",
+					Value: int64(1),
+				},
+			},
 			wantErr: false,
 		},
 	}
@@ -78,7 +82,7 @@ func TestViewServer_Process(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			s, err := NewViewServer(tt.script)
 			assert.NoError(t, err)
-			got, err := s.Process(context.Background(), tt.docs)
+			got, err := s.ExecuteView(context.Background(), tt.docs)
 			if err != nil && !tt.wantErr {
 				require.NoError(t, err)
 			}

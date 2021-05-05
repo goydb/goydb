@@ -162,8 +162,8 @@ func (doc Document) SearchFunctions() []*SearchFunction {
 			continue
 		}
 
-		SearchFn, _ := search["analyzer"].(string)
-		Analyzer, _ := search["index"].(string)
+		SearchFn, _ := search["index"].(string)
+		Analyzer, _ := search["analyzer"].(string)
 
 		sfn = append(sfn, &SearchFunction{
 			Name:     name,
@@ -172,7 +172,7 @@ func (doc Document) SearchFunctions() []*SearchFunction {
 		})
 	}
 
-	return nil
+	return sfn
 }
 
 func (doc *Document) Field(path string) interface{} {

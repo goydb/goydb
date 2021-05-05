@@ -6,7 +6,10 @@ import (
 
 	"github.com/dop251/goja"
 	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/port"
 )
+
+var _ port.ViewServer = (*ViewServer)(nil)
 
 type ViewServer struct {
 	vm *goja.Runtime
@@ -24,7 +27,7 @@ func NewViewServer(fn string) (*ViewServer, error) {
 	var docFn = ` + fn + `;`
 	_, err := vm.RunString(fn)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("script error %v: %w", fn, err)
 	}
 
 	return &ViewServer{
@@ -32,7 +35,7 @@ func NewViewServer(fn string) (*ViewServer, error) {
 	}, nil
 }
 
-func (s *ViewServer) Process(ctx context.Context, docs []*model.Document) ([]*model.Document, error) {
+func (s *ViewServer) ExecuteView(ctx context.Context, docs []*model.Document) ([]*model.Document, error) {
 	simpleDocs := make([]interface{}, len(docs))
 	for i, doc := range docs {
 		doc.Data["_id"] = doc.ID
@@ -68,4 +71,8 @@ func (s *ViewServer) Process(ctx context.Context, docs []*model.Document) ([]*mo
 	}
 
 	return result, nil
+}
+
+func (s *ViewServer) ExecuteSearch(ctx context.Context, docs []*model.Document) ([]*model.SearchIndexDoc, error) {
+	return nil, nil
 }

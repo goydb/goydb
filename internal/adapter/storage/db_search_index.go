@@ -7,9 +7,11 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/blevesearch/bleve"
+	"github.com/blevesearch/bleve/mapping"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 )
@@ -19,8 +21,8 @@ const indexExt = ".bleve"
 
 var _ port.SearchIndex = (port.SearchIndex)(nil)
 
-// OpenSearchIndicies load all created database indicies
-func (d *Database) OpenSearchIndicies() error {
+// OpenSearchIndices load all created database indices
+func (d *Database) OpenSearchIndices() error {
 	path := filepath.Join(d.databaseDir, SearchDir)
 
 	_, err := os.Stat(path)
@@ -69,6 +71,7 @@ func (d *Database) UpdateSearch(ctx context.Context, ddfn *model.DesignDocFn, do
 	// update search index
 	err = si.Tx(func(tx port.SearchIndexTx) error {
 		for _, doc := range docs {
+			log.Printf("INDEX %s %v %v", doc.ID, doc.Fields, doc.Options)
 			err := tx.Index(doc.ID, doc.Fields)
 			if err != nil {
 				return err
@@ -101,7 +104,7 @@ func (d *Database) UpdateSearch(ctx context.Context, ddfn *model.DesignDocFn, do
 
 func (d *Database) EnsureSearchIndex(docID string) (port.SearchIndex, error) {
 	// check if the index already exists
-	d.muSearchIndicies.Lock()
+	d.muSearchIndicies.RLock()
 	si, ok := d.searchIndicies[docID]
 	d.muSearchIndicies.RUnlock()
 	if ok {
@@ -114,12 +117,12 @@ func (d *Database) EnsureSearchIndex(docID string) (port.SearchIndex, error) {
 
 	// try to open search from fs
 	si, err := d.OpenSearchIndex(docID)
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
 	if err == nil {
 		d.searchIndicies[si.Name()] = si
 		return si, nil
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
 	}
 
 	// create new search index for the doc
@@ -138,14 +141,29 @@ func (d *Database) SearchIndex(name string) string {
 
 func (d *Database) OpenSearchIndex(name string) (port.SearchIndex, error) {
 	path := d.SearchIndex(name)
+	_, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+
 	index, err := bleve.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open search index %q: %w", path, index)
 	}
+
+	// there is no other way to access the index mapping implementation
+	// but it is needed to extend the mapping based on the view output
+	mapping, ok := index.Mapping().(*mapping.IndexMappingImpl)
+	if !ok {
+		return nil, fmt.Errorf("failed to open search index %q unable to load mapping "+
+			"implementation invalid type: %v", path, reflect.TypeOf(index.Mapping()))
+	}
+
 	return &SearchIndex{
-		name: name,
-		idx:  index,
-		path: path,
+		name:    name,
+		idx:     index,
+		mapping: mapping,
+		path:    path,
 	}, nil
 }
 
@@ -157,16 +175,18 @@ func (d *Database) CreateSearchIndex(name string) (port.SearchIndex, error) {
 		return nil, fmt.Errorf("failed to create search index %q: %w", path, index)
 	}
 	return &SearchIndex{
-		name: name,
-		idx:  index,
-		path: path,
+		name:    name,
+		idx:     index,
+		mapping: mapping,
+		path:    path,
 	}, nil
 }
 
 type SearchIndex struct {
-	name string
-	idx  bleve.Index
-	path string
+	mapping *mapping.IndexMappingImpl
+	name    string
+	idx     bleve.Index
+	path    string
 }
 
 type SearchIndexTx struct {
@@ -191,8 +211,67 @@ func (si *SearchIndex) Close() error {
 	return si.idx.Close()
 }
 
+// UpdateMapping can extend the mapping configuration for the index.
+// NOT: CouchDB inherited behavior is, that the index can only be extended but
+// fields can't be removed, for that the index has to be rebuild.
+// Also the configuration of a field can't be changed once given.
 func (si *SearchIndex) UpdateMapping(docs []*model.SearchIndexDoc) error {
-	// TODO update the mapping based on docs[*].Options
+	// PROCESS merge all provided options into one superset
+	cfg := make(map[string]struct{})
+
+	// Step 1 load config from mapping
+	for _, field := range si.mapping.DefaultMapping.Fields {
+		cfg[field.Name] = struct{}{}
+	}
+
+	// update the mapping based on docs[*].Options
+	// assumption, first config wins
+	newCfg := make(map[string]model.SearchIndexOption)
+	newType := make(map[string]reflect.Kind)
+	for _, doc := range docs {
+		for field, opt := range doc.Options {
+			// ignore already existing fields from the mapping
+			if _, ok := cfg[field]; ok {
+				continue
+			}
+
+			// store options for new field, unless
+			// we already have a config
+			if _, ok := newCfg[field]; !ok {
+				newCfg[field] = opt
+				newType[field] = reflect.TypeOf(doc.Fields[field]).Kind()
+			}
+		}
+	}
+
+	// update the mapping (add new not yet mapped fields)
+	for field, opt := range newCfg {
+		// update mapping
+		var fm *mapping.FieldMapping
+		switch newType[field] {
+		case reflect.Bool:
+			fm = mapping.NewBooleanFieldMapping()
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32,
+			reflect.Int64, reflect.Uint, reflect.Uint8, reflect.Uint16,
+			reflect.Uint32, reflect.Uint64:
+			fm = mapping.NewNumericFieldMapping()
+		case reflect.String:
+			fm = mapping.NewTextFieldMapping()
+		default:
+			// we can't add a dedicated mapping here
+			// using default mapping mechanism as a fallback
+			log.Printf("fallback to default mapping for %q for index %q", field, si.name)
+			continue
+		}
+
+		// TODO: set fm.Analyzer
+		fm.Store = opt.Store
+		fm.Index = opt.ShouldIndex()
+		fm.DocValues = opt.Facet // TODO: unsure, verify mapping
+
+		si.mapping.DefaultMapping.AddFieldMapping(fm)
+	}
+
 	return nil
 }
 

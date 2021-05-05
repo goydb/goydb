@@ -69,7 +69,7 @@ func (v DesignDoc) GetViewServer() (map[string]port.ViewServer, error) {
 		// create view server
 		server, err := v.ViewServer(vfn.MapFn)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("compile error for %q: %w", vfn.Name, err)
 		}
 		allViewServer[vfn.Name] = server
 	}
@@ -90,7 +90,7 @@ func (v DesignDoc) GetSearchServer() (map[string]port.ViewServer, error) {
 		// create view server
 		server, err := v.ViewServer(sfn.SearchFn)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("compile error for %q: %w", sfn.Name, err)
 		}
 		allViewServer[sfn.Name] = server
 	}
@@ -102,12 +102,12 @@ func (v DesignDoc) Rebuild(ctx context.Context, task *model.Task) error {
 	ddfn := model.DesignDocFn{DesignDocID: v.SourceDoc.ID}
 	vfns, err := v.GetViewServer()
 	if err != nil {
-		return fmt.Errorf("failed to view function: %w", err)
+		return fmt.Errorf("failed to compile view function: %w", err)
 	}
 
 	sfns, err := v.GetSearchServer()
 	if err != nil {
-		return fmt.Errorf("failed to search function: %w", err)
+		return fmt.Errorf("failed to compile search function: %w", err)
 	}
 
 	fns := len(vfns) + len(sfns)
@@ -167,7 +167,7 @@ func (v DesignDoc) Rebuild(ctx context.Context, task *model.Task) error {
 		for vfnName, vfnServer := range vfns {
 			ddfn.Type = model.ViewFn
 			ddfn.FnName = vfnName
-			viewDocs, err := vfnServer.Process(ctx, docs)
+			viewDocs, err := vfnServer.ExecuteView(ctx, docs)
 			if err != nil {
 				return err
 			}
@@ -179,16 +179,16 @@ func (v DesignDoc) Rebuild(ctx context.Context, task *model.Task) error {
 		}
 
 		// update search functions
-		for sfnName, sfnServer := range vfns {
+		for sfnName, sfnServer := range sfns {
 			ddfn.Type = model.SearchFn
 			ddfn.FnName = sfnName
-			/*viewDocs, err := sfnServer.Process(ctx, docs)
+			searchDocs, err := sfnServer.ExecuteSearch(ctx, docs)
 			if err != nil {
 				return err
-			}*/
+			}
 			_ = sfnServer
 
-			err = v.DB.UpdateSearch(ctx, &ddfn, nil)
+			err = v.DB.UpdateSearch(ctx, &ddfn, searchDocs)
 			if err != nil {
 				return err
 			}
