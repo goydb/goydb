@@ -103,8 +103,8 @@ Couchdb has the right principles at its heart:
 Things that are differert from couchdb:
 
 * **Performance** due to direct access to the database using golang apis (**WIP**)
-* **Attachment** not part of the strage but saved as regular files on disk (**WIP**)
-* **Search** is part of the main storage using https://github.com/blevesearch/bleve (**planned**)
+* **Attachment** not part of the document storage but saved as regular files on disk next to the documents (**WIP**)
+* **Search** is part of the main storage using https://github.com/blevesearch/bleve (**WIP**)
 
 Things that I want to experiment with:
 
