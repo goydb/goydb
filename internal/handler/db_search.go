@@ -6,6 +6,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/port"
 )
 
 type DBSearch struct {
@@ -28,7 +29,23 @@ func (s *DBSearch) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	docID := string(model.DesignDocPrefix) + mux.Vars(r)["docid"]
 	index := mux.Vars(r)["index"]
 
-	doc, err := db.GetDocument(r.Context(), docID)
+	_, err := db.GetDocument(r.Context(), docID)
+	if err != nil {
+		WriteError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	ddfn := model.DesignDocFn{
+		Type:        model.SearchFn,
+		DesignDocID: docID,
+		FnName:      index,
+	}
+
+	opts := r.URL.Query()
+	sr, err := db.SearchDocuments(r.Context(), &ddfn, &port.SearchQuery{
+		Query: stringOption("q", "query", opts),
+		Limit: int(intOption("limit", 100, opts)),
+	})
 	if err != nil {
 		WriteError(w, http.StatusNotFound, err.Error())
 		return
@@ -37,14 +54,12 @@ func (s *DBSearch) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var res SearchResult
 
 	// TODO: replace dummy data
-	res.TotalRows = 1
-	res.Rows = []*Rows{
-		{
-			ID:    "asdad",
-			Key:   "name",
-			Value: index,
-			Doc:   doc.Data,
-		},
+	res.TotalRows = sr.Total
+	res.Rows = make([]SearchRow, len(sr.Records))
+	for i, rec := range sr.Records {
+		res.Rows[i].ID = rec.ID
+		res.Rows[i].Order = rec.Order
+		res.Rows[i].Fields = rec.Fields
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -52,12 +67,12 @@ func (s *DBSearch) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type SearchResult struct {
-	TotalRows int     `json:"total_rows"`
-	Bookmark  string  `json:"bookmark"`
-	Rows      []*Rows `json:"rows"`
+	TotalRows uint64      `json:"total_rows"`
+	Bookmark  string      `json:"bookmark"`
+	Rows      []SearchRow `json:"rows"`
 }
 
-type SearchRows struct {
+type SearchRow struct {
 	ID     string                 `json:"id"`
 	Order  []float64              `json:"order"`
 	Fields map[string]interface{} `json:"fields"`

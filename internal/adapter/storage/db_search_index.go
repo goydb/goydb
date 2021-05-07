@@ -21,44 +21,42 @@ const indexExt = ".bleve"
 
 var _ port.SearchIndex = (port.SearchIndex)(nil)
 
-// OpenSearchIndices load all created database indices
-func (d *Database) OpenSearchIndices() error {
-	path := filepath.Join(d.databaseDir, SearchDir)
-
-	_, err := os.Stat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
+func (d *Database) SearchDocuments(ctx context.Context, ddfn *model.DesignDocFn, sq *port.SearchQuery) (*port.SearchResult, error) {
+	si := d.SearchIndex(ddfn)
+	if si == nil {
+		return nil, ErrNotFound
 	}
+
+	sidx := si.(*SearchIndex)
+
+	q := bleve.NewQueryStringQuery(sq.Query)
+	searchRequest := bleve.NewSearchRequest(q)
+	res, err := sidx.idx.SearchInContext(ctx, searchRequest)
 	if err != nil {
-		return fmt.Errorf("failed to read search indices dir %q: %w", path, err)
+		return nil, err
 	}
 
-	dirEntries, err := os.ReadDir(path)
-	if err != nil {
-		return fmt.Errorf("failed to find search indices in %q: %w", path, err)
-	}
+	var sr port.SearchResult
+	sr.Total = res.Total
 
-	for _, entry := range dirEntries {
-		if filepath.Ext(entry.Name()) != indexExt {
-			continue
+	for i, hit := range res.Hits {
+		sr.Records = append(sr.Records, &port.SearchRecord{
+			ID:     hit.ID,
+			Order:  []float64{hit.Score, float64(hit.HitNumber)},
+			Fields: hit.Fields,
+		})
+
+		// respect limit
+		if i == sq.Limit-1 {
+			break
 		}
-
-		docID := strings.TrimSuffix(entry.Name(), indexExt)
-		si, err := d.OpenSearchIndex(docID)
-		if err != nil {
-			log.Printf("skipping, unable to open saearch index, possible corruption: %v", err)
-		}
-
-		d.muSearchIndicies.Lock()
-		d.searchIndicies[si.Name()] = si
-		d.muSearchIndicies.Unlock()
 	}
 
-	return nil
+	return &sr, nil
 }
 
 func (d *Database) UpdateSearch(ctx context.Context, ddfn *model.DesignDocFn, docs []*model.SearchIndexDoc) error {
-	si, err := d.EnsureSearchIndex(ddfn.String())
+	si, err := d.EnsureSearchIndex(ddfn)
 	if err != nil {
 		return err
 	}
@@ -81,33 +79,23 @@ func (d *Database) UpdateSearch(ctx context.Context, ddfn *model.DesignDocFn, do
 		return nil
 	})
 
-	// add documents to index bucket to update
-	// index correctly on delete / file update see ResetViewIndexForDoc
-	/*err := d.Update(func(tx *bolt.Tx) error {
-		viewIndexBucket, err := d.Update().CreateBucketIfNotExists(indexBucket)
-		if err != nil {
-			return err
-		}
-
-		for _, doc := range docs {
-			err = addDocKeyToView(viewIndexBucket, doc, bucketName, key)
-			if err != nil {
-				return err
-			}
-		}
-
-		return nil
-	})*/
-
 	return err
 }
 
-func (d *Database) EnsureSearchIndex(docID string) (port.SearchIndex, error) {
-	// check if the index already exists
+func (d *Database) SearchIndex(ddfn *model.DesignDocFn) port.SearchIndex {
 	d.muSearchIndicies.RLock()
-	si, ok := d.searchIndicies[docID]
+	si, ok := d.searchIndicies[ddfn.String()]
 	d.muSearchIndicies.RUnlock()
-	if ok {
+	if !ok {
+		return nil
+	}
+	return si
+}
+
+func (d *Database) EnsureSearchIndex(ddfn *model.DesignDocFn) (port.SearchIndex, error) {
+	// check if the index already exists
+	si := d.SearchIndex(ddfn)
+	if si != nil {
 		return si, nil
 	}
 
@@ -116,7 +104,7 @@ func (d *Database) EnsureSearchIndex(docID string) (port.SearchIndex, error) {
 	defer d.muSearchIndicies.Unlock()
 
 	// try to open search from fs
-	si, err := d.OpenSearchIndex(docID)
+	si, err := d.openSearchIndex(ddfn.String())
 	if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
@@ -126,7 +114,7 @@ func (d *Database) EnsureSearchIndex(docID string) (port.SearchIndex, error) {
 	}
 
 	// create new search index for the doc
-	si, err = d.CreateSearchIndex(docID)
+	si, err = d.createSearchIndex(ddfn.String())
 	if err != nil {
 		return nil, err
 	}
@@ -135,12 +123,48 @@ func (d *Database) EnsureSearchIndex(docID string) (port.SearchIndex, error) {
 	return si, nil
 }
 
-func (d *Database) SearchIndex(name string) string {
+// openAllSearchIndices load all created database indices
+func (d *Database) openAllSearchIndices() error {
+	path := filepath.Join(d.databaseDir, SearchDir)
+
+	_, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to read search indices dir %q: %w", path, err)
+	}
+
+	dirEntries, err := os.ReadDir(path)
+	if err != nil {
+		return fmt.Errorf("failed to find search indices in %q: %w", path, err)
+	}
+
+	for _, entry := range dirEntries {
+		if filepath.Ext(entry.Name()) != indexExt {
+			continue
+		}
+
+		docID := strings.TrimSuffix(entry.Name(), indexExt)
+		si, err := d.openSearchIndex(docID)
+		if err != nil {
+			log.Printf("skipping, unable to open saearch index, possible corruption: %v", err)
+		}
+
+		d.muSearchIndicies.Lock()
+		d.searchIndicies[si.Name()] = si
+		d.muSearchIndicies.Unlock()
+	}
+
+	return nil
+}
+
+func (d *Database) searchIndexPath(name string) string {
 	return filepath.Join(d.databaseDir, SearchDir, name+indexExt)
 }
 
-func (d *Database) OpenSearchIndex(name string) (port.SearchIndex, error) {
-	path := d.SearchIndex(name)
+func (d *Database) openSearchIndex(name string) (port.SearchIndex, error) {
+	path := d.searchIndexPath(name)
 	_, err := os.Stat(path)
 	if err != nil {
 		return nil, err
@@ -167,8 +191,8 @@ func (d *Database) OpenSearchIndex(name string) (port.SearchIndex, error) {
 	}, nil
 }
 
-func (d *Database) CreateSearchIndex(name string) (port.SearchIndex, error) {
-	path := d.SearchIndex(name)
+func (d *Database) createSearchIndex(name string) (port.SearchIndex, error) {
+	path := d.searchIndexPath(name)
 	mapping := bleve.NewIndexMapping()
 	index, err := bleve.New(path, mapping)
 	if err != nil {
@@ -268,7 +292,9 @@ func (si *SearchIndex) UpdateMapping(docs []*model.SearchIndexDoc) error {
 		fm.Store = opt.Store
 		fm.Index = opt.ShouldIndex()
 		fm.DocValues = opt.Facet // TODO: unsure, verify mapping
+		fm.Name = field
 
+		log.Printf("add field mapping for %v, %#v", field, fm)
 		si.mapping.DefaultMapping.AddFieldMapping(fm)
 	}
 

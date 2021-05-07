@@ -96,6 +96,7 @@ type Database interface {
 	ResetView(ctx context.Context, ddfn *model.DesignDocFn) error
 	UpdateView(ctx context.Context, ddfn *model.DesignDocFn, docs []*model.Document) error
 	UpdateSearch(ctx context.Context, ddfn *model.DesignDocFn, docs []*model.SearchIndexDoc) error
+	SearchDocuments(ctx context.Context, ddfn *model.DesignDocFn, sq *SearchQuery) (*SearchResult, error)
 	ResetViewIndex() error
 	ResetViewIndexForDoc(ctx context.Context, docID string) error
 	ChangesIndex() Index
@@ -150,4 +151,21 @@ type SearchIndex interface {
 type SearchIndexTx interface {
 	Index(id string, data map[string]interface{}) error
 	Delete(id string) error
+}
+
+type SearchQuery struct {
+	Query    string
+	Limit    int
+	Bookmark string
+}
+
+type SearchResult struct {
+	Total   uint64
+	Records []*SearchRecord
+}
+
+type SearchRecord struct {
+	ID     string
+	Order  []float64
+	Fields map[string]interface{}
 }

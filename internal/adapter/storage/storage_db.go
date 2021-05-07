@@ -98,7 +98,7 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 	}
 
 	// open all search indicies
-	err = database.OpenSearchIndices()
+	err = database.openAllSearchIndices()
 	if err != nil {
 		return nil, err
 	}
