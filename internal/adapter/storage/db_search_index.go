@@ -244,8 +244,8 @@ func (si *SearchIndex) UpdateMapping(docs []*model.SearchIndexDoc) error {
 	cfg := make(map[string]struct{})
 
 	// Step 1 load config from mapping
-	for _, field := range si.mapping.DefaultMapping.Fields {
-		cfg[field.Name] = struct{}{}
+	for name, _ := range si.mapping.DefaultMapping.Properties {
+		cfg[name] = struct{}{}
 	}
 
 	// update the mapping based on docs[*].Options
@@ -295,7 +295,7 @@ func (si *SearchIndex) UpdateMapping(docs []*model.SearchIndexDoc) error {
 		fm.Name = field
 
 		log.Printf("add field mapping for %v, %#v", field, fm)
-		si.mapping.DefaultMapping.AddFieldMapping(fm)
+		si.mapping.DefaultMapping.AddFieldMappingsAt(field, fm)
 	}
 
 	return nil
