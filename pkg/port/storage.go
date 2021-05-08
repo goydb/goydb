@@ -156,6 +156,7 @@ type SearchIndexTx interface {
 type SearchQuery struct {
 	Query    string
 	Limit    int
+	Skip     int
 	Bookmark string
 }
 

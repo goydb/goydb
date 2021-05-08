@@ -30,7 +30,8 @@ func (d *Database) SearchDocuments(ctx context.Context, ddfn *model.DesignDocFn,
 	sidx := si.(*SearchIndex)
 
 	q := bleve.NewQueryStringQuery(sq.Query)
-	searchRequest := bleve.NewSearchRequest(q)
+	searchRequest := bleve.NewSearchRequestOptions(q, sq.Limit, sq.Skip, false)
+	searchRequest.Fields = []string{"*"}
 	res, err := sidx.idx.SearchInContext(ctx, searchRequest)
 	if err != nil {
 		return nil, err
@@ -39,17 +40,12 @@ func (d *Database) SearchDocuments(ctx context.Context, ddfn *model.DesignDocFn,
 	var sr port.SearchResult
 	sr.Total = res.Total
 
-	for i, hit := range res.Hits {
+	for _, hit := range res.Hits {
 		sr.Records = append(sr.Records, &port.SearchRecord{
 			ID:     hit.ID,
 			Order:  []float64{hit.Score, float64(hit.HitNumber)},
 			Fields: hit.Fields,
 		})
-
-		// respect limit
-		if i == sq.Limit-1 {
-			break
-		}
 	}
 
 	return &sr, nil
