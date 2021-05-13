@@ -14,10 +14,14 @@ import (
 	"github.com/blevesearch/bleve/mapping"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
+	"go.etcd.io/bbolt"
 )
 
-const SearchDir = "search_indices"
-const indexExt = ".bleve"
+const (
+	SearchDir    = "search_indices"
+	indexExt     = ".bleve"
+	searchBucket = "_searches"
+)
 
 var _ port.SearchIndex = (port.SearchIndex)(nil)
 
@@ -63,6 +67,7 @@ func (d *Database) UpdateSearch(ctx context.Context, ddfn *model.DesignDocFn, do
 	}
 
 	// update search index
+	var documentIds []string
 	err = si.Tx(func(tx port.SearchIndexTx) error {
 		for _, doc := range docs {
 			log.Printf("INDEX %s %v %v", doc.ID, doc.Fields, doc.Options)
@@ -70,18 +75,41 @@ func (d *Database) UpdateSearch(ctx context.Context, ddfn *model.DesignDocFn, do
 			if err != nil {
 				return err
 			}
+			documentIds = append(documentIds, doc.ID)
 		}
 
 		return nil
 	})
 
+	// store all document ids stored with the index to
+	// be able to quickly remove the references
+	ddfnStr := ddfn.String()
+	err = d.DB.Update(func(t *bbolt.Tx) error {
+		bucket, err := t.CreateBucketIfNotExists([]byte(searchBucket))
+		if err != nil {
+			return err
+		}
+
+		for _, did := range documentIds {
+			err = bucket.Put([]byte(did+" "+ddfnStr), nil)
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
 	return err
 }
 
 func (d *Database) SearchIndex(ddfn *model.DesignDocFn) port.SearchIndex {
-	d.muSearchIndicies.RLock()
-	si, ok := d.searchIndicies[ddfn.String()]
-	d.muSearchIndicies.RUnlock()
+	d.muSearchIndices.RLock()
+	si, ok := d.searchIndices[ddfn.String()]
+	d.muSearchIndices.RUnlock()
 	if !ok {
 		return nil
 	}
@@ -96,8 +124,8 @@ func (d *Database) EnsureSearchIndex(ddfn *model.DesignDocFn) (port.SearchIndex,
 	}
 
 	// index doesn't exist, create a new index
-	d.muSearchIndicies.Lock()
-	defer d.muSearchIndicies.Unlock()
+	d.muSearchIndices.Lock()
+	defer d.muSearchIndices.Unlock()
 
 	// try to open search from fs
 	si, err := d.openSearchIndex(ddfn.String())
@@ -105,7 +133,7 @@ func (d *Database) EnsureSearchIndex(ddfn *model.DesignDocFn) (port.SearchIndex,
 		return nil, err
 	}
 	if err == nil {
-		d.searchIndicies[si.Name()] = si
+		d.searchIndices[si.Name()] = si
 		return si, nil
 	}
 
@@ -115,7 +143,7 @@ func (d *Database) EnsureSearchIndex(ddfn *model.DesignDocFn) (port.SearchIndex,
 		return nil, err
 	}
 
-	d.searchIndicies[si.Name()] = si
+	d.searchIndices[si.Name()] = si
 	return si, nil
 }
 
@@ -144,12 +172,12 @@ func (d *Database) openAllSearchIndices() error {
 		docID := strings.TrimSuffix(entry.Name(), indexExt)
 		si, err := d.openSearchIndex(docID)
 		if err != nil {
-			log.Printf("skipping, unable to open saearch index, possible corruption: %v", err)
+			log.Printf("skipping, unable to open search index, possible corruption: %v", err)
 		}
 
-		d.muSearchIndicies.Lock()
-		d.searchIndicies[si.Name()] = si
-		d.muSearchIndicies.Unlock()
+		d.muSearchIndices.Lock()
+		d.searchIndices[si.Name()] = si
+		d.muSearchIndices.Unlock()
 	}
 
 	return nil

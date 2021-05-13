@@ -80,8 +80,8 @@ func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (re
 	doc.Rev = rev
 
 	if oldDoc != nil {
-		// maintain indicies - remove old value
-		for _, index := range tx.Database.Indicies() {
+		// maintain indices - remove old value
+		for _, index := range tx.Database.Indices() {
 			err := index.Delete(tx, oldDoc)
 			if err != nil {
 				return "", err
@@ -114,8 +114,8 @@ func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (re
 		})
 	}
 
-	// maintain indicies - add new value
-	for _, index := range tx.Database.Indicies() {
+	// maintain Indices - add new value
+	for _, index := range tx.Database.Indices() {
 		err = index.Put(tx, doc)
 		if err != nil {
 			return

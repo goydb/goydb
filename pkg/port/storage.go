@@ -100,7 +100,7 @@ type Database interface {
 	ResetViewIndex() error
 	ResetViewIndexForDoc(ctx context.Context, docID string) error
 	ChangesIndex() Index
-	Indicies() []Index
+	Indices() []Index
 }
 
 type Transaction interface {

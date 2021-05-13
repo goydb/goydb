@@ -1,6 +1,9 @@
 package model
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 type FnType string
 
@@ -38,4 +41,18 @@ func NewViewFn(designDocID, fnName string) DesignDocFn {
 		DesignDocID: designDocID,
 		FnName:      fnName,
 	}
+}
+
+func ParseDesignDocFn(str string) (*DesignDocFn, error) {
+	parts := strings.Split(str, ":")
+
+	if len(parts) == 3 {
+		return nil, fmt.Errorf("invalid format")
+	}
+
+	return &DesignDocFn{
+		Type:        FnType(parts[0]),
+		DesignDocID: parts[1],
+		FnName:      parts[2],
+	}, nil
 }
