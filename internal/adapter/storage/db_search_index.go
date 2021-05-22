@@ -70,7 +70,6 @@ func (d *Database) UpdateSearch(ctx context.Context, ddfn *model.DesignDocFn, do
 	var documentIds []string
 	err = si.Tx(func(tx port.SearchIndexTx) error {
 		for _, doc := range docs {
-			log.Printf("INDEX %s %v %v", doc.ID, doc.Fields, doc.Options)
 			err := tx.Index(doc.ID, doc.Fields)
 			if err != nil {
 				return err
@@ -104,6 +103,67 @@ func (d *Database) UpdateSearch(ctx context.Context, ddfn *model.DesignDocFn, do
 	}
 
 	return err
+}
+
+// RemoveAllStaleSearchDocs will remove the document from
+// all known search indices.
+func (d *Database) RemoveAllStaleSearchDocs(tx *Transaction, doc *model.Document) error {
+	var keys [][]byte
+
+	err := d.DB.View(func(t *bbolt.Tx) error {
+		bucket := t.Bucket([]byte(searchBucket))
+		if bucket == nil {
+			return nil
+		}
+
+		cur := bucket.Cursor()
+		for k, _ := cur.Seek([]byte(doc.ID)); k != nil; k, _ = cur.Next() {
+			parts := strings.Split(string(k), " ")
+			did, ddfnStr := parts[0], parts[1]
+
+			// find all documents in search indices
+			if string(did) != doc.ID {
+				break
+			}
+
+			keys = append(keys, k)
+			ddfn, err := model.ParseDesignDocFn(ddfnStr)
+			if err != nil {
+				return err
+			}
+
+			si := d.SearchIndex(ddfn)
+			if si != nil {
+				err := si.(*SearchIndex).idx.Delete(doc.ID)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	bucket := tx.tx.Bucket([]byte(searchBucket))
+	if bucket != nil {
+		return nil
+	}
+
+	for _, key := range keys {
+		err := bucket.Delete(key)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (d *Database) SearchIndex(ddfn *model.DesignDocFn) port.SearchIndex {
@@ -287,7 +347,10 @@ func (si *SearchIndex) UpdateMapping(docs []*model.SearchIndexDoc) error {
 			// we already have a config
 			if _, ok := newCfg[field]; !ok {
 				newCfg[field] = opt
-				newType[field] = reflect.TypeOf(doc.Fields[field]).Kind()
+				docField := doc.Fields[field]
+				if docField != nil {
+					newType[field] = reflect.TypeOf(docField).Kind()
+				}
 			}
 		}
 	}

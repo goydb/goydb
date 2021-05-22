@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
+	"log"
 	"strconv"
 
 	"github.com/fxamacker/cbor/v2"
@@ -176,6 +177,14 @@ func (tx *Transaction) DeleteDocument(ctx context.Context, docID, rev string) (*
 	}
 
 	_, err := tx.PutDocument(ctx, doc)
+	if err != nil {
+		return doc, err
+	}
+
+	err = tx.Database.(*Database).RemoveAllStaleSearchDocs(tx, doc)
+	if err != nil {
+		log.Printf("failed to remove stale search docs: %v", err)
+	}
 
 	return doc, err
 }

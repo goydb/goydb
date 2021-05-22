@@ -46,8 +46,8 @@ func NewViewFn(designDocID, fnName string) DesignDocFn {
 func ParseDesignDocFn(str string) (*DesignDocFn, error) {
 	parts := strings.Split(str, ":")
 
-	if len(parts) == 3 {
-		return nil, fmt.Errorf("invalid format")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("invalid design doc fn %q, expected 3 got %d parts", str, len(parts))
 	}
 
 	return &DesignDocFn{
