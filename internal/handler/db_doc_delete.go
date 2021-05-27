@@ -7,6 +7,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/internal/adapter/storage"
+	"github.com/goydb/goydb/pkg/model"
 )
 
 type DBDocDelete struct {
@@ -29,9 +30,9 @@ func (s *DBDocDelete) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	docID := mux.Vars(r)["docid"]
 	if s.Design {
-		docID = "_design/" + docID
+		docID = string(model.DesignDocPrefix) + docID
 	} else if s.Local {
-		docID = "_local/" + docID
+		docID = string(model.LocalDocPrefix) + docID
 	}
 	rev := r.URL.Query().Get("rev")
 

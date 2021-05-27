@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 
+	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 	bolt "go.etcd.io/bbolt"
 )
@@ -21,9 +22,9 @@ func (d *Database) Stats(ctx context.Context) (stats port.Stats, err error) {
 }
 
 // ViewSize returns the byte size on disk
-func (d *Database) ViewSize(ctx context.Context, viewName string) (stats port.Stats, err error) {
+func (d *Database) ViewSize(ctx context.Context, ddfn *model.DesignDocFn) (stats port.Stats, err error) {
 	err = d.View(func(tx *bolt.Tx) error {
-		return bucketStats(tx.Bucket(viewBucket(viewName)), &stats)
+		return bucketStats(tx.Bucket(ddfn.Bucket()), &stats)
 	})
 	return
 }

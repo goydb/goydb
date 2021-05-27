@@ -16,7 +16,7 @@ type AllDocsQuery struct {
 	EndKey    string
 	SkipLocal bool
 	// view options
-	ViewName    string
+	DDFN        *model.DesignDocFn
 	IncludeDocs bool
 	ViewGroup   bool
 }
@@ -79,13 +79,13 @@ type Database interface {
 	GetDocument(ctx context.Context, docID string) (*model.Document, error)
 	DeleteDocument(ctx context.Context, docID, rev string) (*model.Document, error)
 	FindDocs(ctx context.Context, query model.FindQuery) ([]*model.Document, *model.ExecutionStats, error)
-	Iterator(ctx context.Context, viewName string, fn func(i Iterator) error) error
+	Iterator(ctx context.Context, ddfn *model.DesignDocFn, fn func(i Iterator) error) error
 	NotifyDocumentUpdate(doc *model.Document)
 	NewDocObserver(ctx context.Context) Observer
 	GetSecurity(ctx context.Context) (*model.Security, error)
 	PutSecurity(ctx context.Context, sec *model.Security) error
 	Stats(ctx context.Context) (stats Stats, err error)
-	ViewSize(ctx context.Context, viewName string) (stats Stats, err error)
+	ViewSize(ctx context.Context, ddfn *model.DesignDocFn) (stats Stats, err error)
 	AddTasks(ctx context.Context, tasks []*model.Task) error
 	AddTasksTx(ctx context.Context, tx Transaction, tasks []*model.Task) error
 	GetTasks(ctx context.Context, count int) ([]*model.Task, error)
@@ -93,12 +93,14 @@ type Database interface {
 	PeekTasks(ctx context.Context, count int) ([]*model.Task, error)
 	CompleteTasks(ctx context.Context, tasks []*model.Task) error
 	TaskCount(ctx context.Context) (int, error)
-	ResetView(ctx context.Context, name string) error
-	UpdateView(ctx context.Context, name string, docs []*model.Document) error
+	ResetView(ctx context.Context, ddfn *model.DesignDocFn) error
+	UpdateView(ctx context.Context, ddfn *model.DesignDocFn, docs []*model.Document) error
+	UpdateSearch(ctx context.Context, ddfn *model.DesignDocFn, docs []*model.SearchIndexDoc) error
+	SearchDocuments(ctx context.Context, ddfn *model.DesignDocFn, sq *SearchQuery) (*SearchResult, error)
 	ResetViewIndex() error
 	ResetViewIndexForDoc(ctx context.Context, docID string) error
 	ChangesIndex() Index
-	Indicies() []Index
+	Indices() []Index
 }
 
 type Transaction interface {
@@ -138,4 +140,33 @@ type Index interface {
 	Delete(tx Transaction, doc *model.Document) error
 	Put(tx Transaction, doc *model.Document) error
 	Iter(tx Transaction) (Iterator, error)
+}
+
+type SearchIndex interface {
+	Name() string
+	UpdateMapping(docs []*model.SearchIndexDoc) error
+	Tx(func(tx SearchIndexTx) error) error
+}
+
+type SearchIndexTx interface {
+	Index(id string, data map[string]interface{}) error
+	Delete(id string) error
+}
+
+type SearchQuery struct {
+	Query    string
+	Limit    int
+	Skip     int
+	Bookmark string
+}
+
+type SearchResult struct {
+	Total   uint64
+	Records []*SearchRecord
+}
+
+type SearchRecord struct {
+	ID     string
+	Order  []float64
+	Fields map[string]interface{}
 }

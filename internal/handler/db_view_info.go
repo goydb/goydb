@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"github.com/goydb/goydb/pkg/model"
 )
 
 type DBViewInfo struct {
@@ -23,7 +24,7 @@ func (s *DBViewInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	docID := "_design/" + mux.Vars(r)["docid"]
+	docID := string(model.DesignDocPrefix) + mux.Vars(r)["docid"]
 	viewName := mux.Vars(r)["view"]
 
 	doc, err := db.GetDocument(r.Context(), docID) // WIP
@@ -31,8 +32,13 @@ func (s *DBViewInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusNotFound, err.Error())
 		return
 	}
+	ddfn := model.DesignDocFn{
+		Type:        model.ViewFn,
+		DesignDocID: docID,
+		FnName:      viewName,
+	}
 
-	stats, err := db.ViewSize(r.Context(), viewName)
+	stats, err := db.ViewSize(r.Context(), &ddfn)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, err.Error())
 		return

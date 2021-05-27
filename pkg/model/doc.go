@@ -7,6 +7,13 @@ import (
 	"strings"
 )
 
+type DocPrefix string
+
+var (
+	DesignDocPrefix DocPrefix = "_design/"
+	LocalDocPrefix  DocPrefix = "_local/"
+)
+
 type Document struct {
 	ID          string                 `json:"_id,omitempty"`
 	Rev         string                 `json:"_rev,omitempty"`
@@ -95,21 +102,21 @@ func (doc Document) Language() string {
 }
 
 func (doc Document) IsDesignDoc() bool {
-	return strings.HasPrefix(doc.ID, "_design/")
+	return strings.HasPrefix(doc.ID, string(DesignDocPrefix))
 }
 
 func (doc Document) IsLocalDoc() bool {
-	return strings.HasPrefix(doc.ID, "_local/")
+	return strings.HasPrefix(doc.ID, string(LocalDocPrefix))
 }
 
-type ViewFunctions struct {
+type ViewFunction struct {
 	Name     string
 	MapFn    string
 	ReduceFn string
 }
 
-func (doc Document) ViewFunctions() []*ViewFunctions {
-	var vfn []*ViewFunctions
+func (doc Document) ViewFunctions() []*ViewFunction {
+	var vfn []*ViewFunction
 
 	views, ok := doc.Data["views"].(map[string]interface{})
 	if !ok {
@@ -125,7 +132,7 @@ func (doc Document) ViewFunctions() []*ViewFunctions {
 		mapFn, _ := view["map"].(string)
 		reduceFn, _ := view["reduce"].(string)
 
-		vfn = append(vfn, &ViewFunctions{
+		vfn = append(vfn, &ViewFunction{
 			Name:     name,
 			MapFn:    mapFn,
 			ReduceFn: reduceFn,
@@ -133,6 +140,39 @@ func (doc Document) ViewFunctions() []*ViewFunctions {
 	}
 
 	return vfn
+}
+
+type SearchFunction struct {
+	Name     string
+	SearchFn string
+	Analyzer string
+}
+
+func (doc Document) SearchFunctions() []*SearchFunction {
+	var sfn []*SearchFunction
+
+	indexes, ok := doc.Data["indexes"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	for name, searchInterface := range indexes {
+		search, ok := searchInterface.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		SearchFn, _ := search["index"].(string)
+		Analyzer, _ := search["analyzer"].(string)
+
+		sfn = append(sfn, &SearchFunction{
+			Name:     name,
+			SearchFn: SearchFn,
+			Analyzer: Analyzer,
+		})
+	}
+
+	return sfn
 }
 
 func (doc *Document) Field(path string) interface{} {

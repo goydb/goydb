@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
@@ -37,11 +36,10 @@ func (s *DBDocGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	docID := mux.Vars(r)["docid"]
 	if s.Design {
-		docID = "_design/" + docID
+		docID = string(model.DesignDocPrefix) + docID
 	} else if s.Local {
-		docID = "_local/" + docID
+		docID = string(model.LocalDocPrefix) + docID
 	}
-	log.Println(docID)
 
 	// options
 	opts := r.URL.Query()

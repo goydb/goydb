@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 )
 
@@ -31,8 +32,8 @@ func (s *DBDocsAll) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	q.Limit = intOption("limit", 0, options)
 	q.SkipLocal = !s.Local
 	if s.Local {
-		q.StartKey = "_local/"
-		q.EndKey = "_local/香"
+		q.StartKey = string(model.LocalDocPrefix)
+		q.EndKey = string(model.LocalDocPrefix) + "香"
 	} else {
 		q.StartKey = strings.ReplaceAll(stringOption("startkey", "start_key", options), `"`, "")
 		q.EndKey = strings.ReplaceAll(stringOption("endkey", "end_key", options), `"`, "")

@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
+	"log"
 	"strconv"
 
 	"github.com/fxamacker/cbor/v2"
@@ -80,8 +81,8 @@ func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (re
 	doc.Rev = rev
 
 	if oldDoc != nil {
-		// maintain indicies - remove old value
-		for _, index := range tx.Database.Indicies() {
+		// maintain indices - remove old value
+		for _, index := range tx.Database.Indices() {
 			err := index.Delete(tx, oldDoc)
 			if err != nil {
 				return "", err
@@ -114,8 +115,8 @@ func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (re
 		})
 	}
 
-	// maintain indicies - add new value
-	for _, index := range tx.Database.Indicies() {
+	// maintain Indices - add new value
+	for _, index := range tx.Database.Indices() {
 		err = index.Put(tx, doc)
 		if err != nil {
 			return
@@ -176,6 +177,14 @@ func (tx *Transaction) DeleteDocument(ctx context.Context, docID, rev string) (*
 	}
 
 	_, err := tx.PutDocument(ctx, doc)
+	if err != nil {
+		return doc, err
+	}
+
+	err = tx.Database.(*Database).RemoveAllStaleSearchDocs(tx, doc)
+	if err != nil {
+		log.Printf("failed to remove stale search docs: %v", err)
+	}
 
 	return doc, err
 }

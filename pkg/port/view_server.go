@@ -7,5 +7,6 @@ import (
 )
 
 type ViewServer interface {
-	Process(ctx context.Context, docs []*model.Document) ([]*model.Document, error)
+	ExecuteView(ctx context.Context, docs []*model.Document) ([]*model.Document, error)
+	ExecuteSearch(ctx context.Context, docs []*model.Document) ([]*model.SearchIndexDoc, error)
 }

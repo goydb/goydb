@@ -11,7 +11,7 @@ func (d *Database) AllDocs(ctx context.Context, query port.AllDocsQuery) ([]*mod
 	var total int
 	var docs []*model.Document
 
-	err := d.Iterator(ctx, query.ViewName, func(i port.Iterator) error {
+	err := d.Iterator(ctx, query.DDFN, func(i port.Iterator) error {
 		total = i.Total()
 		if total == 0 {
 			return nil
@@ -40,7 +40,7 @@ func (d *Database) AllDocs(ctx context.Context, query port.AllDocsQuery) ([]*mod
 		return nil, 0, err
 	}
 
-	if query.ViewName != "" && query.IncludeDocs {
+	if query.DDFN != nil && query.IncludeDocs {
 		err = d.EnrichDocuments(ctx, docs)
 		if err != nil {
 			return nil, 0, err
@@ -58,8 +58,9 @@ func (d *Database) AllDocs(ctx context.Context, query port.AllDocsQuery) ([]*mod
 
 func (d *Database) AllDesignDocs(ctx context.Context) ([]*model.Document, int, error) {
 	return d.AllDocs(ctx, port.AllDocsQuery{
-		StartKey: "_design",
-		EndKey:   "_design0",
+		StartKey:    string(model.DesignDocPrefix),
+		EndKey:      string(model.DesignDocPrefix) + "香",
+		IncludeDocs: true,
 	})
 }
 
