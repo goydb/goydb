@@ -6,6 +6,8 @@ import (
 	"gopkg.in/mgo.v2/bson"
 )
 
+const ChangesIndexName = "_changes"
+
 func NewChangesIndex(name string) port.DocumentIndex {
 	return NewUniqueIndexUint64(
 		name,
