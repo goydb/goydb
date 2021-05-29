@@ -22,17 +22,17 @@ type Database struct {
 	mu       sync.RWMutex
 	channels []chan *model.Document
 
-	indices []port.Index
+	indices []port.DocumentIndex
 
 	searchIndices   map[string]port.SearchIndex
 	muSearchIndices sync.RWMutex
 }
 
-func (d Database) ChangesIndex() port.Index {
+func (d Database) ChangesIndex() port.DocumentIndex {
 	return d.indices[0]
 }
 
-func (d Database) Indices() []port.Index {
+func (d Database) Indices() []port.DocumentIndex {
 	return d.indices
 }
 
@@ -76,7 +76,7 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 		name:        name,
 		databaseDir: databaseDir,
 		DB:          db,
-		indices: []port.Index{
+		indices: []port.DocumentIndex{
 			NewUniqueIndex("_changes", ChangesIndexKeyFunc, ChangesIndexValueFunc),
 		},
 		searchIndices: make(map[string]port.SearchIndex),
@@ -86,7 +86,7 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 	// create all required database Indices
 	err = database.Transaction(ctx, func(tx port.Transaction) error {
 		for _, index := range database.Indices() {
-			err := index.Ensure(tx)
+			err := index.Ensure(ctx, tx)
 			if err != nil {
 				return err
 			}

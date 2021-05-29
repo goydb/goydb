@@ -39,7 +39,7 @@ start:
 
 	err := d.RTransaction(ctx, func(tx port.Transaction) error {
 		index := d.ChangesIndex()
-		i, err := index.Iter(tx)
+		i, err := index.Iterator(ctx, tx)
 		if err != nil {
 			return nil
 		}

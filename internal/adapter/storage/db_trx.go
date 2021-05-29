@@ -83,7 +83,7 @@ func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (re
 	if oldDoc != nil {
 		// maintain indices - remove old value
 		for _, index := range tx.Database.Indices() {
-			err := index.Delete(tx, oldDoc)
+			err := index.DocumentDeleted(ctx, tx, oldDoc)
 			if err != nil {
 				return "", err
 			}
@@ -117,7 +117,7 @@ func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (re
 
 	// maintain Indices - add new value
 	for _, index := range tx.Database.Indices() {
-		err = index.Put(tx, doc)
+		err = index.DocumentStored(ctx, tx, doc)
 		if err != nil {
 			return
 		}

@@ -99,8 +99,8 @@ type Database interface {
 	SearchDocuments(ctx context.Context, ddfn *model.DesignDocFn, sq *SearchQuery) (*SearchResult, error)
 	ResetViewIndex() error
 	ResetViewIndexForDoc(ctx context.Context, docID string) error
-	ChangesIndex() Index
-	Indices() []Index
+	ChangesIndex() DocumentIndex
+	Indices() []DocumentIndex
 }
 
 type Transaction interface {
@@ -133,13 +133,6 @@ type Iterator interface {
 type Observer interface {
 	Close()
 	WaitForDoc(timeout time.Duration) *model.Document
-}
-
-type Index interface {
-	Ensure(tx Transaction) error
-	Delete(tx Transaction, doc *model.Document) error
-	Put(tx Transaction, doc *model.Document) error
-	Iter(tx Transaction) (Iterator, error)
 }
 
 type SearchIndex interface {
