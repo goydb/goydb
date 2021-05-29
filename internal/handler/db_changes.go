@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/goydb/goydb/pkg/port"
+	"github.com/goydb/goydb/pkg/model"
 )
 
 type DBChanges struct {
@@ -33,7 +33,7 @@ func (s *DBChanges) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	query := r.URL.Query()
 	includeDocs := boolOption("include_docs", false, query)
-	options := port.ChangesOptions{
+	options := model.ChangesOptions{
 		Since:   strings.ReplaceAll(query.Get("since"), `"`, ""),
 		Limit:   int(intOption("limit", 1000, query)),
 		Timeout: durationOption("timeout", time.Millisecond, maxTimeout, query),
