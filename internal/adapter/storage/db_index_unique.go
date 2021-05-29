@@ -15,14 +15,19 @@ var ErrBucketUnavailable = errors.New("bucket unavailable")
 
 type IndexFunc func(doc *model.Document) []byte
 
+type IterKeyFunc func(k []byte) []byte
+
+// UniqueIndex base class for all indices that are based on a bucket
+// and work synchronously.
 type UniqueIndex struct {
-	bucketName []byte
-	key, value IndexFunc
+	bucketName  []byte
+	key, value  IndexFunc
+	iterKeyFunc IterKeyFunc
 }
 
-func NewUniqueIndex(name string, key, value IndexFunc) port.DocumentIndex {
+func NewUniqueIndex(bucketName string, key, value IndexFunc) port.DocumentIndex {
 	return &UniqueIndex{
-		bucketName: []byte(name),
+		bucketName: []byte(bucketName),
 		key:        key,
 		value:      value,
 	}
@@ -42,11 +47,21 @@ func (i *UniqueIndex) Rebuild(ctx context.Context, tx port.Transaction) error {
 }
 
 func (i *UniqueIndex) Remove(ctx context.Context, tx port.Transaction) error {
-	panic("not implemented")
+	return i.tx(tx).DeleteBucket(i.bucketName)
 }
 
 func (i *UniqueIndex) Stats(ctx context.Context, tx port.Transaction) (*model.IndexStats, error) {
-	panic("not implemented")
+	b := i.tx(tx).Bucket(i.bucketName)
+	if b == nil {
+		return nil, ErrBucketUnavailable
+	}
+	s := b.Stats()
+
+	return &model.IndexStats{
+		Documents: uint64(s.KeyN),
+		Used:      uint64(s.BranchInuse) + uint64(s.LeafInuse),
+		Allocated: uint64(s.BranchAlloc) + uint64(s.LeafAlloc),
+	}, nil
 }
 
 func (i *UniqueIndex) DocumentStored(ctx context.Context, tx port.Transaction, doc *model.Document) error {
@@ -86,14 +101,36 @@ func (i *UniqueIndex) Iterator(ctx context.Context, tx port.Transaction) (port.I
 		return nil, ErrBucketUnavailable
 	}
 
-	iter := &Iterator{
-		Skip:        0,
-		Limit:       -1,
-		SkipDeleted: true,
-		StartKey:    nil,
-		EndKey:      nil,
-		tx:          i.tx(tx),
-		bucket:      b,
+	iter := &iteratorWithKeyFunc{
+		Iterator: Iterator{
+			Skip:        0,
+			Limit:       -1,
+			SkipDeleted: true,
+			StartKey:    nil,
+			EndKey:      nil,
+			tx:          i.tx(tx),
+			bucket:      b,
+		},
+		keyFn: i.iterKeyFunc,
 	}
 	return iter, nil
+}
+
+type iteratorWithKeyFunc struct {
+	Iterator
+	keyFn IterKeyFunc
+}
+
+func (i *iteratorWithKeyFunc) SetStartKey(v []byte) {
+	if i.keyFn != nil {
+		v = i.keyFn(v)
+	}
+	i.StartKey = v
+}
+
+func (i *iteratorWithKeyFunc) SetEndKey(v []byte) {
+	if i.keyFn != nil {
+		v = i.keyFn(v)
+	}
+	i.EndKey = v
 }

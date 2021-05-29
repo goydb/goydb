@@ -3,7 +3,6 @@ package port
 import (
 	"context"
 	"io"
-	"strconv"
 	"time"
 
 	"github.com/goydb/goydb/pkg/model"
@@ -21,32 +20,11 @@ type AllDocsQuery struct {
 	ViewGroup   bool
 }
 
-type ChangesOptions struct {
-	Since   string
-	Limit   int
-	Timeout time.Duration
-}
-
 type Stats struct {
 	FileSize uint64
 	DocCount uint64
 	Alloc    uint64
 	InUse    uint64
-}
-
-func (o *ChangesOptions) SinceNow() bool {
-	return o.Since == "now"
-}
-
-func (o *ChangesOptions) StartKey() []byte {
-	if o.SinceNow() {
-		return nil
-	}
-	sinceNo, err := strconv.ParseUint(o.Since, 10, 64)
-	if err != nil {
-		return nil
-	}
-	return []byte(model.FormatLocalSeq(sinceNo))
 }
 
 type Storage interface {
@@ -66,7 +44,7 @@ type Database interface {
 	AllDocs(ctx context.Context, query AllDocsQuery) ([]*model.Document, int, error)
 	AllDesignDocs(ctx context.Context) ([]*model.Document, int, error)
 	EnrichDocuments(ctx context.Context, docs []*model.Document) error
-	Changes(ctx context.Context, options *ChangesOptions) ([]*model.Document, int, error)
+	Changes(ctx context.Context, options *model.ChangesOptions) ([]*model.Document, int, error)
 	GetAttachment(ctx context.Context, docID, name string) (*model.Attachment, error)
 	DeleteAttachment(ctx context.Context, docID, name string) (string, error)
 	PutAttachment(ctx context.Context, docID string, att *model.Attachment) (string, error)

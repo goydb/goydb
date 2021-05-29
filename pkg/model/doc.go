@@ -1,7 +1,6 @@
 package model
 
 import (
-	"encoding/binary"
 	"reflect"
 	"strconv"
 	"strings"
@@ -81,16 +80,6 @@ func (doc Document) NextSequence() int {
 		return 1 // this should never happen, but if so fallback to 0
 	}
 	return int(val) + 1
-}
-
-func FormatLocalSeq(seq uint64) string {
-	b := make([]byte, 8)
-	binary.BigEndian.PutUint64(b, seq)
-	return string(b)
-}
-
-func (doc Document) FormatLocalSeq() string {
-	return FormatLocalSeq(doc.LocalSeq)
 }
 
 func (doc Document) Language() string {

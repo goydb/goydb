@@ -77,7 +77,7 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 		databaseDir: databaseDir,
 		DB:          db,
 		indices: []port.DocumentIndex{
-			NewUniqueIndex("_changes", ChangesIndexKeyFunc, ChangesIndexValueFunc),
+			NewChangesIndex("_changes"),
 		},
 		searchIndices: make(map[string]port.SearchIndex),
 	}

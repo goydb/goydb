@@ -5,27 +5,9 @@ import (
 
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
-	"gopkg.in/mgo.v2/bson"
 )
 
-var ChangesIndexKeyFunc = func(doc *model.Document) []byte {
-	return []byte(doc.FormatLocalSeq())
-}
-
-var ChangesIndexValueFunc = func(doc *model.Document) []byte {
-	out, err := bson.Marshal(&model.Document{
-		ID:       doc.ID,
-		Rev:      doc.Rev,
-		LocalSeq: doc.LocalSeq,
-		Deleted:  doc.Deleted,
-	})
-	if err != nil {
-		return nil
-	}
-	return out
-}
-
-func (d *Database) Changes(ctx context.Context, options *port.ChangesOptions) ([]*model.Document, int, error) {
+func (d *Database) Changes(ctx context.Context, options *model.ChangesOptions) ([]*model.Document, int, error) {
 	var pending int
 	var docs []*model.Document
 	wait := false
@@ -45,8 +27,8 @@ start:
 		}
 		i.SetLimit(options.Limit)
 
-		if key := options.StartKey(); key != nil {
-			i.SetStartKey(key)
+		if !options.SinceNow() {
+			i.SetStartKey([]byte(options.Since))
 		}
 
 		for doc := i.First(); i.Continue(); doc = i.Next() {
