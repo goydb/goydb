@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
@@ -23,6 +24,8 @@ type UniqueIndex struct {
 	bucketName  []byte
 	key, value  IndexFunc
 	iterKeyFunc IterKeyFunc
+	cleanKey    func([]byte) []byte
+	mu          sync.RWMutex
 }
 
 func NewUniqueIndex(bucketName string, key, value IndexFunc) port.DocumentIndex {
@@ -38,6 +41,8 @@ func (i *UniqueIndex) tx(tx port.Transaction) *bbolt.Tx {
 }
 
 func (i *UniqueIndex) Ensure(ctx context.Context, tx port.Transaction) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
 	_, err := i.tx(tx).CreateBucketIfNotExists(i.bucketName)
 	return err
 }
@@ -47,10 +52,15 @@ func (i *UniqueIndex) Rebuild(ctx context.Context, tx port.Transaction) error {
 }
 
 func (i *UniqueIndex) Remove(ctx context.Context, tx port.Transaction) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
 	return i.tx(tx).DeleteBucket(i.bucketName)
 }
 
 func (i *UniqueIndex) Stats(ctx context.Context, tx port.Transaction) (*model.IndexStats, error) {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+
 	b := i.tx(tx).Bucket(i.bucketName)
 	if b == nil {
 		return nil, ErrBucketUnavailable
@@ -59,8 +69,9 @@ func (i *UniqueIndex) Stats(ctx context.Context, tx port.Transaction) (*model.In
 
 	return &model.IndexStats{
 		Documents: uint64(s.KeyN),
-		Used:      uint64(s.BranchInuse) + uint64(s.LeafInuse),
-		Allocated: uint64(s.BranchAlloc) + uint64(s.LeafAlloc),
+		Keys:      uint64(s.KeyN),
+		Used:      uint64(s.BranchInuse + s.LeafInuse),
+		Allocated: uint64(s.BranchAlloc + s.LeafAlloc),
 	}, nil
 }
 
@@ -68,6 +79,10 @@ func (i *UniqueIndex) DocumentStored(ctx context.Context, tx port.Transaction, d
 	if doc == nil {
 		return nil
 	}
+
+	i.mu.Lock()
+	defer i.mu.Unlock()
+
 	b := i.tx(tx).Bucket(i.bucketName)
 	if b == nil {
 		return ErrBucketUnavailable
@@ -84,6 +99,10 @@ func (i *UniqueIndex) DocumentDeleted(ctx context.Context, tx port.Transaction, 
 	if doc == nil {
 		return nil
 	}
+
+	i.mu.Lock()
+	defer i.mu.Unlock()
+
 	b := i.tx(tx).Bucket(i.bucketName)
 	if b == nil {
 		return ErrBucketUnavailable
@@ -96,7 +115,9 @@ func (i *UniqueIndex) DocumentDeleted(ctx context.Context, tx port.Transaction, 
 }
 
 func (i *UniqueIndex) Iterator(ctx context.Context, tx port.Transaction) (port.Iterator, error) {
+	i.mu.RLock()
 	b := i.tx(tx).Bucket(i.bucketName)
+	i.mu.RUnlock()
 	if b == nil {
 		return nil, ErrBucketUnavailable
 	}
@@ -110,6 +131,7 @@ func (i *UniqueIndex) Iterator(ctx context.Context, tx port.Transaction) (port.I
 			EndKey:      nil,
 			tx:          i.tx(tx),
 			bucket:      b,
+			cleanKey:    i.cleanKey,
 		},
 		keyFn: i.iterKeyFunc,
 	}

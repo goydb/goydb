@@ -27,6 +27,11 @@ func NewUniqueIndexUint64(name string, kf UniqueIndexUint64KeyFunc, value IndexF
 			key:         bkf,
 			value:       value,
 			iterKeyFunc: byteToUint64Key,
+			// key is a bigint binary, convert back to base10 string
+			cleanKey: func(b []byte) []byte {
+				ui := binary.BigEndian.Uint64(b)
+				return []byte(strconv.FormatUint(ui, 10))
+			},
 		},
 	}
 }

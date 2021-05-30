@@ -85,6 +85,23 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 
 	// create all required database Indices
 	err = database.Transaction(ctx, func(tx port.Transaction) error {
+		// load all design documents
+		docs, _, err := database.AllDesignDocs(ctx)
+		if err != nil {
+			return err
+		}
+		for _, doc := range docs {
+			vfs := doc.ViewFunctions()
+			for _, vf := range vfs {
+				ddfn := model.DesignDocFn{
+					Type:        model.ViewFn,
+					DesignDocID: doc.ID,
+					FnName:      vf.Name,
+				}
+				log.Printf("CREATING INDEX %s", ddfn)
+			}
+		}
+
 		for _, index := range database.Indices() {
 			err := index.Ensure(ctx, tx)
 			if err != nil {

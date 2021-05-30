@@ -8,6 +8,8 @@ package model
 type IndexStats struct {
 	// Documents number of document in the index
 	Documents uint64
+	// Keys number of keys in the index
+	Keys uint64
 	// Used number of bytes used by the index
 	Used uint64
 	// Allocated number of bytes allocated by the index

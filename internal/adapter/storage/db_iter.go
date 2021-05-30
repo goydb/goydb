@@ -10,6 +10,16 @@ import (
 	"gopkg.in/mgo.v2/bson"
 )
 
+func (d *Database) Iterator(ctx context.Context, ddfn *model.DesignDocFn, fn func(i port.Iterator) error) error {
+	return d.View(func(tx *bolt.Tx) error {
+		iter := newIterator(tx, ddfn)
+		if iter == nil {
+			return nil
+		}
+		return fn(iter)
+	})
+}
+
 type Iterator struct {
 	Skip     int
 	Limit    int
@@ -25,6 +35,8 @@ type Iterator struct {
 	bucket *bolt.Bucket
 	cursor *bolt.Cursor
 	ctx    context.Context
+
+	cleanKey func([]byte) []byte
 }
 
 func (i *Iterator) Total() int {
@@ -72,7 +84,7 @@ func (i *Iterator) First() *model.Document {
 	if v != nil {
 		for {
 			var doc model.Document
-			bson.Unmarshal(v, &doc) // nolint: errcheck
+			i.unmarshalDoc(i.key, v, &doc)
 
 			// skip over all deleted documents
 			if doc.Deleted {
@@ -93,7 +105,7 @@ func (i *Iterator) Next() *model.Document {
 	found := false
 
 	for i.key, v = i.cursor.Next(); i.Continue(); i.key, v = i.cursor.Next() {
-		bson.Unmarshal(v, &doc) // nolint: errcheck
+		i.unmarshalDoc(i.key, v, &doc)
 
 		// skip deleted
 		if i.SkipDeleted && doc.Deleted {
@@ -144,6 +156,10 @@ func (i *Iterator) Continue() bool {
 // Remaining returns the remaining documents starting at
 // the current position till the end of the range
 func (i *Iterator) Remaining() int {
+	if i.cursor == nil {
+		i.cursor = i.bucket.Cursor()
+	}
+
 	var remaining int
 	for {
 		k, _ := i.cursor.Next()
@@ -184,12 +200,13 @@ func (i *Iterator) SetEndKey(v []byte) {
 	i.EndKey = v
 }
 
-func (d *Database) Iterator(ctx context.Context, ddfn *model.DesignDocFn, fn func(i port.Iterator) error) error {
-	return d.View(func(tx *bolt.Tx) error {
-		iter := newIterator(tx, ddfn)
-		if iter == nil {
-			return nil
-		}
-		return fn(iter)
-	})
+func (i *Iterator) unmarshalDoc(k, v []byte, doc *model.Document) {
+	bson.Unmarshal(v, doc) // nolint: errcheck
+
+	// provide the document key via the document
+	if i.cleanKey != nil {
+		doc.Key = i.cleanKey(k)
+	} else {
+		doc.Key = k
+	}
 }
