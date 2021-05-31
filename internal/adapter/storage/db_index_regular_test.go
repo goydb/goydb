@@ -96,28 +96,28 @@ func TestRegularIndex(t *testing.T) {
 					assert.EqualValues(t, []*model.Document{
 						&model.Document{
 							ID:          "test",
-							Key:         []byte("name"),
+							Key:         "name",
 							Value:       "Foo",
 							Data:        map[string]interface{}{},
 							Attachments: map[string]*model.Attachment{},
 						},
 						&model.Document{
 							ID:          "test1",
-							Key:         []byte("name"),
+							Key:         "name",
 							Value:       "Foo",
 							Data:        map[string]interface{}{},
 							Attachments: map[string]*model.Attachment{},
 						},
 						&model.Document{
 							ID:          "test",
-							Key:         []byte("test"),
+							Key:         "test",
 							Value:       int(123),
 							Data:        map[string]interface{}{},
 							Attachments: map[string]*model.Attachment{},
 						},
 						&model.Document{
 							ID:          "test1",
-							Key:         []byte("test"),
+							Key:         "test",
 							Value:       int(234),
 							Data:        map[string]interface{}{},
 							Attachments: map[string]*model.Attachment{},
@@ -147,14 +147,14 @@ func TestRegularIndex(t *testing.T) {
 						assert.EqualValues(t, []*model.Document{
 							&model.Document{
 								ID:          "test1",
-								Key:         []byte("name"),
+								Key:         "name",
 								Value:       "Foo",
 								Data:        map[string]interface{}{},
 								Attachments: map[string]*model.Attachment{},
 							},
 							&model.Document{
 								ID:          "test1",
-								Key:         []byte("test"),
+								Key:         "test",
 								Value:       int(234),
 								Data:        map[string]interface{}{},
 								Attachments: map[string]*model.Attachment{},

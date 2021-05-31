@@ -67,10 +67,12 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 
 	databaseDir := path.Join(s.path, name+".d")
 
+	log.Println("Open..")
 	db, err := bolt.Open(path.Join(s.path, name), 0666, nil)
 	if err != nil {
 		return nil, err
 	}
+	log.Println("Done..")
 
 	database := &Database{
 		name:        name,
@@ -84,25 +86,15 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 	s.dbs[name] = database
 
 	// create all required database Indices
+	log.Println("BuildIndices")
 	err = database.Transaction(ctx, func(tx port.Transaction) error {
-		// load all design documents
-		docs, _, err := database.AllDesignDocs(ctx)
+		err := database.BuildIndices(ctx, tx)
 		if err != nil {
 			return err
 		}
-		for _, doc := range docs {
-			vfs := doc.ViewFunctions()
-			for _, vf := range vfs {
-				ddfn := model.DesignDocFn{
-					Type:        model.ViewFn,
-					DesignDocID: doc.ID,
-					FnName:      vf.Name,
-				}
-				log.Printf("CREATING INDEX %s", ddfn)
-			}
-		}
 
 		for _, index := range database.Indices() {
+			log.Printf("ENSURE INDEX %s", index)
 			err := index.Ensure(ctx, tx)
 			if err != nil {
 				return err

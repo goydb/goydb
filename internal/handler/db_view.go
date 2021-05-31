@@ -37,6 +37,17 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ddfn := model.DesignDocFn{
+		Type:        model.ViewFn,
+		DesignDocID: docID,
+		FnName:      viewName,
+	}
+	idx, ok := db.Indices()[ddfn.String()]
+	if !ok {
+		WriteError(w, http.StatusNotFound, "index not found")
+		return
+	}
+
 	options := r.URL.Query()
 	var update string
 	if len(options["update"]) > 0 {
@@ -93,7 +104,22 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			FnName:    viewName,
 		}.ReduceDocs(r.Context(), q)
 	} else {
-		docs, total, err = db.AllDocs(r.Context(), q)
+		//docs, total, err = db.AllDocs(r.Context(), q)
+		err = db.RTransaction(r.Context(), func(tx port.Transaction) error {
+			iter, err := idx.Iterator(r.Context(), tx)
+			if err != nil {
+				return err
+			}
+
+			iter.SetSkip(int(q.Skip))
+			iter.SetLimit(int(q.Limit))
+			for doc := iter.First(); iter.Continue(); doc = iter.Next() {
+				docs = append(docs, doc)
+			}
+			total = iter.Remaining() + len(docs)
+
+			return err
+		})
 	}
 
 	if err != nil {

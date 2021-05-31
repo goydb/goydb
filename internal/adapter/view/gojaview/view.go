@@ -74,5 +74,6 @@ func (s *ViewServer) ExecuteView(ctx context.Context, docs []*model.Document) ([
 }
 
 func (s *ViewServer) ExecuteSearch(ctx context.Context, docs []*model.Document) ([]*model.SearchIndexDoc, error) {
-	return nil, nil
+	// TODO implement search execution in javascript
+	panic("not implemented") // TODO: Implement
 }

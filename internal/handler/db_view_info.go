@@ -6,6 +6,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/port"
 )
 
 type DBViewInfo struct {
@@ -38,7 +39,18 @@ func (s *DBViewInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		FnName:      viewName,
 	}
 
-	stats, err := db.ViewSize(r.Context(), &ddfn)
+	idx, ok := db.Indices()[ddfn.String()]
+	if !ok {
+		WriteError(w, http.StatusNotFound, "index not found")
+		return
+	}
+
+	var stats *model.IndexStats
+	err = db.RTransaction(r.Context(), func(tx port.Transaction) error {
+		var err error
+		stats, err = idx.Stats(r.Context(), tx)
+		return err
+	})
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -46,8 +58,8 @@ func (s *DBViewInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	response := &ViewInfoResponse{}
 	response.ViewIndex.Language = doc.Language()
-	response.ViewIndex.UpdatesPending.Total = stats.DocCount
-	response.ViewIndex.Sizes.File = stats.InUse
+	response.ViewIndex.UpdatesPending.Total = stats.Keys
+	response.ViewIndex.Sizes.File = stats.Used
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)

@@ -36,7 +36,7 @@ type Iterator struct {
 	cursor *bolt.Cursor
 	ctx    context.Context
 
-	cleanKey func([]byte) []byte
+	cleanKey func([]byte) string
 }
 
 func (i *Iterator) Total() int {
@@ -207,6 +207,6 @@ func (i *Iterator) unmarshalDoc(k, v []byte, doc *model.Document) {
 	if i.cleanKey != nil {
 		doc.Key = i.cleanKey(k)
 	} else {
-		doc.Key = k
+		doc.Key = string(k)
 	}
 }

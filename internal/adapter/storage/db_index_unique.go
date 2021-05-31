@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/goydb/goydb/pkg/model"
@@ -24,16 +25,20 @@ type UniqueIndex struct {
 	bucketName  []byte
 	key, value  IndexFunc
 	iterKeyFunc IterKeyFunc
-	cleanKey    func([]byte) []byte
+	cleanKey    func([]byte) string
 	mu          sync.RWMutex
 }
 
-func NewUniqueIndex(bucketName string, key, value IndexFunc) port.DocumentIndex {
+func NewUniqueIndex(bucketName string, key, value IndexFunc) *UniqueIndex {
 	return &UniqueIndex{
 		bucketName: []byte(bucketName),
 		key:        key,
 		value:      value,
 	}
+}
+
+func (i *UniqueIndex) String() string {
+	return fmt.Sprintf("<UniqueIndex name=%q>", string(i.bucketName))
 }
 
 func (i *UniqueIndex) tx(tx port.Transaction) *bbolt.Tx {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"sync"
 
 	"github.com/goydb/goydb/pkg/model"
@@ -30,7 +31,7 @@ type RegularIndex struct {
 	bucketName, indexInvalidationBucket []byte
 }
 
-func NewRegularIndex(ddfn *model.DesignDocFn, idxFn RegularIndexFunc) port.DocumentIndex {
+func NewRegularIndex(ddfn *model.DesignDocFn, idxFn RegularIndexFunc) *RegularIndex {
 	ri := &RegularIndex{
 		ddfn:                    ddfn,
 		idxFn:                   idxFn,
@@ -38,6 +39,10 @@ func NewRegularIndex(ddfn *model.DesignDocFn, idxFn RegularIndexFunc) port.Docum
 		indexInvalidationBucket: append(ddfn.Bucket(), indexInvalidationBucketSuffix...),
 	}
 	return ri
+}
+
+func (i *RegularIndex) String() string {
+	return fmt.Sprintf("<RegularIndex name=%q>", i.ddfn)
 }
 
 func (i *RegularIndex) tx(tx port.Transaction) *bbolt.Tx {
@@ -216,8 +221,8 @@ func (i *RegularIndex) Iterator(ctx context.Context, tx port.Transaction) (port.
 		tx:          i.tx(tx),
 		bucket:      b,
 		// Iterator only return the key not the meta data
-		cleanKey: func(k []byte) []byte {
-			return k[:keyLen(k)]
+		cleanKey: func(k []byte) string {
+			return string(k[:keyLen(k)])
 		},
 	}
 

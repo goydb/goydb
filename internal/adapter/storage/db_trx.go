@@ -5,7 +5,6 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
-	"log"
 	"strconv"
 
 	"github.com/fxamacker/cbor/v2"
@@ -94,27 +93,27 @@ func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (re
 	if err != nil {
 		return
 	}
-
-	if doc.IsDesignDoc() {
-		err = tx.Database.AddTasksTx(ctx, tx, []*model.Task{
-			{
-				Action:          model.ActionUpdateView,
-				DBName:          tx.Database.Name(),
-				ViewDocID:       doc.ID,
-				ProcessingTotal: 1,
-			},
-		})
-	} else {
-		err = tx.Database.AddTasksTx(ctx, tx, []*model.Task{
-			{
-				Action:          model.ActionUpdateView,
-				DBName:          tx.Database.Name(),
-				DocID:           doc.ID,
-				ProcessingTotal: 1,
-			},
-		})
-	}
-
+	/*
+		if doc.IsDesignDoc() {
+			err = tx.Database.AddTasksTx(ctx, tx, []*model.Task{
+				{
+					Action:          model.ActionUpdateView,
+					DBName:          tx.Database.Name(),
+					ViewDocID:       doc.ID,
+					ProcessingTotal: 1,
+				},
+			})
+		} else {
+			err = tx.Database.AddTasksTx(ctx, tx, []*model.Task{
+				{
+					Action:          model.ActionUpdateView,
+					DBName:          tx.Database.Name(),
+					DocID:           doc.ID,
+					ProcessingTotal: 1,
+				},
+			})
+		}
+	*/
 	// maintain Indices - add new value
 	for _, index := range tx.Database.Indices() {
 		err = index.DocumentStored(ctx, tx, doc)
@@ -180,12 +179,12 @@ func (tx *Transaction) DeleteDocument(ctx context.Context, docID, rev string) (*
 	if err != nil {
 		return doc, err
 	}
-
-	err = tx.Database.(*Database).RemoveAllStaleSearchDocs(tx, doc)
-	if err != nil {
-		log.Printf("failed to remove stale search docs: %v", err)
-	}
-
+	/*
+		err = tx.Database.(*Database).RemoveAllStaleSearchDocs(tx, doc)
+		if err != nil {
+			log.Printf("failed to remove stale search docs: %v", err)
+		}
+	*/
 	return doc, err
 }
 

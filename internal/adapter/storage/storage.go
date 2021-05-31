@@ -45,6 +45,7 @@ func (s *Storage) ReloadDatabases(ctx context.Context) error {
 			continue
 		}
 
+		log.Printf("Loading database %s...", path.Base(f.Name()))
 		database, err := s.CreateDatabase(ctx, path.Base(f.Name()))
 		if err != nil {
 			log.Printf("Loading DB %q failed: %v", f.Name(), err)

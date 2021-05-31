@@ -2,10 +2,10 @@ package storage
 
 import (
 	"encoding/binary"
+	"fmt"
 	"strconv"
 
 	"github.com/goydb/goydb/pkg/model"
-	"github.com/goydb/goydb/pkg/port"
 )
 
 type UniqueIndexUint64KeyFunc func(doc *model.Document) uint64
@@ -16,7 +16,7 @@ type UniqueIndexUint64 struct {
 
 // NewUniqueIndexUint64 creates a sorted uint64 index
 // that can be scanned in order using the iterator
-func NewUniqueIndexUint64(name string, kf UniqueIndexUint64KeyFunc, value IndexFunc) port.DocumentIndex {
+func NewUniqueIndexUint64(name string, kf UniqueIndexUint64KeyFunc, value IndexFunc) *UniqueIndexUint64 {
 	bkf := func(doc *model.Document) []byte {
 		return uint64ToKey(kf(doc))
 	}
@@ -28,12 +28,16 @@ func NewUniqueIndexUint64(name string, kf UniqueIndexUint64KeyFunc, value IndexF
 			value:       value,
 			iterKeyFunc: byteToUint64Key,
 			// key is a bigint binary, convert back to base10 string
-			cleanKey: func(b []byte) []byte {
+			cleanKey: func(b []byte) string {
 				ui := binary.BigEndian.Uint64(b)
-				return []byte(strconv.FormatUint(ui, 10))
+				return strconv.FormatUint(ui, 10)
 			},
 		},
 	}
+}
+
+func (i *UniqueIndexUint64) String() string {
+	return fmt.Sprintf("<UniqueIndexUint64 name=%q>", string(i.UniqueIndex.bucketName))
 }
 
 // uint64ToKey big endian bytes of passed v

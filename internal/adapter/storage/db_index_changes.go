@@ -2,13 +2,12 @@ package storage
 
 import (
 	"github.com/goydb/goydb/pkg/model"
-	"github.com/goydb/goydb/pkg/port"
 	"gopkg.in/mgo.v2/bson"
 )
 
 const ChangesIndexName = "_changes"
 
-func NewChangesIndex(name string) port.DocumentIndex {
+func NewChangesIndex(name string) *UniqueIndexUint64 {
 	return NewUniqueIndexUint64(
 		name,
 		// key is the local sequence of the document

@@ -34,7 +34,7 @@ func (d *Database) NewDocObserver(ctx context.Context) port.Observer {
 	return o
 }
 
-// Observer a document oberserver, created using
+// Observer a document observer, created using
 // NewDocObserver.
 type Observer struct {
 	ctx context.Context
