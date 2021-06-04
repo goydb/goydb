@@ -10,6 +10,8 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
 	"github.com/goydb/goydb/internal/adapter/storage"
+	"github.com/goydb/goydb/internal/adapter/view/gojaview"
+	"github.com/goydb/goydb/internal/adapter/view/tengoview"
 	"github.com/goydb/goydb/internal/controller"
 	"github.com/goydb/goydb/internal/handler"
 	"github.com/goydb/goydb/pkg/model"
@@ -77,7 +79,11 @@ func (c *Config) BuildDatabase() (*Goydb, error) {
 		return nil, fmt.Errorf("failed to parse admins: %w", err)
 	}
 
-	s, err := storage.Open(c.DatabaseDir)
+	s, err := storage.Open(
+		c.DatabaseDir,
+		storage.WithEngine("javascript", gojaview.NewViewServer),
+		storage.WithEngine("tengo", tengoview.NewViewServer),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database dir: %w", err)
 	}

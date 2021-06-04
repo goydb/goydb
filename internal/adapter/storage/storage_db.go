@@ -23,6 +23,7 @@ type Database struct {
 	channels []chan *model.Document
 
 	indices map[string]port.DocumentIndex
+	engines map[string]port.ViewServerBuilder
 
 	searchIndices   map[string]port.SearchIndex
 	muSearchIndices sync.RWMutex
@@ -82,6 +83,7 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 			ChangesIndexName: NewChangesIndex(ChangesIndexName),
 		},
 		searchIndices: make(map[string]port.SearchIndex),
+		engines:       s.engines,
 	}
 	s.dbs[name] = database
 

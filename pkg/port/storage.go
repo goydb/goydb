@@ -33,6 +33,7 @@ type Storage interface {
 	DeleteDatabase(ctx context.Context, name string) error
 	Databases(ctx context.Context) ([]string, error)
 	Database(ctx context.Context, name string) (Database, error)
+	RegisterEngine(name string, builder ViewServerBuilder) error
 	String() string
 	Close() error
 }

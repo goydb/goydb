@@ -14,7 +14,7 @@ import (
 
 // RegularIndexFunc gets a document and returns multiple keys
 // and values or nil, nil.
-type RegularIndexFunc func(doc *model.Document) ([][]byte, [][]byte)
+type RegularIndexFunc func(ctx context.Context, doc *model.Document) ([][]byte, [][]byte)
 
 var _ port.DocumentIndex = (*RegularIndex)(nil)
 
@@ -24,9 +24,10 @@ var indexInvalidationBucketSuffix = []byte(":invalidation")
 // does so by adding the document id (which is unique) to the end
 // of the document key.
 type RegularIndex struct {
-	ddfn  *model.DesignDocFn
-	idxFn RegularIndexFunc
-	mu    sync.RWMutex
+	ddfn     *model.DesignDocFn
+	idxFn    RegularIndexFunc
+	mu       sync.RWMutex
+	cleanKey func([]byte) string
 
 	bucketName, indexInvalidationBucket []byte
 }
@@ -130,7 +131,7 @@ func (i *RegularIndex) DocumentStored(ctx context.Context, tx port.Transaction, 
 	}
 
 	// 2. add new keys and invalidation records
-	keys, values := i.idxFn(doc)
+	keys, values := i.idxFn(ctx, doc)
 	for i, key := range keys {
 		// enable multi key
 		seq, err := b.NextSequence()
@@ -212,6 +213,17 @@ func (i *RegularIndex) Iterator(ctx context.Context, tx port.Transaction) (port.
 	if b == nil {
 		return nil, ErrBucketUnavailable
 	}
+
+	var ck func([]byte) string
+	// if no func is defined
+	if i.cleanKey == nil {
+		ck = simpleCleanKey
+	} else {
+		ck = func(b []byte) string {
+			return i.cleanKey([]byte(simpleCleanKey(b)))
+		}
+	}
+
 	iter := &Iterator{
 		Skip:        0,
 		Limit:       -1,
@@ -221,9 +233,7 @@ func (i *RegularIndex) Iterator(ctx context.Context, tx port.Transaction) (port.
 		tx:          i.tx(tx),
 		bucket:      b,
 		// Iterator only return the key not the meta data
-		cleanKey: func(k []byte) string {
-			return string(k[:keyLen(k)])
-		},
+		cleanKey: ck,
 	}
 
 	return iter, nil
@@ -240,4 +250,8 @@ func keyWithSeq(key []byte, seq uint64) []byte {
 
 func keyLen(key []byte) uint16 {
 	return binary.BigEndian.Uint16(key[len(key)-2:])
+}
+
+func simpleCleanKey(k []byte) string {
+	return string(k[:keyLen(k)])
 }

@@ -7,18 +7,32 @@ import (
 	"log"
 	"path"
 	"sync"
+
+	"github.com/goydb/goydb/pkg/port"
 )
 
 type Storage struct {
-	path string
-	dbs  map[string]*Database
-	mu   sync.RWMutex
+	path    string
+	dbs     map[string]*Database
+	mu      sync.RWMutex
+	engines port.ViewEngines
 }
 
-func Open(path string) (*Storage, error) {
+type StorageOption func(s *Storage) error
+
+func Open(path string, options ...StorageOption) (*Storage, error) {
 	s := &Storage{
-		path: path,
+		path:    path,
+		engines: make(port.ViewEngines),
 	}
+
+	for _, option := range options {
+		err := option(s)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	err := s.ReloadDatabases(context.Background())
 	if err != nil {
 		return nil, err
@@ -57,6 +71,14 @@ func (s *Storage) ReloadDatabases(ctx context.Context) error {
 	return nil
 }
 
+func (s *Storage) RegisterEngine(name string, builder port.ViewServerBuilder) error {
+	if _, ok := s.engines[name]; ok {
+		return fmt.Errorf("engine with name %q already registered", name)
+	}
+	s.engines[name] = builder
+	return nil
+}
+
 func (s *Storage) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -70,4 +92,10 @@ func (s *Storage) Close() error {
 	}
 
 	return nil
+}
+
+func WithEngine(name string, builder port.ViewServerBuilder) StorageOption {
+	return func(s *Storage) error {
+		return s.RegisterEngine(name, builder)
+	}
 }

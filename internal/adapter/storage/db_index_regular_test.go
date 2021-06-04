@@ -18,7 +18,7 @@ func TestRegularIndex(t *testing.T) {
 				DesignDocID: "doc",
 				FnName:      "fn",
 			},
-			func(doc *model.Document) ([][]byte, [][]byte) {
+			func(ctx context.Context, doc *model.Document) ([][]byte, [][]byte) {
 				var keys, values [][]byte
 
 				// index all values

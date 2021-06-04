@@ -1,8 +1,12 @@
 package storage
 
 import (
+	"context"
 	"fmt"
+	"log"
+	"sync"
 
+	"github.com/fxamacker/cbor/v2"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 	"gopkg.in/mgo.v2/bson"
@@ -12,16 +16,26 @@ var _ port.DocumentIndex = (*ViewIndex)(nil)
 
 type ViewIndex struct {
 	*RegularIndex
-	MapFn, ReduceFn string
+	MapFn   string
+	engines port.ViewEngines
+	server  port.ViewServer
+	mu      sync.RWMutex
 }
 
-func NewViewIndex(ddfn *model.DesignDocFn, mapFn, reduceFn string) *ViewIndex {
+func NewViewIndex(ddfn *model.DesignDocFn, engines port.ViewEngines) *ViewIndex {
 	vi := &ViewIndex{
-		MapFn:    mapFn,
-		ReduceFn: mapFn,
+		engines: engines,
 	}
 
 	vi.RegularIndex = NewRegularIndex(ddfn, vi.indexSingleDocument)
+	vi.RegularIndex.cleanKey = func(b []byte) string {
+		var i interface{}
+		err := cbor.Unmarshal(b, &i)
+		if err != nil {
+			return err.Error()
+		}
+		return fmt.Sprintf("%v", i)
+	}
 
 	return vi
 }
@@ -30,18 +44,35 @@ func (i *ViewIndex) String() string {
 	return fmt.Sprintf("<ViewIndex name=%q>", i.RegularIndex.ddfn)
 }
 
-func (i *ViewIndex) indexSingleDocument(doc *model.Document) ([][]byte, [][]byte) {
-	// ############### DUMMY IMPLEMENTATION OF SOME ALG ################
+func (i *ViewIndex) indexSingleDocument(ctx context.Context, doc *model.Document) ([][]byte, [][]byte) {
+	// ignore deleted documents
+	if doc.Deleted {
+		return nil, nil
+	}
+
+	// get view server
+	i.mu.RLock()
+	vs := i.server
+	i.mu.RUnlock()
+
+	// execute document against view server
+	docs, err := vs.ExecuteView(ctx, []*model.Document{doc})
+	if err != nil {
+		log.Printf("Failed to execute view: %v", err)
+		return nil, nil
+	}
 
 	var keys, values [][]byte
 
 	// index all values
-	for k, v := range doc.Data {
-		keys = append(keys, []byte(k))
-		out, err := bson.Marshal(model.Document{
-			ID:    doc.ID,
-			Value: v,
-		})
+	for _, doc := range docs {
+		key, err := cbor.Marshal(doc.Key)
+		if err != nil {
+			log.Printf("Failed to marshal key: %v", err)
+			return nil, nil
+		}
+		keys = append(keys, key)
+		out, err := bson.Marshal(doc)
 		if err == nil {
 			values = append(values, out)
 		}
@@ -52,6 +83,30 @@ func (i *ViewIndex) indexSingleDocument(doc *model.Document) ([][]byte, [][]byte
 
 // updateSource updates the view source and starts
 // rebuilding the whole index
-func (i *ViewIndex) updateSource(mapFn, reduceFn string) error {
-	panic("not implemented") // TODO: Implement
+func (i *ViewIndex) updateSource(language, mapFn string) error {
+	// if the mapFn is the same, to nothing
+	if i.MapFn == mapFn {
+		return nil
+	}
+
+	// func is different, build the view server
+	builder, ok := i.engines[language]
+	if !ok {
+		return fmt.Errorf("view engine for language %q is not registered", language)
+	}
+	vs, err := builder(mapFn)
+	if err != nil {
+		return fmt.Errorf("failed to compile view: %w", err)
+	}
+
+	// view was successfully created, update mapFn and viewServer
+	i.mu.Lock()
+	i.MapFn = mapFn
+	i.server = vs
+	i.mu.Unlock()
+
+	// trigger rebuild with all documents
+	log.Println("FIXME: documents are not yet re-generated after index change")
+	// FIXME: IMPLEMENT
+	return nil
 }

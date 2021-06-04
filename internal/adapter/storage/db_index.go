@@ -48,7 +48,7 @@ func (d *Database) BuildViewIndices(ctx context.Context, tx port.Transaction, do
 			// check if already view index, update source
 			vidx, ok := idx.(*ViewIndex)
 			if ok {
-				err := vidx.updateSource(vf.MapFn, vf.ReduceFn)
+				err := vidx.updateSource(doc.Language(), vf.MapFn)
 				if err != nil {
 					return err
 				}
@@ -62,7 +62,12 @@ func (d *Database) BuildViewIndices(ctx context.Context, tx port.Transaction, do
 		}
 
 		// index doesn't exist yet
-		d.indices[indexName] = NewViewIndex(ddfn, vf.MapFn, vf.ReduceFn)
+		vidx := NewViewIndex(ddfn, d.engines)
+		err := vidx.updateSource(doc.Language(), vf.MapFn)
+		if err != nil {
+			return err
+		}
+		d.indices[indexName] = vidx
 	}
 	return nil
 }
@@ -83,7 +88,7 @@ func (d *Database) BuildSearchIndices(ctx context.Context, tx port.Transaction, 
 			// check if already view index, update source
 			sidx, ok := idx.(*ExternalSearchIndex)
 			if ok {
-				err := sidx.updateSource(sfn.SearchFn, sfn.Analyzer)
+				err := sidx.updateSource(doc.Language(), sfn.SearchFn, sfn.Analyzer)
 				if err != nil {
 					return err
 				}
@@ -97,7 +102,12 @@ func (d *Database) BuildSearchIndices(ctx context.Context, tx port.Transaction, 
 		}
 
 		// index doesn't exist yet
-		d.indices[indexName] = NewExternalSearchIndex(ddfn, sfn.SearchFn, sfn.Analyzer)
+		sidx := NewExternalSearchIndex(ddfn, sfn.SearchFn, sfn.Analyzer, d.engines)
+		err := sidx.updateSource(doc.Language(), sfn.SearchFn, sfn.Analyzer)
+		if err != nil {
+			return err
+		}
+		d.indices[indexName] = sidx
 	}
 	return nil
 }

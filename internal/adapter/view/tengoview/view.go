@@ -17,7 +17,7 @@ type ViewServer struct {
 	compiled *tengo.Compiled
 }
 
-func NewViewServer(fn string) (*ViewServer, error) {
+func NewViewServer(fn string) (port.ViewServer, error) {
 	fn = `text := import("text")
 	math := import("math")
 	times := import("times")

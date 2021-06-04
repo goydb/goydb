@@ -15,7 +15,7 @@ type ViewServer struct {
 	vm *goja.Runtime
 }
 
-func NewViewServer(fn string) (*ViewServer, error) {
+func NewViewServer(fn string) (port.ViewServer, error) {
 	vm := goja.New()
 	fn = `
 	var _result = [];

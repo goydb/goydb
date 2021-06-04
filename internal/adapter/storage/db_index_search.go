@@ -11,18 +11,22 @@ import (
 var _ port.DocumentIndex = (*ExternalSearchIndex)(nil)
 
 type ExternalSearchIndex struct {
-	ddfn *model.DesignDocFn
+	ddfn    *model.DesignDocFn
+	engines port.ViewEngines
 }
 
-func NewExternalSearchIndex(ddfn *model.DesignDocFn, searchDn, analyzer string) *ExternalSearchIndex {
-	return &ExternalSearchIndex{ddfn}
+func NewExternalSearchIndex(ddfn *model.DesignDocFn, searchDn, analyzer string, engines port.ViewEngines) *ExternalSearchIndex {
+	return &ExternalSearchIndex{
+		ddfn:    ddfn,
+		engines: engines,
+	}
 }
 
 func (i *ExternalSearchIndex) String() string {
 	return fmt.Sprintf("<ExternalSearchIndex name=%q>", i.ddfn)
 }
 
-func (i *ExternalSearchIndex) updateSource(searchDn, analyzer string) error {
+func (i *ExternalSearchIndex) updateSource(language, searchDn, analyzer string) error {
 	panic("not implemented") // TODO: Implement
 }
 
