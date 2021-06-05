@@ -1,5 +1,7 @@
 package model
 
+import "fmt"
+
 // IndexStats
 //
 // Since an index may have multiple records pointing to the same document
@@ -14,4 +16,9 @@ type IndexStats struct {
 	Used uint64
 	// Allocated number of bytes allocated by the index
 	Allocated uint64
+}
+
+func (s IndexStats) String() string {
+	return fmt.Sprintf("<Stats docs=%d keys=%d used=%d allocated=%d>",
+		s.Documents, s.Keys, s.Used, s.Allocated)
 }

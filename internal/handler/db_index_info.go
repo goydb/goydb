@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 
 	"github.com/gorilla/mux"
@@ -9,11 +10,11 @@ import (
 	"github.com/goydb/goydb/pkg/port"
 )
 
-type DBViewInfo struct {
+type DBIndexInfo struct {
 	Base
 }
 
-func (s *DBViewInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (s *DBIndexInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	db := Database{Base: s.Base}.Do(w, r)
@@ -26,40 +27,36 @@ func (s *DBViewInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	docID := string(model.DesignDocPrefix) + mux.Vars(r)["docid"]
-	viewName := mux.Vars(r)["view"]
+	// TODO: viewName := mux.Vars(r)["view"]
 
-	doc, err := db.GetDocument(r.Context(), docID) // WIP
+	doc, err := db.GetDocument(r.Context(), docID)
 	if err != nil {
 		WriteError(w, http.StatusNotFound, err.Error())
-		return
-	}
-	ddfn := model.DesignDocFn{
-		Type:        model.ViewFn,
-		DesignDocID: docID,
-		FnName:      viewName,
-	}
-
-	idx, ok := db.Indices()[ddfn.String()]
-	if !ok {
-		WriteError(w, http.StatusNotFound, "index not found")
-		return
-	}
-
-	var stats *model.IndexStats
-	err = db.RTransaction(r.Context(), func(tx port.Transaction) error {
-		var err error
-		stats, err = idx.Stats(r.Context(), tx)
-		return err
-	})
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	response := &ViewInfoResponse{}
 	response.ViewIndex.Language = doc.Language()
-	response.ViewIndex.UpdatesPending.Total = stats.Keys
-	response.ViewIndex.Sizes.File = stats.Used
+
+	err = db.RTransaction(r.Context(), func(tx port.Transaction) error {
+		for _, fn := range doc.Functions() {
+			idx, ok := db.Indices()[fn.DesignDocFn().String()]
+			if ok {
+				stat, err := idx.Stats(r.Context(), tx)
+				if err != nil {
+					return err
+				}
+				log.Println(stat.String())
+				response.ViewIndex.Sizes.Active += stat.Allocated
+				response.ViewIndex.Sizes.External += stat.Used
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)

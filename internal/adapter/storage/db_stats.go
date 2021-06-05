@@ -16,7 +16,18 @@ func (d *Database) Stats(ctx context.Context) (stats port.Stats, err error) {
 	}
 	stats.FileSize = uint64(fi.Size())
 	err = d.View(func(tx *bolt.Tx) error {
-		return bucketStats(tx.Bucket(docsBucket), &stats)
+		err := tx.ForEach(func(name []byte, _ *bolt.Bucket) error {
+			return bucketStats(tx.Bucket(name), &stats)
+		})
+		if err != nil {
+			return err
+		}
+		bucket := tx.Bucket(docsBucket)
+		if bucket == nil {
+			return nil
+		}
+		stats.DocCount = uint64(bucket.Stats().KeyN)
+		return nil
 	})
 	return
 }
@@ -35,9 +46,9 @@ func bucketStats(bucket *bolt.Bucket, stats *port.Stats) error {
 	}
 
 	s := bucket.Stats()
-	stats.DocCount = uint64(s.KeyN)
-	stats.Alloc = uint64(s.BranchAlloc + s.LeafAlloc)
-	stats.InUse = uint64(s.BranchInuse + s.LeafInuse)
+	stats.DocCount += uint64(s.KeyN)
+	stats.Alloc += uint64(s.BranchAlloc + s.LeafAlloc)
+	stats.InUse += uint64(s.BranchInuse + s.LeafInuse)
 
 	return nil
 }

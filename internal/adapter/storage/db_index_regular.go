@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"sync"
 
 	"github.com/goydb/goydb/pkg/model"
@@ -102,6 +103,8 @@ func (i *RegularIndex) Stats(ctx context.Context, tx port.Transaction) (*model.I
 
 	s := b.Stats()
 	si := bi.Stats()
+
+	log.Printf("%#v %#v", s, si)
 
 	return &model.IndexStats{
 		Keys:      uint64(s.KeyN),
