@@ -99,7 +99,7 @@ func (s *ViewServer) ExecuteView(ctx context.Context, docs []*model.Document) ([
 	return result, nil
 }
 
-func (s *ViewServer) ExecuteSearch(ctx context.Context, docs []*model.Document) ([]*model.SearchIndexDoc, error) {
+func (s *ViewServer) ExecuteSearch(ctx context.Context, docs []*model.Document) ([]*model.Document, error) {
 	err := s.setDocs(docs)
 	if err != nil {
 		return nil, err
@@ -111,12 +111,12 @@ func (s *ViewServer) ExecuteSearch(ctx context.Context, docs []*model.Document) 
 	}
 
 	resultData := s.compiled.Get("_result").Array()
-	result := make([]*model.SearchIndexDoc, len(resultData))
+	result := make([]*model.Document, len(resultData))
 
 	for i, rd := range resultData {
 		row := rd.([]interface{})
 		// fmt.Println(row)
-		sid := &model.SearchIndexDoc{
+		sid := &model.Document{
 			ID:      row[0].(string),
 			Fields:  make(map[string]interface{}),
 			Options: make(map[string]model.SearchIndexOption),

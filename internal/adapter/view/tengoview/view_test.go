@@ -98,7 +98,7 @@ func TestViewServer_ExecuteSearch(t *testing.T) {
 		script  string
 		options url.Values
 		docs    []*model.Document
-		want    []*model.SearchIndexDoc
+		want    []*model.Document
 		wantErr bool
 	}{
 		{
@@ -109,7 +109,7 @@ func TestViewServer_ExecuteSearch(t *testing.T) {
 					"test": 1,
 				}},
 			},
-			want:    []*model.SearchIndexDoc{},
+			want:    []*model.Document{},
 			wantErr: false,
 		},
 		{
@@ -124,7 +124,7 @@ func TestViewServer_ExecuteSearch(t *testing.T) {
 					"name": "test",
 				}},
 			},
-			want: []*model.SearchIndexDoc{{
+			want: []*model.Document{{
 				ID: "1",
 				Fields: map[string]interface{}{
 					"name":   "test",
@@ -151,7 +151,7 @@ func TestViewServer_ExecuteSearch(t *testing.T) {
 					"name": "test",
 				}},
 			},
-			want: []*model.SearchIndexDoc{
+			want: []*model.Document{
 				{
 					ID: "1",
 					Fields: map[string]interface{}{

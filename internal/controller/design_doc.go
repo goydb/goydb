@@ -2,14 +2,11 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"reflect"
 
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 )
-
-var ErrNoViewFunctions = errors.New("no view functions in the document")
 
 type ReducerFunc func(docs []*model.Document, doc *model.Document, group bool) []*model.Document
 

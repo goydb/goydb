@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -87,6 +88,10 @@ func (i *ViewIndex) indexSingleDocument(ctx context.Context, doc *model.Document
 func (i *ViewIndex) UpdateSource(ctx context.Context, doc *model.Document, vf *model.Function) error {
 	mapFn := vf.MapFn
 	language := doc.Language()
+
+	if mapFn == "" {
+		return errors.New("invalid empty view function")
+	}
 
 	// if the mapFn is the same, to nothing
 	if i.MapFn == mapFn {

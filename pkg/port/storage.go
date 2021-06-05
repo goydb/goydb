@@ -72,7 +72,6 @@ type Database interface {
 	PeekTasks(ctx context.Context, count int) ([]*model.Task, error)
 	CompleteTasks(ctx context.Context, tasks []*model.Task) error
 	TaskCount(ctx context.Context) (int, error)
-	UpdateSearch(ctx context.Context, ddfn *model.DesignDocFn, docs []*model.SearchIndexDoc) error
 	SearchDocuments(ctx context.Context, ddfn *model.DesignDocFn, sq *SearchQuery) (*SearchResult, error)
 	ChangesIndex() DocumentIndex
 	Indices() map[string]DocumentIndex
@@ -108,17 +107,6 @@ type Iterator interface {
 type Observer interface {
 	Close()
 	WaitForDoc(timeout time.Duration) *model.Document
-}
-
-type SearchIndex interface {
-	Name() string
-	UpdateMapping(docs []*model.SearchIndexDoc) error
-	Tx(func(tx SearchIndexTx) error) error
-}
-
-type SearchIndexTx interface {
-	Index(id string, data map[string]interface{}) error
-	Delete(id string) error
 }
 
 type SearchQuery struct {

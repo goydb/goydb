@@ -95,7 +95,7 @@ func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (re
 	}
 
 	if doc.IsDesignDoc() {
-		err = tx.Database.(*Database).BuildDesignDocIndices(ctx, tx, doc)
+		err = tx.Database.(*Database).BuildDesignDocIndices(ctx, tx, doc, true)
 		if err != nil {
 			return
 		}
@@ -166,12 +166,6 @@ func (tx *Transaction) DeleteDocument(ctx context.Context, docID, rev string) (*
 	if err != nil {
 		return doc, err
 	}
-	/*
-		err = tx.Database.(*Database).RemoveAllStaleSearchDocs(tx, doc)
-		if err != nil {
-			log.Printf("failed to remove stale search docs: %v", err)
-		}
-	*/
 	return doc, err
 }
 

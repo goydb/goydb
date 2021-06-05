@@ -13,5 +13,5 @@ type ViewServerBuilder func(fn string) (ViewServer, error)
 
 type ViewServer interface {
 	ExecuteView(ctx context.Context, docs []*model.Document) ([]*model.Document, error)
-	ExecuteSearch(ctx context.Context, docs []*model.Document) ([]*model.SearchIndexDoc, error)
+	ExecuteSearch(ctx context.Context, docs []*model.Document) ([]*model.Document, error)
 }

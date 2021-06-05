@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -66,7 +65,7 @@ func (c Task) ProcessTasksForDatabase(ctx context.Context, db port.Database) err
 		}
 		for _, task := range tasks {
 			err := c.ProcessTask(ctx, task)
-			if err != nil && !errors.Is(err, ErrNoViewFunctions) {
+			if err != nil {
 				log.Printf("Failed to process %s due to: %v", task, err)
 			}
 		}

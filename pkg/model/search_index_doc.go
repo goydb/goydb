@@ -1,11 +1,5 @@
 package model
 
-type SearchIndexDoc struct {
-	ID      string
-	Fields  map[string]interface{}
-	Options map[string]SearchIndexOption
-}
-
 type SearchIndexOption struct {
 	// Boost, a number that specifies the relevance in search results.
 	// Content that is indexed with a boost value greater than

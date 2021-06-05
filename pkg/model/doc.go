@@ -14,14 +14,23 @@ var (
 )
 
 type Document struct {
-	ID          string                 `json:"_id,omitempty"`
-	Rev         string                 `json:"_rev,omitempty"`
-	Deleted     bool                   `json:"_deleted,omitempty"`
-	LocalSeq    uint64                 `json:"_local_seq,omitempty"`
+	// Meta
+	ID       string `json:"_id,omitempty"`
+	Rev      string `json:"_rev,omitempty"`
+	Deleted  bool   `json:"_deleted,omitempty"`
+	LocalSeq uint64 `json:"_local_seq,omitempty"`
+
+	// Data
 	Attachments map[string]*Attachment `json:"_attachments,omitempty"`
 	Data        map[string]interface{} `json:"data,omitempty"`
-	Key         interface{}            `json:"key,omitempty"`
-	Value       interface{}            `json:"value,omitempty"`
+
+	// View
+	Key   interface{} `json:"key,omitempty"`
+	Value interface{} `json:"value,omitempty"`
+
+	// Search
+	Fields  map[string]interface{}       `json:"fields,omitempty"`
+	Options map[string]SearchIndexOption `json:"options,omitempty"`
 }
 
 func (doc Document) ValidUpdateRevision(newDoc *Document) bool {

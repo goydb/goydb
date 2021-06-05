@@ -10,13 +10,13 @@ import (
 
 // BuildIndices loads all design documents and builds
 // their indices
-func (d *Database) BuildIndices(ctx context.Context, tx port.Transaction) error {
+func (d *Database) BuildIndices(ctx context.Context, tx port.Transaction, update bool) error {
 	docs, _, err := d.AllDesignDocs(ctx)
 	if err != nil {
 		return err
 	}
 	for _, doc := range docs {
-		err = d.BuildDesignDocIndices(ctx, tx, doc)
+		err = d.BuildDesignDocIndices(ctx, tx, doc, update)
 		if err != nil {
 			return err
 		}
@@ -24,10 +24,10 @@ func (d *Database) BuildIndices(ctx context.Context, tx port.Transaction) error 
 	return nil
 }
 
-func (d *Database) BuildDesignDocIndices(ctx context.Context, tx port.Transaction, doc *model.Document) error {
+func (d *Database) BuildDesignDocIndices(ctx context.Context, tx port.Transaction, doc *model.Document, update bool) error {
 	functions := doc.Functions()
 	for _, f := range functions {
-		err := d.BuildFnIndices(ctx, tx, doc, f)
+		err := d.BuildFnIndices(ctx, tx, doc, f, update)
 		if err != nil {
 			return err
 		}
@@ -36,7 +36,7 @@ func (d *Database) BuildDesignDocIndices(ctx context.Context, tx port.Transactio
 	return nil
 }
 
-func (d *Database) BuildFnIndices(ctx context.Context, tx port.Transaction, doc *model.Document, vf *model.Function) error {
+func (d *Database) BuildFnIndices(ctx context.Context, tx port.Transaction, doc *model.Document, vf *model.Function, update bool) error {
 	var err error
 
 	ddfn := vf.DesignDocFn()
@@ -75,7 +75,7 @@ func (d *Database) BuildFnIndices(ctx context.Context, tx port.Transaction, doc 
 	case model.ViewFn:
 		disu = NewViewIndex(ddfn, d.engines)
 	case model.SearchFn:
-		disu = NewExternalSearchIndex(ddfn, d.engines)
+		disu = NewExternalSearchIndex(ddfn, d.engines, d.searchIndexPath(ddfn.String()))
 	// TODO: mango index
 	default:
 		return fmt.Errorf("invalid view function type %q for function %q", vf.Type, ddfn.String())
@@ -94,9 +94,11 @@ func (d *Database) BuildFnIndices(ctx context.Context, tx port.Transaction, doc 
 	}
 
 	// add all documents
-	err = d.UpdateAllDocuments(ctx, tx, ddfn)
-	if err != nil {
-		return err
+	if update {
+		err = d.UpdateAllDocuments(ctx, tx, ddfn)
+		if err != nil {
+			return err
+		}
 	}
 
 	// add new index

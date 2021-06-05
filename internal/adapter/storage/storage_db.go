@@ -25,7 +25,6 @@ type Database struct {
 	indices map[string]port.DocumentIndex
 	engines map[string]port.ViewServerBuilder
 
-	searchIndices   map[string]port.SearchIndex
 	muSearchIndices sync.RWMutex
 }
 
@@ -83,15 +82,14 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 			ChangesIndexName: NewChangesIndex(ChangesIndexName),
 			DeletedIndexName: NewDeletedIndex(DeletedIndexName),
 		},
-		searchIndices: make(map[string]port.SearchIndex),
-		engines:       s.engines,
+		engines: s.engines,
 	}
 	s.dbs[name] = database
 
 	// create all required database Indices
 	log.Println("BuildIndices")
 	err = database.Transaction(ctx, func(tx port.Transaction) error {
-		err := database.BuildIndices(ctx, tx)
+		err := database.BuildIndices(ctx, tx, false)
 		if err != nil {
 			return err
 		}
@@ -105,12 +103,6 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 		}
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-
-	// open all search Indices
-	err = database.openAllSearchIndices()
 	if err != nil {
 		return nil, err
 	}
