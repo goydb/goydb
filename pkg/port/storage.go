@@ -21,10 +21,11 @@ type AllDocsQuery struct {
 }
 
 type Stats struct {
-	FileSize uint64
-	DocCount uint64
-	Alloc    uint64
-	InUse    uint64
+	FileSize    uint64
+	DocCount    uint64
+	DocDelCount uint64
+	Alloc       uint64
+	InUse       uint64
 }
 
 type Storage interface {
@@ -64,7 +65,6 @@ type Database interface {
 	GetSecurity(ctx context.Context) (*model.Security, error)
 	PutSecurity(ctx context.Context, sec *model.Security) error
 	Stats(ctx context.Context) (stats Stats, err error)
-	ViewSize(ctx context.Context, ddfn *model.DesignDocFn) (stats Stats, err error)
 	AddTasks(ctx context.Context, tasks []*model.Task) error
 	AddTasksTx(ctx context.Context, tx Transaction, tasks []*model.Task) error
 	GetTasks(ctx context.Context, count int) ([]*model.Task, error)

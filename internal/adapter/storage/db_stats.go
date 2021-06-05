@@ -1,10 +1,10 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"os"
 
-	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 	bolt "go.etcd.io/bbolt"
 )
@@ -16,39 +16,23 @@ func (d *Database) Stats(ctx context.Context) (stats port.Stats, err error) {
 	}
 	stats.FileSize = uint64(fi.Size())
 	err = d.View(func(tx *bolt.Tx) error {
-		err := tx.ForEach(func(name []byte, _ *bolt.Bucket) error {
-			return bucketStats(tx.Bucket(name), &stats)
-		})
-		if err != nil {
-			return err
-		}
-		bucket := tx.Bucket(docsBucket)
-		if bucket == nil {
+		return tx.ForEach(func(name []byte, b *bolt.Bucket) error {
+			s := b.Stats()
+			// only take the doc count from the docs bucket
+			if bytes.Equal(name, docsBucket) {
+				stats.DocCount += uint64(s.KeyN)
+			}
+			// if deleted index
+			if bytes.Equal(name, []byte(DeletedIndexName)) {
+				stats.DocCount -= uint64(s.KeyN)
+				stats.DocDelCount = uint64(s.KeyN)
+			}
+
+			// accumulate all numbers to have accurate database statistics
+			stats.Alloc += uint64(s.BranchAlloc + s.LeafAlloc)
+			stats.InUse += uint64(s.BranchInuse + s.LeafInuse)
 			return nil
-		}
-		stats.DocCount = uint64(bucket.Stats().KeyN)
-		return nil
+		})
 	})
 	return
-}
-
-// ViewSize returns the byte size on disk
-func (d *Database) ViewSize(ctx context.Context, ddfn *model.DesignDocFn) (stats port.Stats, err error) {
-	err = d.View(func(tx *bolt.Tx) error {
-		return bucketStats(tx.Bucket(ddfn.Bucket()), &stats)
-	})
-	return
-}
-
-func bucketStats(bucket *bolt.Bucket, stats *port.Stats) error {
-	if bucket == nil {
-		return nil
-	}
-
-	s := bucket.Stats()
-	stats.DocCount += uint64(s.KeyN)
-	stats.Alloc += uint64(s.BranchAlloc + s.LeafAlloc)
-	stats.InUse += uint64(s.BranchInuse + s.LeafInuse)
-
-	return nil
 }

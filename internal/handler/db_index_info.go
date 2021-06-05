@@ -2,7 +2,6 @@ package handler
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 
 	"github.com/gorilla/mux"
@@ -27,8 +26,6 @@ func (s *DBIndexInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	docID := string(model.DesignDocPrefix) + mux.Vars(r)["docid"]
-	// TODO: viewName := mux.Vars(r)["view"]
-
 	doc, err := db.GetDocument(r.Context(), docID)
 	if err != nil {
 		WriteError(w, http.StatusNotFound, err.Error())
@@ -46,7 +43,6 @@ func (s *DBIndexInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if err != nil {
 					return err
 				}
-				log.Println(stat.String())
 				response.ViewIndex.Sizes.Active += stat.Allocated
 				response.ViewIndex.Sizes.External += stat.Used
 			}

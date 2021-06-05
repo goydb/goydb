@@ -81,6 +81,7 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 		DB:          db,
 		indices: map[string]port.DocumentIndex{
 			ChangesIndexName: NewChangesIndex(ChangesIndexName),
+			DeletedIndexName: NewDeletedIndex(DeletedIndexName),
 		},
 		searchIndices: make(map[string]port.SearchIndex),
 		engines:       s.engines,
