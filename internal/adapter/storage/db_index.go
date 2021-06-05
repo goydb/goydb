@@ -7,28 +7,38 @@ import (
 	"github.com/goydb/goydb/pkg/port"
 )
 
+// BuildIndices loads all design documents and builds
+// their indices
 func (d *Database) BuildIndices(ctx context.Context, tx port.Transaction) error {
-	// load all design documents
 	docs, _, err := d.AllDesignDocs(ctx)
 	if err != nil {
 		return err
 	}
 	for _, doc := range docs {
-		// view index
-		err := d.BuildViewIndices(ctx, tx, doc)
+		err = d.BuildDesignDocIndices(ctx, tx, doc)
 		if err != nil {
 			return err
 		}
-
-		// search index
-		err = d.BuildSearchIndices(ctx, tx, doc)
-		if err != nil {
-			return err
-		}
-
-		// mango index
-		// TODO:
 	}
+	return nil
+}
+
+func (d *Database) BuildDesignDocIndices(ctx context.Context, tx port.Transaction, doc *model.Document) error {
+	// view index
+	err := d.BuildViewIndices(ctx, tx, doc)
+	if err != nil {
+		return err
+	}
+
+	// search index
+	err = d.BuildSearchIndices(ctx, tx, doc)
+	if err != nil {
+		return err
+	}
+
+	// mango index
+	// TODO:
+
 	return nil
 }
 
@@ -52,12 +62,17 @@ func (d *Database) BuildViewIndices(ctx context.Context, tx port.Transaction, do
 				if err != nil {
 					return err
 				}
+				err = d.UpdateAllDocuments(ctx, tx, ddfn)
+				if err != nil {
+					return err
+				}
 				continue
 			} else { // otherwise remove the old index and create a new view index instead
 				err := idx.Remove(ctx, tx)
 				if err != nil {
 					return err
 				}
+				continue
 			}
 		}
 
@@ -67,9 +82,25 @@ func (d *Database) BuildViewIndices(ctx context.Context, tx port.Transaction, do
 		if err != nil {
 			return err
 		}
+		err = d.UpdateAllDocuments(ctx, tx, ddfn)
+		if err != nil {
+			return err
+		}
 		d.indices[indexName] = vidx
 	}
 	return nil
+}
+
+// UpdateAllDocuments triggers rebuild with all documents
+func (d *Database) UpdateAllDocuments(ctx context.Context, tx port.Transaction, ddfn *model.DesignDocFn) error {
+	return d.AddTasksTx(ctx, tx, []*model.Task{
+		{
+			Action:          model.ActionUpdateView,
+			DBName:          d.Name(),
+			Ddfn:            ddfn.String(),
+			ProcessingTotal: 1,
+		},
+	})
 }
 
 func (d *Database) BuildSearchIndices(ctx context.Context, tx port.Transaction, doc *model.Document) error {

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/goydb/goydb/internal/controller"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 )
@@ -30,12 +29,6 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	docID := string(model.DesignDocPrefix) + mux.Vars(r)["docid"]
 	viewName := mux.Vars(r)["view"]
-
-	doc, err := db.GetDocument(r.Context(), docID) // WIP
-	if err != nil {
-		WriteError(w, http.StatusNotFound, err.Error())
-		return
-	}
 
 	ddfn := model.DesignDocFn{
 		Type:        model.ViewFn,
@@ -69,19 +62,15 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			time.Sleep(time.Second)
 		}
-	case "lazy":
-		err = db.AddTasks(r.Context(), []*model.Task{
-			&model.Task{
-				Action:    model.ActionUpdateView,
-				DBName:    db.Name(),
-				ViewDocID: docID,
-			},
-		})
+	/*case "lazy":
+	err = db.AddTasks(r.Context(), []*model.Task{
+		&model.Task{
+			Action:    model.ActionUpdateView,
+			DBName:    db.Name(),
+			ViewDocID: docID,
+		},
+	})*/
 	case "false": // do nothing
-	}
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, err.Error())
-		return
 	}
 
 	var q port.AllDocsQuery
@@ -97,12 +86,14 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var total int
 	var docs []*model.Document
+	var err error
 	if boolOption("reduce", true, options) {
+		/* FIXME
 		docs, total, err = controller.DesignDoc{
 			DB:        db,
 			SourceDoc: doc,
 			FnName:    viewName,
-		}.ReduceDocs(r.Context(), q)
+		}.ReduceDocs(r.Context(), q)*/
 	} else {
 		//docs, total, err = db.AllDocs(r.Context(), q)
 		err = db.RTransaction(r.Context(), func(tx port.Transaction) error {

@@ -112,46 +112,56 @@ func (i *RegularIndex) Stats(ctx context.Context, tx port.Transaction) (*model.I
 }
 
 func (i *RegularIndex) DocumentStored(ctx context.Context, tx port.Transaction, doc *model.Document) error {
-	i.mu.Lock()
-	defer i.mu.Unlock()
+	return i.UpdateStored(ctx, tx, []*model.Document{doc})
+}
 
-	if doc == nil {
+func (i *RegularIndex) UpdateStored(ctx context.Context, tx port.Transaction, docs []*model.Document) error {
+	if len(docs) == 0 {
 		return nil
 	}
 
-	b, bi, err := i.buckets(tx)
-	if err != nil {
-		return err
-	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
 
-	// 1. remove all old keys from the index
-	err = i.RemoveOldKeys(b, bi, doc)
-	if err != nil {
-		return err
-	}
-
-	// 2. add new keys and invalidation records
-	keys, values := i.idxFn(ctx, doc)
-	for i, key := range keys {
-		// enable multi key
-		seq, err := b.NextSequence()
-		if err != nil {
-			return err
+	for _, doc := range docs {
+		if doc == nil {
+			return nil
 		}
-		mk := keyWithSeq(key, seq)
-		err = b.Put(mk, values[i])
+
+		b, bi, err := i.buckets(tx)
 		if err != nil {
 			return err
 		}
 
-		// store information about the key
-		seq, err = bi.NextSequence()
+		// 1. remove all old keys from the index
+		err = i.RemoveOldKeys(b, bi, doc)
 		if err != nil {
 			return err
 		}
-		err = bi.Put(keyWithSeq([]byte(doc.ID), seq), mk)
-		if err != nil {
-			return err
+
+		// 2. add new keys and invalidation records
+		keys, values := i.idxFn(ctx, doc)
+		for i, key := range keys {
+			// enable multi key
+			seq, err := b.NextSequence()
+			if err != nil {
+				return err
+			}
+			mk := keyWithSeq(key, seq)
+			err = b.Put(mk, values[i])
+			if err != nil {
+				return err
+			}
+
+			// store information about the key
+			seq, err = bi.NextSequence()
+			if err != nil {
+				return err
+			}
+			err = bi.Put(keyWithSeq([]byte(doc.ID), seq), mk)
+			if err != nil {
+				return err
+			}
 		}
 	}
 

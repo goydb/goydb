@@ -105,8 +105,5 @@ func (i *ViewIndex) updateSource(language, mapFn string) error {
 	i.server = vs
 	i.mu.Unlock()
 
-	// trigger rebuild with all documents
-	log.Println("FIXME: documents are not yet re-generated after index change")
-	// FIXME: IMPLEMENT
 	return nil
 }

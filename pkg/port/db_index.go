@@ -37,6 +37,10 @@ type DocumentIndex interface {
 	// the tranaction that is updating the document.
 	DocumentStored(ctx context.Context, tx Transaction, doc *model.Document) error
 
+	// UpdateStored is called in the context of
+	// an index update with a number of documents.
+	UpdateStored(ctx context.Context, tx Transaction, docs []*model.Document) error
+
 	// DocumentDeleted is called in the context of
 	// the transaction that is deleting the document.
 	// This call can be called multiple times.

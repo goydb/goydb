@@ -17,9 +17,8 @@ type Task struct {
 	ActiveSince time.Time
 	Action      TaskAction
 
-	ViewDocID string
-	DocID     string
-	DBName    string
+	Ddfn   string
+	DBName string
 
 	UpdatedAt       time.Time
 	ProcessingTotal int // total number of things to process
@@ -34,16 +33,9 @@ func (t Task) String() string {
 	b.WriteString(strconv.Itoa(int(t.Action)))
 	b.WriteString(" db=")
 	b.WriteString(t.DBName)
-	if t.ViewDocID != "" {
-		b.WriteString(" view=\"")
-		b.WriteString(t.ViewDocID)
-		b.WriteString("\"")
-	}
-	if t.DocID != "" {
-		b.WriteString(" doc=\"")
-		b.WriteString(t.DocID)
-		b.WriteString("\"")
-	}
+	b.WriteString(" ddfn=\"")
+	b.WriteString(t.Ddfn)
+	b.WriteString("\"")
 	b.WriteString(">")
 	return b.String()
 }

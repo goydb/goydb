@@ -85,6 +85,14 @@ func (i *UniqueIndex) DocumentStored(ctx context.Context, tx port.Transaction, d
 		return nil
 	}
 
+	return i.UpdateStored(ctx, tx, []*model.Document{doc})
+}
+
+func (i *UniqueIndex) UpdateStored(ctx context.Context, tx port.Transaction, docs []*model.Document) error {
+	if len(docs) == 0 {
+		return nil
+	}
+
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
@@ -92,12 +100,19 @@ func (i *UniqueIndex) DocumentStored(ctx context.Context, tx port.Transaction, d
 	if b == nil {
 		return ErrBucketUnavailable
 	}
-	k := i.key(doc)
-	if k == nil {
-		return nil
+	for _, doc := range docs {
+		k := i.key(doc)
+		if k == nil {
+			return nil
+		}
+		v := i.value(doc)
+		err := b.Put(k, v)
+		if err != nil {
+			return err
+		}
 	}
-	v := i.value(doc)
-	return b.Put(k, v)
+
+	return nil
 }
 
 func (i *UniqueIndex) DocumentDeleted(ctx context.Context, tx port.Transaction, doc *model.Document) error {

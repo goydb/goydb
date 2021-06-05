@@ -91,45 +91,19 @@ func (c Task) ProcessTask(ctx context.Context, task *model.Task) error {
 		DB: db,
 	}
 
-	// fetch design doc or design docs
-	var designDocs []*model.Document
-	if task.ViewDocID != "" {
-		designDoc, err := db.GetDocument(ctx, task.ViewDocID)
-		if err != nil {
-			return err
-		}
-		designDocs = []*model.Document{
-			designDoc,
-		}
-	} else {
-		designDocs, _, err = db.AllDesignDocs(ctx)
-		if err != nil {
-			return err
-		}
-	}
-	if task.DocID != "" {
-		vc.Doc, err = db.GetDocument(ctx, task.DocID)
-		if err != nil {
-			return err
-		}
+	idx, ok := db.Indices()[task.Ddfn]
+	if !ok {
+		return fmt.Errorf("failed to update index %q doesn't exist", task.Ddfn)
 	}
 
-	for _, designDoc := range designDocs {
-		vc.SourceDoc = designDoc
-		err = vc.Reset(ctx)
-		if err != nil {
-			return err
-		}
-
-		switch task.Action {
-		case model.ActionUpdateView:
-			err = vc.Rebuild(ctx, task)
-		default:
-			err = fmt.Errorf("unknown task action: %d", task.Action)
-		}
-		if err != nil {
-			return err
-		}
+	switch task.Action {
+	case model.ActionUpdateView:
+		err = vc.Rebuild(ctx, task, idx)
+	default:
+		err = fmt.Errorf("unknown task action: %d", task.Action)
+	}
+	if err != nil {
+		return err
 	}
 
 	return nil

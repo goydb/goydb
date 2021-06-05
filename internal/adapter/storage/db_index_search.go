@@ -50,6 +50,10 @@ func (i *ExternalSearchIndex) DocumentStored(ctx context.Context, tx port.Transa
 	panic("not implemented") // TODO: Implement
 }
 
+func (i *ExternalSearchIndex) UpdateStored(ctx context.Context, tx port.Transaction, docs []*model.Document) error {
+	panic("not implemented") // TODO: Implement
+}
+
 func (i *ExternalSearchIndex) DocumentDeleted(ctx context.Context, tx port.Transaction, doc *model.Document) error {
 	panic("not implemented") // TODO: Implement
 }
