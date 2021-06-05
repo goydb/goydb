@@ -72,12 +72,8 @@ type Database interface {
 	PeekTasks(ctx context.Context, count int) ([]*model.Task, error)
 	CompleteTasks(ctx context.Context, tasks []*model.Task) error
 	TaskCount(ctx context.Context) (int, error)
-	ResetView(ctx context.Context, ddfn *model.DesignDocFn) error
-	UpdateView(ctx context.Context, ddfn *model.DesignDocFn, docs []*model.Document) error
 	UpdateSearch(ctx context.Context, ddfn *model.DesignDocFn, docs []*model.SearchIndexDoc) error
 	SearchDocuments(ctx context.Context, ddfn *model.DesignDocFn, sq *SearchQuery) (*SearchResult, error)
-	ResetViewIndex() error
-	ResetViewIndexForDoc(ctx context.Context, docID string) error
 	ChangesIndex() DocumentIndex
 	Indices() map[string]DocumentIndex
 }
