@@ -78,7 +78,11 @@ func (d *Database) BuildViewIndices(ctx context.Context, tx port.Transaction, do
 
 		// index doesn't exist yet
 		vidx := NewViewIndex(ddfn, d.engines)
-		err := vidx.updateSource(doc.Language(), vf.MapFn)
+		err := vidx.Ensure(ctx, tx)
+		if err != nil {
+			return err
+		}
+		err = vidx.updateSource(doc.Language(), vf.MapFn)
 		if err != nil {
 			return err
 		}
