@@ -39,10 +39,6 @@ func (i *ExternalSearchIndex) Ensure(ctx context.Context, tx port.Transaction) e
 	panic("not implemented") // TODO: Implement
 }
 
-func (i *ExternalSearchIndex) Rebuild(ctx context.Context, tx port.Transaction) error {
-	panic("not implemented") // TODO: Implement
-}
-
 func (i *ExternalSearchIndex) Remove(ctx context.Context, tx port.Transaction) error {
 	panic("not implemented") // TODO: Implement
 }

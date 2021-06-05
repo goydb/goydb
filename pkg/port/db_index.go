@@ -21,10 +21,6 @@ type DocumentIndex interface {
 	// buckets or other structures ar build or opened.
 	Ensure(ctx context.Context, tx Transaction) error
 
-	// Rebuild rebuilds the complete index by going over all documents
-	// and rebuild the index
-	Rebuild(ctx context.Context, tx Transaction) error
-
 	// Removes the index and all related data, do document
 	// is removed only the index
 	Remove(ctx context.Context, tx Transaction) error

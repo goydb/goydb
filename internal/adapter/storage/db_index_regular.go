@@ -77,10 +77,6 @@ func (i *RegularIndex) Ensure(ctx context.Context, tx port.Transaction) error {
 	return err
 }
 
-func (i *RegularIndex) Rebuild(ctx context.Context, tx port.Transaction) error {
-	panic("not implemented") // TODO: Implement
-}
-
 func (i *RegularIndex) Remove(ctx context.Context, tx port.Transaction) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
