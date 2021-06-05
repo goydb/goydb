@@ -98,70 +98,74 @@ func (doc Document) IsLocalDoc() bool {
 	return strings.HasPrefix(doc.ID, string(LocalDocPrefix))
 }
 
-type ViewFunction struct {
-	Name     string
+type Function struct {
+	doc *Document
+
+	Name string
+	Type FnType
+
 	MapFn    string
 	ReduceFn string
-}
-
-func (doc Document) ViewFunctions() []*ViewFunction {
-	var vfn []*ViewFunction
-
-	views, ok := doc.Data["views"].(map[string]interface{})
-	if !ok {
-		return nil
-	}
-
-	for name, viewInterface := range views {
-		view, ok := viewInterface.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		mapFn, _ := view["map"].(string)
-		reduceFn, _ := view["reduce"].(string)
-
-		vfn = append(vfn, &ViewFunction{
-			Name:     name,
-			MapFn:    mapFn,
-			ReduceFn: reduceFn,
-		})
-	}
-
-	return vfn
-}
-
-type SearchFunction struct {
-	Name     string
 	SearchFn string
 	Analyzer string
 }
 
-func (doc Document) SearchFunctions() []*SearchFunction {
-	var sfn []*SearchFunction
-
-	indexes, ok := doc.Data["indexes"].(map[string]interface{})
-	if !ok {
-		return nil
+func (f *Function) DesignDocFn() *DesignDocFn {
+	return &DesignDocFn{
+		Type:        f.Type,
+		DesignDocID: f.doc.ID,
+		FnName:      f.Name,
 	}
+}
 
-	for name, searchInterface := range indexes {
-		search, ok := searchInterface.(map[string]interface{})
-		if !ok {
-			continue
+func (doc *Document) Functions() []*Function {
+	var functions []*Function
+
+	// regular view functions
+	views, ok := doc.Data["views"].(map[string]interface{})
+	if ok {
+		for name, viewInterface := range views {
+			view, ok := viewInterface.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			mapFn, _ := view["map"].(string)
+			reduceFn, _ := view["reduce"].(string)
+
+			functions = append(functions, &Function{
+				doc:      doc,
+				Name:     name,
+				Type:     ViewFn,
+				MapFn:    mapFn,
+				ReduceFn: reduceFn,
+			})
 		}
-
-		SearchFn, _ := search["index"].(string)
-		Analyzer, _ := search["analyzer"].(string)
-
-		sfn = append(sfn, &SearchFunction{
-			Name:     name,
-			SearchFn: SearchFn,
-			Analyzer: Analyzer,
-		})
 	}
 
-	return sfn
+	// search functions
+	indexes, ok := doc.Data["indexes"].(map[string]interface{})
+	if ok {
+		for name, searchInterface := range indexes {
+			search, ok := searchInterface.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			SearchMapFn, _ := search["index"].(string)
+			Analyzer, _ := search["analyzer"].(string)
+
+			functions = append(functions, &Function{
+				doc:      doc,
+				Name:     name,
+				Type:     SearchFn,
+				SearchFn: SearchMapFn,
+				Analyzer: Analyzer,
+			})
+		}
+	}
+
+	return functions
 }
 
 func (doc *Document) Field(path string) interface{} {

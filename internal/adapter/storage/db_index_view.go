@@ -13,6 +13,7 @@ import (
 )
 
 var _ port.DocumentIndex = (*ViewIndex)(nil)
+var _ port.DocumentIndexSourceUpdate = (*ViewIndex)(nil)
 
 type ViewIndex struct {
 	*RegularIndex
@@ -83,7 +84,10 @@ func (i *ViewIndex) indexSingleDocument(ctx context.Context, doc *model.Document
 
 // updateSource updates the view source and starts
 // rebuilding the whole index
-func (i *ViewIndex) updateSource(language, mapFn string) error {
+func (i *ViewIndex) UpdateSource(ctx context.Context, doc *model.Document, vf *model.Function) error {
+	mapFn := vf.MapFn
+	language := doc.Language()
+
 	// if the mapFn is the same, to nothing
 	if i.MapFn == mapFn {
 		return nil
@@ -106,4 +110,8 @@ func (i *ViewIndex) updateSource(language, mapFn string) error {
 	i.mu.Unlock()
 
 	return nil
+}
+
+func (i *ViewIndex) SourceType() model.FnType {
+	return model.ViewFn
 }

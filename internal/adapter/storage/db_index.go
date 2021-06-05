@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
@@ -24,74 +25,83 @@ func (d *Database) BuildIndices(ctx context.Context, tx port.Transaction) error 
 }
 
 func (d *Database) BuildDesignDocIndices(ctx context.Context, tx port.Transaction, doc *model.Document) error {
-	// view index
-	err := d.BuildViewIndices(ctx, tx, doc)
-	if err != nil {
-		return err
+	functions := doc.Functions()
+	for _, f := range functions {
+		err := d.BuildFnIndices(ctx, tx, doc, f)
+		if err != nil {
+			return err
+		}
 	}
-
-	// search index
-	err = d.BuildSearchIndices(ctx, tx, doc)
-	if err != nil {
-		return err
-	}
-
-	// mango index
-	// TODO:
 
 	return nil
 }
 
-func (d *Database) BuildViewIndices(ctx context.Context, tx port.Transaction, doc *model.Document) error {
-	vfns := doc.ViewFunctions()
-	for _, vf := range vfns {
-		ddfn := &model.DesignDocFn{
-			Type:        model.ViewFn,
-			DesignDocID: doc.ID,
-			FnName:      vf.Name,
-		}
-		indexName := ddfn.String()
+func (d *Database) BuildFnIndices(ctx context.Context, tx port.Transaction, doc *model.Document, vf *model.Function) error {
+	var err error
 
-		idx, ok := d.indices[indexName]
-		if ok {
-			// index already exists, check if update is required
-			// check if already view index, update source
-			vidx, ok := idx.(*ViewIndex)
-			if ok {
-				err := vidx.updateSource(doc.Language(), vf.MapFn)
-				if err != nil {
-					return err
-				}
-				err = d.UpdateAllDocuments(ctx, tx, ddfn)
-				if err != nil {
-					return err
-				}
-				continue
-			} else { // otherwise remove the old index and create a new view index instead
-				err := idx.Remove(ctx, tx)
-				if err != nil {
-					return err
-				}
-				continue
+	ddfn := vf.DesignDocFn()
+	indexName := ddfn.String()
+
+	idx, ok := d.indices[indexName]
+	if ok {
+		// index already exists, check if update is required
+		// check if already view index, update source,
+		// this is only possible if the function is of the same type
+		// if the type is different destroy the index and create it
+		// from scratch
+		disu, ok := idx.(port.DocumentIndexSourceUpdate)
+		if ok && disu.SourceType() == vf.Type {
+			// compile the source
+			err = disu.UpdateSource(ctx, doc, vf)
+			if err != nil {
+				return err
 			}
+
+			// add all documents
+			err = d.UpdateAllDocuments(ctx, tx, ddfn)
+		} else { // otherwise remove the old index and create a new view index instead
+			err = idx.Remove(ctx, tx)
+		}
+		if err != nil {
+			return err
 		}
 
-		// index doesn't exist yet
-		vidx := NewViewIndex(ddfn, d.engines)
-		err := vidx.Ensure(ctx, tx)
-		if err != nil {
-			return err
-		}
-		err = vidx.updateSource(doc.Language(), vf.MapFn)
-		if err != nil {
-			return err
-		}
-		err = d.UpdateAllDocuments(ctx, tx, ddfn)
-		if err != nil {
-			return err
-		}
-		d.indices[indexName] = vidx
+		return nil
 	}
+
+	// index doesn't exist yet
+	var disu port.DocumentIndexSourceUpdate
+	switch vf.Type {
+	case model.ViewFn:
+		disu = NewViewIndex(ddfn, d.engines)
+	case model.SearchFn:
+		disu = NewExternalSearchIndex(ddfn, d.engines)
+	// TODO: mango index
+	default:
+		return fmt.Errorf("invalid view function type %q for function %q", vf.Type, ddfn.String())
+	}
+
+	// create new index
+	err = disu.Ensure(ctx, tx)
+	if err != nil {
+		return err
+	}
+
+	// compile the source
+	err = disu.UpdateSource(ctx, doc, vf)
+	if err != nil {
+		return err
+	}
+
+	// add all documents
+	err = d.UpdateAllDocuments(ctx, tx, ddfn)
+	if err != nil {
+		return err
+	}
+
+	// add new index
+	d.indices[indexName] = disu
+
 	return nil
 }
 
@@ -101,48 +111,8 @@ func (d *Database) UpdateAllDocuments(ctx context.Context, tx port.Transaction, 
 		{
 			Action:          model.ActionUpdateView,
 			DBName:          d.Name(),
-			Ddfn:            ddfn.String(),
+			DesignDocFn:     ddfn.String(),
 			ProcessingTotal: 1,
 		},
 	})
-}
-
-func (d *Database) BuildSearchIndices(ctx context.Context, tx port.Transaction, doc *model.Document) error {
-	sfns := doc.SearchFunctions()
-	for _, sfn := range sfns {
-		ddfn := &model.DesignDocFn{
-			Type:        model.ViewFn,
-			DesignDocID: doc.ID,
-			FnName:      sfn.Name,
-		}
-		indexName := ddfn.String()
-
-		idx, ok := d.indices[indexName]
-		if ok {
-			// index already exists, check if update is required
-			// check if already view index, update source
-			sidx, ok := idx.(*ExternalSearchIndex)
-			if ok {
-				err := sidx.updateSource(doc.Language(), sfn.SearchFn, sfn.Analyzer)
-				if err != nil {
-					return err
-				}
-				continue
-			} else { // otherwise remove the old index and create a new view index instead
-				err := idx.Remove(ctx, tx)
-				if err != nil {
-					return err
-				}
-			}
-		}
-
-		// index doesn't exist yet
-		sidx := NewExternalSearchIndex(ddfn, sfn.SearchFn, sfn.Analyzer, d.engines)
-		err := sidx.updateSource(doc.Language(), sfn.SearchFn, sfn.Analyzer)
-		if err != nil {
-			return err
-		}
-		d.indices[indexName] = sidx
-	}
-	return nil
 }

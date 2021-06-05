@@ -17,8 +17,8 @@ type Task struct {
 	ActiveSince time.Time
 	Action      TaskAction
 
-	Ddfn   string
-	DBName string
+	DesignDocFn string
+	DBName      string
 
 	UpdatedAt       time.Time
 	ProcessingTotal int // total number of things to process
@@ -34,7 +34,7 @@ func (t Task) String() string {
 	b.WriteString(" db=")
 	b.WriteString(t.DBName)
 	b.WriteString(" ddfn=\"")
-	b.WriteString(t.Ddfn)
+	b.WriteString(t.DesignDocFn)
 	b.WriteString("\"")
 	b.WriteString(">")
 	return b.String()

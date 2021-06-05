@@ -91,9 +91,9 @@ func (c Task) ProcessTask(ctx context.Context, task *model.Task) error {
 		DB: db,
 	}
 
-	idx, ok := db.Indices()[task.Ddfn]
+	idx, ok := db.Indices()[task.DesignDocFn]
 	if !ok {
-		return fmt.Errorf("failed to update index %q doesn't exist", task.Ddfn)
+		return fmt.Errorf("failed to update index %q doesn't exist", task.DesignDocFn)
 	}
 
 	switch task.Action {

@@ -46,7 +46,7 @@ func (s *ActiveTasks) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				ChangesDone:    task.Processed,
 				TotalChanges:   task.ProcessingTotal,
 				Database:       name,
-				DesignDocument: task.Ddfn,
+				DesignDocument: task.DesignDocFn,
 				Phase:          strconv.Itoa(int(task.Action)),
 				Progress:       int(float64(task.Processed) / float64(task.ProcessingTotal) * 100.0),
 				StartedOn:      int(task.ActiveSince.Unix()),

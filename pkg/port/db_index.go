@@ -50,3 +50,16 @@ type DocumentIndex interface {
 	// using the passed transaction context.
 	Iterator(ctx context.Context, tx Transaction) (Iterator, error)
 }
+
+// DocumentIndexSourceUpdate is implemented by indices that are
+// based on design documents
+type DocumentIndexSourceUpdate interface {
+	DocumentIndex
+
+	// UpdateSource update the source code base for the given index using the
+	// passed design document and function
+	UpdateSource(ctx context.Context, doc *model.Document, f *model.Function) error
+
+	// returns the source type of the index
+	SourceType() model.FnType
+}
