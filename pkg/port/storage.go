@@ -61,7 +61,7 @@ type Database interface {
 	FindDocs(ctx context.Context, query model.FindQuery) ([]*model.Document, *model.ExecutionStats, error)
 	Iterator(ctx context.Context, ddfn *model.DesignDocFn, fn func(i Iterator) error) error
 	NotifyDocumentUpdate(doc *model.Document)
-	NewDocObserver(ctx context.Context) Observer
+	AddListener(ctx context.Context, cl ChangeListener) error
 	GetSecurity(ctx context.Context) (*model.Security, error)
 	PutSecurity(ctx context.Context, sec *model.Security) error
 	Stats(ctx context.Context) (stats Stats, err error)
@@ -125,4 +125,18 @@ type SearchRecord struct {
 	ID     string
 	Order  []float64
 	Fields map[string]interface{}
+}
+
+type ChangeListener interface {
+	// DocumentChanged a function that handles document change updates
+	DocumentChanged(ctx context.Context, doc *model.Document) error
+}
+
+// ChangeListenerFunc implements ChangeListener using a simple function
+type ChangeListenerFunc func(ctx context.Context, doc *model.Document) error
+
+var _ ChangeListener = (*ChangeListenerFunc)(nil)
+
+func (f ChangeListenerFunc) DocumentChanged(ctx context.Context, doc *model.Document) error {
+	return f(ctx, doc)
 }

@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 	bolt "go.etcd.io/bbolt"
 )
@@ -20,12 +19,10 @@ type Database struct {
 	*bolt.DB
 
 	mu       sync.RWMutex
-	channels []chan *model.Document
+	listener sync.Map
 
 	indices map[string]port.DocumentIndex
 	engines map[string]port.ViewServerBuilder
-
-	muSearchIndices sync.RWMutex
 }
 
 func (d Database) ChangesIndex() port.DocumentIndex {

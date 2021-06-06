@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"strconv"
+	"time"
 
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
@@ -14,9 +16,19 @@ func (d *Database) Changes(ctx context.Context, options *model.ChangesOptions) (
 
 start:
 	if options.SinceNow() || wait { // wait for new database changes
-		observer := d.NewDocObserver(ctx)
-		defer observer.Close()
-		observer.WaitForDoc(options.Timeout)
+		wait := make(chan struct{})
+		defer close(wait)
+		t := time.AfterFunc(options.Timeout, func() { wait <- struct{}{} })
+		err := d.AddListener(ctx, port.ChangeListenerFunc(func(ctx context.Context, doc *model.Document) error {
+			wait <- struct{}{}
+			options.Since = strconv.FormatInt(int64(doc.LocalSeq-1), 10)
+			return context.Canceled // only wait for the next document
+		}))
+		if err != nil {
+			return nil, 0, err
+		}
+		<-wait
+		t.Stop()
 	}
 
 	err := d.RTransaction(ctx, func(tx port.Transaction) error {
