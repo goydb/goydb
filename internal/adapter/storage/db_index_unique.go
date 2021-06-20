@@ -52,10 +52,6 @@ func (i *UniqueIndex) Ensure(ctx context.Context, tx port.Transaction) error {
 	return err
 }
 
-func (i *UniqueIndex) Rebuild(ctx context.Context, tx port.Transaction) error {
-	panic("not implemented")
-}
-
 func (i *UniqueIndex) Remove(ctx context.Context, tx port.Transaction) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
