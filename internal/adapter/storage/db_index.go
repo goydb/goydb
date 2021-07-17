@@ -3,14 +3,21 @@ package storage
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
+	"github.com/goydb/goydb/internal/adapter/index"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 )
 
+const (
+	SearchDir = "search_indices"
+	indexExt  = ".bleve"
+)
+
 // BuildIndices loads all design documents and builds
 // their indices
-func (d *Database) BuildIndices(ctx context.Context, tx port.Transaction, update bool) error {
+func (d *Database) BuildIndices(ctx context.Context, tx *Transaction, update bool) error {
 	docs, _, err := d.AllDesignDocs(ctx)
 	if err != nil {
 		return err
@@ -24,7 +31,7 @@ func (d *Database) BuildIndices(ctx context.Context, tx port.Transaction, update
 	return nil
 }
 
-func (d *Database) BuildDesignDocIndices(ctx context.Context, tx port.Transaction, doc *model.Document, update bool) error {
+func (d *Database) BuildDesignDocIndices(ctx context.Context, tx *Transaction, doc *model.Document, update bool) error {
 	functions := doc.Functions()
 	for _, f := range functions {
 		err := d.BuildFnIndices(ctx, tx, doc, f, update)
@@ -36,7 +43,7 @@ func (d *Database) BuildDesignDocIndices(ctx context.Context, tx port.Transactio
 	return nil
 }
 
-func (d *Database) BuildFnIndices(ctx context.Context, tx port.Transaction, doc *model.Document, vf *model.Function, update bool) error {
+func (d *Database) BuildFnIndices(ctx context.Context, tx port.EngineWriteTransaction, doc *model.Document, vf *model.Function, update bool) error {
 	var err error
 
 	ddfn := vf.DesignDocFn()
@@ -73,9 +80,9 @@ func (d *Database) BuildFnIndices(ctx context.Context, tx port.Transaction, doc 
 	var disu port.DocumentIndexSourceUpdate
 	switch vf.Type {
 	case model.ViewFn:
-		disu = NewViewIndex(ddfn, d.engines)
+		disu = index.NewViewIndex(ddfn, d.engines)
 	case model.SearchFn:
-		disu = NewExternalSearchIndex(ddfn, d.engines, d.searchIndexPath(ddfn.String()))
+		disu = index.NewExternalSearchIndex(ddfn, d.engines, d.searchIndexPath(ddfn.String()))
 	// TODO: mango index
 	default:
 		return fmt.Errorf("invalid view function type %q for function %q", vf.Type, ddfn.String())
@@ -108,7 +115,7 @@ func (d *Database) BuildFnIndices(ctx context.Context, tx port.Transaction, doc 
 }
 
 // UpdateAllDocuments triggers rebuild with all documents
-func (d *Database) UpdateAllDocuments(ctx context.Context, tx port.Transaction, ddfn *model.DesignDocFn) error {
+func (d *Database) UpdateAllDocuments(ctx context.Context, tx port.EngineWriteTransaction, ddfn *model.DesignDocFn) error {
 	return d.AddTasksTx(ctx, tx, []*model.Task{
 		{
 			Action:          model.ActionUpdateView,
@@ -117,4 +124,22 @@ func (d *Database) UpdateAllDocuments(ctx context.Context, tx port.Transaction, 
 			ProcessingTotal: 1,
 		},
 	})
+}
+
+func (d *Database) SearchDocuments(ctx context.Context, ddfn *model.DesignDocFn, sq *port.SearchQuery) (*port.SearchResult, error) {
+	index, ok := d.indices[ddfn.String()]
+	if !ok {
+		return nil, ErrNotFound
+	}
+
+	si, ok := index.(*index.ExternalSearchIndex)
+	if !ok {
+		return nil, fmt.Errorf("can't SearchDocuments on non search index: %q", ddfn)
+	}
+
+	return si.SearchDocuments(ctx, ddfn, sq)
+}
+
+func (d *Database) searchIndexPath(name string) string {
+	return filepath.Join(d.databaseDir, SearchDir, name+indexExt)
 }

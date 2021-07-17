@@ -6,17 +6,17 @@ import (
 	"log"
 	"os"
 	"path"
-	"strconv"
 	"sync"
 
+	"github.com/goydb/goydb/internal/adapter/bbolt_engine"
+	"github.com/goydb/goydb/internal/adapter/index"
 	"github.com/goydb/goydb/pkg/port"
-	bolt "go.etcd.io/bbolt"
 )
 
 type Database struct {
 	name        string
 	databaseDir string
-	*bolt.DB
+	db          port.DatabaseEngine
 
 	mu       sync.RWMutex
 	listener sync.Map
@@ -26,7 +26,7 @@ type Database struct {
 }
 
 func (d Database) ChangesIndex() port.DocumentIndex {
-	return d.indices[ChangesIndexName]
+	return d.indices[index.ChangesIndexName]
 }
 
 func (d Database) Indices() map[string]port.DocumentIndex {
@@ -46,9 +46,10 @@ func (d Database) String() string {
 	return fmt.Sprintf("<Database name=%q stats=%v>", d.name, err)
 }
 
+/*
 func (d Database) Sequence() string {
 	var seq uint64
-	err := d.RTransaction(context.Background(), func(tx port.Transaction) error {
+	err := d.Transaction(context.Background(), func(tx *storage.Transaction) error {
 		seq = tx.Sequence()
 		return nil
 	})
@@ -56,16 +57,16 @@ func (d Database) Sequence() string {
 		log.Fatal(err) // FIXME
 	}
 	return strconv.FormatUint(seq, 10)
-}
+}*/
 
-func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Database, error) {
+func (s *Storage) CreateDatabase(ctx context.Context, name string) (*Database, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	databaseDir := path.Join(s.path, name+".d")
 
 	log.Println("Open..")
-	db, err := bolt.Open(path.Join(s.path, name), 0666, nil)
+	db, err := bbolt_engine.Open(path.Join(s.path, name))
 	if err != nil {
 		return nil, err
 	}
@@ -74,10 +75,10 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 	database := &Database{
 		name:        name,
 		databaseDir: databaseDir,
-		DB:          db,
+		db:          db,
 		indices: map[string]port.DocumentIndex{
-			ChangesIndexName: NewChangesIndex(ChangesIndexName),
-			DeletedIndexName: NewDeletedIndex(DeletedIndexName),
+			index.ChangesIndexName: index.NewChangesIndex(index.ChangesIndexName),
+			index.DeletedIndexName: index.NewDeletedIndex(index.DeletedIndexName),
 		},
 		engines: s.engines,
 	}
@@ -85,7 +86,7 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 
 	// create all required database Indices
 	log.Println("BuildIndices")
-	err = database.Transaction(ctx, func(tx port.Transaction) error {
+	err = database.Transaction(ctx, func(tx *Transaction) error {
 		err := database.BuildIndices(ctx, tx, false)
 		if err != nil {
 			return err
@@ -116,7 +117,7 @@ func (s *Storage) DeleteDatabase(ctx context.Context, name string) error {
 		return fmt.Errorf("unknown database %q", name)
 	}
 
-	err := db.Close()
+	err := db.db.Close()
 	if err != nil {
 		return err
 	}
@@ -145,7 +146,7 @@ func (s *Storage) Databases(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
-func (s *Storage) Database(ctx context.Context, name string) (port.Database, error) {
+func (s *Storage) Database(ctx context.Context, name string) (*Database, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

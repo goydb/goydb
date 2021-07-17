@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 
+	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 )
@@ -11,7 +12,7 @@ import (
 type ReducerFunc func(docs []*model.Document, doc *model.Document, group bool) []*model.Document
 
 type DesignDoc struct {
-	DB        port.Database
+	DB        *storage.Database
 	SourceDoc *model.Document
 }
 
@@ -48,7 +49,7 @@ func (v DesignDoc) Rebuild(ctx context.Context, task *model.Task, idx port.Docum
 			break
 		}
 
-		err = v.DB.Transaction(ctx, func(tx port.Transaction) error {
+		err = v.DB.Transaction(ctx, func(tx *storage.Transaction) error {
 			return idx.UpdateStored(ctx, tx, docs)
 		})
 		if err != nil {

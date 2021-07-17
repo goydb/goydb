@@ -85,7 +85,7 @@ func (s *Storage) Close() error {
 
 	for name, db := range s.dbs {
 		// TODO: check on better options
-		err := db.Close()
+		err := db.db.Close()
 		if err != nil {
 			return fmt.Errorf("failed to close db %q: %w", name, err)
 		}

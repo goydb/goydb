@@ -1,4 +1,4 @@
-package storage
+package index
 
 import (
 	"bytes"
@@ -9,7 +9,6 @@ import (
 
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
-	"go.etcd.io/bbolt"
 )
 
 // RegularIndexFunc gets a document and returns multiple keys
@@ -46,72 +45,50 @@ func (i *RegularIndex) String() string {
 	return fmt.Sprintf("<RegularIndex name=%q>", i.ddfn)
 }
 
-func (i *RegularIndex) tx(tx port.Transaction) *bbolt.Tx {
-	return tx.(*Transaction).tx
-}
-
-func (i *RegularIndex) buckets(tx port.Transaction) (*bbolt.Bucket, *bbolt.Bucket, error) {
+func (i *RegularIndex) Ensure(ctx context.Context, tx port.EngineWriteTransaction) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
 	// regular bucket (keys >= documents)
-	b := i.tx(tx).Bucket(i.bucketName)
-	if b == nil {
-		return nil, nil, ErrBucketUnavailable
-	}
+	tx.EnsureBucket(i.bucketName)
 
 	// invalidation bucket
-	bi := i.tx(tx).Bucket(i.indexInvalidationBucket)
-	if b == nil {
-		return nil, nil, ErrBucketUnavailable
-	}
-
-	return b, bi, nil
+	tx.EnsureBucket(i.indexInvalidationBucket)
+	return nil
 }
 
-func (i *RegularIndex) Ensure(ctx context.Context, tx port.Transaction) error {
+func (i *RegularIndex) Remove(ctx context.Context, tx port.EngineWriteTransaction) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	_, err := i.tx(tx).CreateBucketIfNotExists(i.bucketName)
-	if err != nil {
-		return err
-	}
-	_, err = i.tx(tx).CreateBucketIfNotExists(i.indexInvalidationBucket)
-	return err
+	tx.DeleteBucket(i.bucketName)
+	tx.DeleteBucket(i.indexInvalidationBucket)
+	return nil
 }
 
-func (i *RegularIndex) Remove(ctx context.Context, tx port.Transaction) error {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	err := i.tx(tx).DeleteBucket(i.bucketName)
-	if err != nil {
-		return err
-	}
-	return i.tx(tx).DeleteBucket(i.indexInvalidationBucket)
-}
-
-func (i *RegularIndex) Stats(ctx context.Context, tx port.Transaction) (*model.IndexStats, error) {
+func (i *RegularIndex) Stats(ctx context.Context, tx port.EngineReadTransaction) (*model.IndexStats, error) {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 
-	b, bi, err := i.buckets(tx)
+	s, err := tx.BucketStats(i.bucketName)
+	if err != nil {
+		return nil, err
+	}
+	si, err := tx.BucketStats(i.indexInvalidationBucket)
 	if err != nil {
 		return nil, err
 	}
 
-	s := b.Stats()
-	si := bi.Stats()
+	s.Documents = si.Documents // si holds the real number of documents
+	s.Allocated += si.Allocated
+	s.Used += si.Used
 
-	return &model.IndexStats{
-		Keys:      uint64(s.KeyN),
-		Documents: uint64(si.KeyN),
-		Used:      uint64(s.BranchInuse + s.LeafInuse + si.BranchInuse + si.LeafInuse),
-		Allocated: uint64(s.BranchAlloc + s.LeafAlloc + si.BranchAlloc + si.LeafAlloc),
-	}, nil
+	return s, nil
 }
 
-func (i *RegularIndex) DocumentStored(ctx context.Context, tx port.Transaction, doc *model.Document) error {
+func (i *RegularIndex) DocumentStored(ctx context.Context, tx port.EngineWriteTransaction, doc *model.Document) error {
 	return i.UpdateStored(ctx, tx, []*model.Document{doc})
 }
 
-func (i *RegularIndex) UpdateStored(ctx context.Context, tx port.Transaction, docs []*model.Document) error {
+func (i *RegularIndex) UpdateStored(ctx context.Context, tx port.EngineWriteTransaction, docs []*model.Document) error {
 	if len(docs) == 0 {
 		return nil
 	}
@@ -124,47 +101,27 @@ func (i *RegularIndex) UpdateStored(ctx context.Context, tx port.Transaction, do
 			return nil
 		}
 
-		b, bi, err := i.buckets(tx)
-		if err != nil {
-			return err
-		}
-
 		// 1. remove all old keys from the index
-		err = i.RemoveOldKeys(b, bi, doc)
+		err := i.RemoveOldKeys(tx, doc)
 		if err != nil {
 			return err
 		}
 
 		// 2. add new keys and invalidation records
 		keys, values := i.idxFn(ctx, doc)
-		for i, key := range keys {
+		for j, key := range keys {
 			// enable multi key
-			seq, err := b.NextSequence()
-			if err != nil {
-				return err
-			}
-			mk := keyWithSeq(key, seq)
-			err = b.Put(mk, values[i])
-			if err != nil {
-				return err
-			}
+			tx.PutWithSequence(i.bucketName, key, values[j], keyWithSeq)
 
 			// store information about the key
-			seq, err = bi.NextSequence()
-			if err != nil {
-				return err
-			}
-			err = bi.Put(keyWithSeq([]byte(doc.ID), seq), mk)
-			if err != nil {
-				return err
-			}
+			tx.PutWithSequence(i.indexInvalidationBucket, []byte(doc.ID), values[j], keyWithSeq)
 		}
 	}
 
 	return nil
 }
 
-func (i *RegularIndex) DocumentDeleted(ctx context.Context, tx port.Transaction, doc *model.Document) error {
+func (i *RegularIndex) DocumentDeleted(ctx context.Context, tx port.EngineWriteTransaction, doc *model.Document) error {
 	if doc == nil {
 		return nil
 	}
@@ -172,20 +129,17 @@ func (i *RegularIndex) DocumentDeleted(ctx context.Context, tx port.Transaction,
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	b, bi, err := i.buckets(tx)
+	return i.RemoveOldKeys(tx, doc)
+}
+
+func (i *RegularIndex) RemoveOldKeys(tx port.EngineWriteTransaction, doc *model.Document) error {
+	// use the invalidation function to get all keys that are
+	// created based on the provided document
+	c, err := tx.Cursor(i.indexInvalidationBucket)
 	if err != nil {
 		return err
 	}
 
-	return i.RemoveOldKeys(b, bi, doc)
-}
-
-func (i *RegularIndex) RemoveOldKeys(b, bi *bbolt.Bucket, doc *model.Document) error {
-	var deletionList [][]byte
-
-	// use the invalidation function to get all keys that are
-	// created based on the provided document
-	c := bi.Cursor()
 	for k, v := c.Seek([]byte(doc.ID)); k != nil; k, v = c.Next() {
 		// compare key
 		if !bytes.Equal(k[:keyLen(k)], []byte(doc.ID)) {
@@ -194,31 +148,17 @@ func (i *RegularIndex) RemoveOldKeys(b, bi *bbolt.Bucket, doc *model.Document) e
 
 		// document matches, delete key in regular index
 		// and mark invalidation key for later deletion
-		err := b.Delete(v)
-		if err != nil {
-			return err
-		}
-		deletionList = append(deletionList, k)
-	}
-
-	// remove all invalidation keys
-	for _, k := range deletionList {
-		err := bi.Delete(k)
-		if err != nil {
-			return err
-		}
+		tx.Delete(i.bucketName, v)
+		// remove all invalidation keys
+		tx.Delete(i.indexInvalidationBucket, k)
 	}
 
 	return nil
 }
 
-func (i *RegularIndex) Iterator(ctx context.Context, tx port.Transaction) (port.Iterator, error) {
+func (i *RegularIndex) IteratorOptions(ctx context.Context) (*model.IteratorOptions, error) {
 	i.mu.RLock()
-	b := i.tx(tx).Bucket(i.bucketName)
-	i.mu.RUnlock()
-	if b == nil {
-		return nil, ErrBucketUnavailable
-	}
+	defer i.mu.RUnlock()
 
 	var ck func([]byte) string
 	// if no func is defined
@@ -230,16 +170,15 @@ func (i *RegularIndex) Iterator(ctx context.Context, tx port.Transaction) (port.
 		}
 	}
 
-	iter := &Iterator{
+	iter := &model.IteratorOptions{
 		Skip:        0,
 		Limit:       -1,
 		SkipDeleted: true,
 		StartKey:    nil,
 		EndKey:      nil,
-		tx:          i.tx(tx),
-		bucket:      b,
+		BucketName:  i.bucketName,
 		// Iterator only return the key not the meta data
-		cleanKey: ck,
+		CleanKey: ck,
 	}
 
 	return iter, nil

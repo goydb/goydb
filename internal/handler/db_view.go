@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 )
@@ -96,7 +97,7 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}.ReduceDocs(r.Context(), q)*/
 	} else {
 		//docs, total, err = db.AllDocs(r.Context(), q)
-		err = db.RTransaction(r.Context(), func(tx port.Transaction) error {
+		err = db.Transaction(r.Context(), func(tx *storage.Transaction) error {
 			iter, err := idx.Iterator(r.Context(), tx)
 			if err != nil {
 				return err

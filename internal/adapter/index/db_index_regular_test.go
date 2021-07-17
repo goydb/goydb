@@ -1,9 +1,10 @@
-package storage
+package index_test
 
 import (
 	"context"
 	"testing"
 
+	"github.com/goydb/goydb/internal/adapter/index"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 	"github.com/stretchr/testify/assert"
@@ -12,7 +13,7 @@ import (
 
 func TestRegularIndex(t *testing.T) {
 	WithTestDatabase(t, func(ctx context.Context, db port.Database) {
-		ri := NewRegularIndex(
+		ri := index.NewRegularIndex(
 			&model.DesignDocFn{
 				Type:        model.ViewFn,
 				DesignDocID: "doc",

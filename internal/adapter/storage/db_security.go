@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/goydb/goydb/pkg/model"
-	"github.com/goydb/goydb/pkg/port"
+	"golang.org/x/mod/sumdb/storage"
 )
 
 var (
@@ -13,7 +13,7 @@ var (
 )
 
 func (d *Database) PutSecurity(ctx context.Context, sec *model.Security) error {
-	return d.Transaction(ctx, func(tx port.Transaction) error {
+	return d.Transaction(ctx, func(tx *storage.Transaction) error {
 		tx.SetBucketName(internalDocsBucket)
 		return tx.PutRaw(ctx, securityDoc, sec)
 	})
@@ -21,7 +21,7 @@ func (d *Database) PutSecurity(ctx context.Context, sec *model.Security) error {
 
 func (d *Database) GetSecurity(ctx context.Context) (*model.Security, error) {
 	var sec model.Security
-	err := d.RTransaction(ctx, func(tx port.Transaction) error {
+	err := d.Transaction(ctx, func(tx *storage.Transaction) error {
 		tx.SetBucketName(internalDocsBucket)
 		err := tx.GetRaw(ctx, securityDoc, &sec)
 		return err

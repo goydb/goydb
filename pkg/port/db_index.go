@@ -19,32 +19,31 @@ import (
 type DocumentIndex interface {
 	// Ensure initializes the index, this might mean, that files
 	// buckets or other structures ar build or opened.
-	Ensure(ctx context.Context, tx Transaction) error
+	Ensure(ctx context.Context, tx EngineWriteTransaction) error
 
 	// Removes the index and all related data, do document
 	// is removed only the index
-	Remove(ctx context.Context, tx Transaction) error
+	Remove(ctx context.Context, tx EngineWriteTransaction) error
 
 	// Stats returns statistics related to the index that give
 	// insight about number of documents, number of records, used space.
-	Stats(ctx context.Context, tx Transaction) (*model.IndexStats, error)
+	Stats(ctx context.Context, tx EngineReadTransaction) (*model.IndexStats, error)
 
 	// DocumentUpdated is called in the context of
 	// the tranaction that is updating the document.
-	DocumentStored(ctx context.Context, tx Transaction, doc *model.Document) error
+	DocumentStored(ctx context.Context, tx EngineWriteTransaction, doc *model.Document) error
 
 	// UpdateStored is called in the context of
 	// an index update with a number of documents.
-	UpdateStored(ctx context.Context, tx Transaction, docs []*model.Document) error
+	UpdateStored(ctx context.Context, tx EngineWriteTransaction, docs []*model.Document) error
 
 	// DocumentDeleted is called in the context of
 	// the transaction that is deleting the document.
 	// This call can be called multiple times.
-	DocumentDeleted(ctx context.Context, tx Transaction, doc *model.Document) error
+	DocumentDeleted(ctx context.Context, tx EngineWriteTransaction, doc *model.Document) error
 
-	// Iterator provides an iterator to the index
-	// using the passed transaction context.
-	Iterator(ctx context.Context, tx Transaction) (Iterator, error)
+	// IteratorOptions provides a configuration for an iterator to the index
+	IteratorOptions(ctx context.Context) (*model.IteratorOptions, error)
 }
 
 // DocumentIndexSourceUpdate is implemented by indices that are

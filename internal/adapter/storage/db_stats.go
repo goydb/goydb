@@ -5,6 +5,8 @@ import (
 	"context"
 	"os"
 
+	"github.com/goydb/goydb/internal/adapter/index"
+	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 	bolt "go.etcd.io/bbolt"
 )
@@ -19,11 +21,11 @@ func (d *Database) Stats(ctx context.Context) (stats port.Stats, err error) {
 		return tx.ForEach(func(name []byte, b *bolt.Bucket) error {
 			s := b.Stats()
 			// only take the doc count from the docs bucket
-			if bytes.Equal(name, docsBucket) {
+			if bytes.Equal(name, model.DocsBucket) {
 				stats.DocCount += uint64(s.KeyN)
 			}
 			// if deleted index
-			if bytes.Equal(name, []byte(DeletedIndexName)) {
+			if bytes.Equal(name, []byte(index.DeletedIndexName)) {
 				stats.DocCount -= uint64(s.KeyN)
 				stats.DocDelCount = uint64(s.KeyN)
 			}

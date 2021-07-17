@@ -5,8 +5,8 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/model"
-	"github.com/goydb/goydb/pkg/port"
 )
 
 type DBIndexInfo struct {
@@ -35,7 +35,7 @@ func (s *DBIndexInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	response := &ViewInfoResponse{}
 	response.ViewIndex.Language = doc.Language()
 
-	err = db.RTransaction(r.Context(), func(tx port.Transaction) error {
+	err = db.Transaction(r.Context(), func(tx *storage.Transaction) error {
 		for _, fn := range doc.Functions() {
 			idx, ok := db.Indices()[fn.DesignDocFn().String()]
 			if ok {

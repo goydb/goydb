@@ -1,4 +1,4 @@
-package storage
+package index
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"reflect"
 	"sync"
 
@@ -17,28 +16,8 @@ import (
 )
 
 const (
-	SearchDir    = "search_indices"
-	indexExt     = ".bleve"
 	searchBucket = "_searches"
 )
-
-func (d *Database) searchIndexPath(name string) string {
-	return filepath.Join(d.databaseDir, SearchDir, name+indexExt)
-}
-
-func (d *Database) SearchDocuments(ctx context.Context, ddfn *model.DesignDocFn, sq *port.SearchQuery) (*port.SearchResult, error) {
-	index, ok := d.indices[ddfn.String()]
-	if !ok {
-		return nil, ErrNotFound
-	}
-
-	si, ok := index.(*ExternalSearchIndex)
-	if !ok {
-		return nil, fmt.Errorf("can SearchDocuments on non search index: %q", ddfn)
-	}
-
-	return si.SearchDocuments(ctx, ddfn, sq)
-}
 
 var _ port.DocumentIndex = (*ExternalSearchIndex)(nil)
 var _ port.DocumentIndexSourceUpdate = (*ExternalSearchIndex)(nil)
@@ -110,7 +89,7 @@ func (i *ExternalSearchIndex) SourceType() model.FnType {
 	return model.SearchFn
 }
 
-func (i *ExternalSearchIndex) Ensure(ctx context.Context, tx port.Transaction) error {
+func (i *ExternalSearchIndex) Ensure(ctx context.Context, tx port.EngineWriteTransaction) error {
 	// make sure the index is only initialized once
 	i.mu.RLock()
 	idx := i.idx
@@ -153,7 +132,7 @@ func (i *ExternalSearchIndex) Ensure(ctx context.Context, tx port.Transaction) e
 	return nil
 }
 
-func (i *ExternalSearchIndex) Remove(ctx context.Context, tx port.Transaction) error {
+func (i *ExternalSearchIndex) Remove(ctx context.Context, tx port.EngineWriteTransaction) error {
 	err := i.idx.Close()
 	if err != nil {
 		log.Printf("failed to close search index %s before destroy: %v", i.path, err)
@@ -162,7 +141,7 @@ func (i *ExternalSearchIndex) Remove(ctx context.Context, tx port.Transaction) e
 	return os.RemoveAll(i.path)
 }
 
-func (i *ExternalSearchIndex) Stats(ctx context.Context, tx port.Transaction) (*model.IndexStats, error) {
+func (i *ExternalSearchIndex) Stats(ctx context.Context, tx port.EngineReadTransaction) (*model.IndexStats, error) {
 	docCnt, err := i.idx.DocCount()
 	if err != nil {
 		return nil, err
@@ -183,7 +162,7 @@ func (i *ExternalSearchIndex) Stats(ctx context.Context, tx port.Transaction) (*
 	return &stats, nil
 }
 
-func (i *ExternalSearchIndex) DocumentStored(ctx context.Context, tx port.Transaction, doc *model.Document) error {
+func (i *ExternalSearchIndex) DocumentStored(ctx context.Context, tx port.EngineWriteTransaction, doc *model.Document) error {
 	// ignore deleted docs, don't re-index them again
 	if doc.Deleted {
 		return nil
@@ -192,7 +171,7 @@ func (i *ExternalSearchIndex) DocumentStored(ctx context.Context, tx port.Transa
 	return i.UpdateStored(ctx, tx, []*model.Document{doc})
 }
 
-func (i *ExternalSearchIndex) UpdateStored(ctx context.Context, tx port.Transaction, docs []*model.Document) error {
+func (i *ExternalSearchIndex) UpdateStored(ctx context.Context, tx port.EngineWriteTransaction, docs []*model.Document) error {
 	err := i.UpdateMapping(docs)
 	if err != nil {
 		return err
@@ -224,11 +203,11 @@ func (i *ExternalSearchIndex) UpdateStored(ctx context.Context, tx port.Transact
 	return err
 }
 
-func (i *ExternalSearchIndex) DocumentDeleted(ctx context.Context, tx port.Transaction, doc *model.Document) error {
+func (i *ExternalSearchIndex) DocumentDeleted(ctx context.Context, tx port.EngineWriteTransaction, doc *model.Document) error {
 	return i.idx.Delete(doc.ID)
 }
 
-func (i *ExternalSearchIndex) Iterator(ctx context.Context, tx port.Transaction) (port.Iterator, error) {
+func (i *ExternalSearchIndex) IteratorOptions(ctx context.Context) (*model.IteratorOptions, error) {
 	panic("not implemented use SearchDocuments instead")
 }
 

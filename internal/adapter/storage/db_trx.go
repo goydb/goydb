@@ -10,8 +10,6 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
-	"go.etcd.io/bbolt"
-	bolt "go.etcd.io/bbolt"
 	"gopkg.in/mgo.v2/bson"
 )
 
@@ -19,9 +17,9 @@ var ErrNotFound = errors.New("resource not found")
 var ErrConflict = errors.New("rev doesn't match for update")
 
 type Transaction struct {
-	Database   port.Database
+	Database   *Database
 	BucketName []byte
-	tx         *bolt.Tx
+	port.EngineWriteTransaction
 }
 
 func (tx *Transaction) SetBucketName(bucketName []byte) {
@@ -32,26 +30,30 @@ func (tx *Transaction) bucket() []byte {
 	if tx.BucketName != nil {
 		return tx.BucketName
 	} else {
-		return docsBucket
+		return model.DocsBucket
 	}
 }
 
-func (tx *Transaction) PutRaw(ctx context.Context, key []byte, raw interface{}) error {
-	bucket, err := tx.tx.CreateBucketIfNotExists(tx.bucket())
+func (tx *Transaction) GetRaw(ctx context.Context, key []byte, value interface{}) error {
+	data, err := tx.Get(tx.bucket(), key)
 	if err != nil {
 		return err
 	}
 
+	err = bson.Unmarshal(data, value)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (tx *Transaction) PutRaw(ctx context.Context, key []byte, raw interface{}) error {
 	data, err := bson.Marshal(raw)
 	if err != nil {
 		return err
 	}
-
-	err = bucket.Put(key, data)
-	if err != nil {
-		return err
-	}
-
+	tx.Put(tx.bucket(), key, data)
 	return nil
 }
 
@@ -95,7 +97,7 @@ func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (re
 	}
 
 	if doc.IsDesignDoc() {
-		err = tx.Database.(*Database).BuildDesignDocIndices(ctx, tx, doc, true)
+		err = tx.Database.BuildDesignDocIndices(ctx, tx, doc, true)
 		if err != nil {
 			return
 		}
@@ -114,27 +116,11 @@ func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (re
 	return
 }
 
-func (tx *Transaction) GetRaw(ctx context.Context, key []byte, value interface{}) error {
-	bucket := tx.tx.Bucket(tx.bucket())
-	if bucket == nil {
-		return ErrNotFound
-	}
-
-	data := bucket.Get(key)
-
-	err := bson.Unmarshal(data, value)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func (tx *Transaction) GetDocument(ctx context.Context, docID string) (*model.Document, error) {
 	var doc model.Document
 
 	err := tx.GetRaw(ctx, []byte(docID), &doc)
-	if err == ErrNotFound {
+	if err == port.ErrNotFound {
 		return nil, nil
 	}
 	if err != nil {
@@ -169,8 +155,8 @@ func (tx *Transaction) DeleteDocument(ctx context.Context, docID, rev string) (*
 	return doc, err
 }
 
-func (tx *Transaction) NextSequence() (uint64, error) {
-	bucket, err := tx.tx.CreateBucketIfNotExists(docsBucket)
+/*func (tx *Transaction) NextSequence() (uint64, error) {
+	bucket, err := tx.tx.CreateBucketIfNotExists(model.DocsBucket)
 	if err != nil {
 		return 0, err
 	}
@@ -183,13 +169,9 @@ func (tx *Transaction) NextSequence() (uint64, error) {
 
 // Sequence returns the current sequence
 func (tx *Transaction) Sequence() uint64 {
-	bucket := tx.tx.Bucket(docsBucket)
+	bucket := tx.tx.Bucket(model.DocsBucket)
 	if bucket == nil {
 		return 0
 	}
 	return bucket.Sequence()
-}
-
-func (tx *Transaction) Tx() *bbolt.Tx {
-	return tx.tx
-}
+}*/

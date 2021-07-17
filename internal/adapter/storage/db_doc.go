@@ -5,26 +5,21 @@ import (
 
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
-	bolt "go.etcd.io/bbolt"
+	"golang.org/x/mod/sumdb/storage"
 )
 
-var docsBucket = []byte("docs")
-
-func (d *Database) Transaction(ctx context.Context, fn func(tx port.Transaction) error) error {
-	return d.Update(func(btx *bolt.Tx) error {
-		return fn(&Transaction{tx: btx, Database: d})
-	})
-}
-
-func (d *Database) RTransaction(ctx context.Context, fn func(tx port.Transaction) error) error {
-	return d.View(func(btx *bolt.Tx) error {
-		return fn(&Transaction{tx: btx, Database: d})
+func (d *Database) Transaction(ctx context.Context, fn func(tx *Transaction) error) error {
+	return d.db.WriteTransaction(func(tx port.EngineWriteTransaction) error {
+		return fn(&Transaction{
+			EngineWriteTransaction: tx,
+			Database:               d,
+		})
 	})
 }
 
 func (d *Database) PutDocument(ctx context.Context, doc *model.Document) (string, error) {
 	var rev string
-	err := d.Transaction(ctx, func(tx port.Transaction) error {
+	err := d.Transaction(ctx, func(tx *storage.Transaction) error {
 		var err error
 		rev, err = tx.PutDocument(ctx, doc)
 		return err
@@ -34,7 +29,7 @@ func (d *Database) PutDocument(ctx context.Context, doc *model.Document) (string
 
 func (d *Database) GetDocument(ctx context.Context, docID string) (*model.Document, error) {
 	var doc *model.Document
-	err := d.RTransaction(ctx, func(tx port.Transaction) error {
+	err := d.Transaction(ctx, func(tx *storage.Transaction) error {
 		var err error
 		doc, err = tx.GetDocument(ctx, docID)
 		return err
@@ -48,7 +43,7 @@ func (d *Database) GetDocument(ctx context.Context, docID string) (*model.Docume
 
 func (d *Database) DeleteDocument(ctx context.Context, docID, rev string) (*model.Document, error) {
 	var doc *model.Document
-	err := d.Transaction(ctx, func(tx port.Transaction) error {
+	err := d.Transaction(ctx, func(tx *storage.Transaction) error {
 		var err error
 		doc, err = tx.DeleteDocument(ctx, docID, rev)
 		return err

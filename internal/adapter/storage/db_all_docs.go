@@ -65,8 +65,10 @@ func (d *Database) AllDesignDocs(ctx context.Context) ([]*model.Document, int, e
 }
 
 func (d *Database) EnrichDocuments(ctx context.Context, docs []*model.Document) error {
-	err := d.RTransaction(ctx, func(tx port.Transaction) error {
+	err := d.Transaction(ctx, func(tx *Transaction) error {
 		var err error
+		tx.SetBucketName(model.DocsBucket)
+
 		for _, doc := range docs {
 			dbdoc, err := tx.GetDocument(ctx, doc.ID)
 			if err != nil {

@@ -2,51 +2,39 @@ package storage
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
-	bolt "go.etcd.io/bbolt"
 	"gopkg.in/mgo.v2/bson"
 )
 
 var taskBucket = []byte("tasks")
 
 func (d *Database) AddTasks(ctx context.Context, tasks []*model.Task) error {
-	err := d.Transaction(ctx, func(tx port.Transaction) error {
+	err := d.Transaction(ctx, func(tx *Transaction) error {
 		return d.AddTasksTx(ctx, tx, tasks)
 	})
 	return err
 }
 
-func (d *Database) AddTasksTx(ctx context.Context, tx port.Transaction, tasks []*model.Task) error {
-	bucket, err := (tx.(*Transaction).tx).CreateBucketIfNotExists(taskBucket)
-	if err != nil {
-		return err
-	}
+func (d *Database) AddTasksTx(ctx context.Context, tx port.EngineWriteTransaction, tasks []*model.Task) error {
+	tx.EnsureBucket(taskBucket)
 
 	for _, task := range tasks {
-		i, err := bucket.NextSequence()
-		if err != nil {
-			return err
-		}
-		key, err := cbor.Marshal(i)
-		if err != nil {
-			return err
-		}
-
-		task.ID = i
 		data, err := bson.Marshal(task)
 		if err != nil {
 			return err
 		}
 
-		err = bucket.Put(key, data)
-		if err != nil {
-			return err
-		}
+		tx.PutWithSequence(taskBucket, nil, data, func(key []byte, i uint64) []byte {
+			key, err := cbor.Marshal(i)
+			if err != nil {
+				panic(err)
+			}
+			return key
+		})
 	}
 
 	return nil
@@ -54,17 +42,20 @@ func (d *Database) AddTasksTx(ctx context.Context, tx port.Transaction, tasks []
 
 func (d *Database) GetTasks(ctx context.Context, count int) ([]*model.Task, error) {
 	var tasks []*model.Task
-	err := d.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(taskBucket)
-		if bucket == nil {
+	err := d.db.WriteTransaction(func(tx port.EngineWriteTransaction) error {
+		c, err := tx.Cursor(taskBucket)
+		if err != nil {
 			return nil
 		}
 
-		c := bucket.Cursor()
 		i := 0
 		for k, v := c.First(); k != nil && i < count; k, v = c.Next() {
 			var task = new(model.Task)
 			err := bson.Unmarshal(v, task)
+			if err != nil {
+				return err
+			}
+			err = cbor.Unmarshal(k, &task.ID)
 			if err != nil {
 				return err
 			}
@@ -75,10 +66,7 @@ func (d *Database) GetTasks(ctx context.Context, count int) ([]*model.Task, erro
 			if err != nil {
 				return err
 			}
-			err = bucket.Put(k, data)
-			if err != nil {
-				return err
-			}
+			tx.Put(taskBucket, k, data)
 
 			tasks = append(tasks, task)
 			//}
@@ -102,17 +90,8 @@ func (d *Database) UpdateTask(ctx context.Context, task *model.Task) error {
 		return err
 	}
 
-	err = d.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(taskBucket)
-		if bucket == nil {
-			return nil
-		}
-
-		err = bucket.Put(key, data)
-		if err != nil {
-			return err
-		}
-
+	err = d.db.WriteTransaction(func(tx port.EngineWriteTransaction) error {
+		tx.Put(taskBucket, key, data)
 		return nil
 	})
 
@@ -121,17 +100,20 @@ func (d *Database) UpdateTask(ctx context.Context, task *model.Task) error {
 
 func (d *Database) PeekTasks(ctx context.Context, count int) ([]*model.Task, error) {
 	var tasks []*model.Task
-	err := d.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(taskBucket)
-		if bucket == nil {
+	err := d.db.ReadTransaction(func(tx port.EngineReadTransaction) error {
+		c, err := tx.Cursor(taskBucket)
+		if err != nil {
 			return nil
 		}
 
-		c := bucket.Cursor()
 		i := 0
 		for k, v := c.First(); k != nil && i < count; k, v = c.Next() {
 			var task = new(model.Task)
 			err := bson.Unmarshal(v, task)
+			if err != nil {
+				return err
+			}
+			err = cbor.Unmarshal(k, &task.ID)
 			if err != nil {
 				return err
 			}
@@ -146,21 +128,13 @@ func (d *Database) PeekTasks(ctx context.Context, count int) ([]*model.Task, err
 }
 
 func (d *Database) CompleteTasks(ctx context.Context, tasks []*model.Task) error {
-	err := d.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(taskBucket)
-		if bucket == nil {
-			return fmt.Errorf("no bucket to delete the tasks from: %q", string(taskBucket))
-		}
-
+	err := d.db.WriteTransaction(func(tx port.EngineWriteTransaction) error {
 		for _, task := range tasks {
 			key, err := cbor.Marshal(task.ID)
 			if err != nil {
 				return err
 			}
-			err = bucket.Delete(key)
-			if err != nil {
-				return err
-			}
+			tx.Delete(taskBucket, key)
 		}
 
 		return nil
@@ -170,13 +144,13 @@ func (d *Database) CompleteTasks(ctx context.Context, tasks []*model.Task) error
 
 func (d *Database) TaskCount(ctx context.Context) (int, error) {
 	var count int
-	err := d.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(taskBucket)
-		if bucket == nil {
+	err := d.db.ReadTransaction(func(tx port.EngineReadTransaction) error {
+		stats, err := tx.BucketStats(taskBucket)
+		if err != nil {
 			return nil
 		}
 
-		count = bucket.Stats().KeyN
+		count = int(stats.Documents)
 		return nil
 	})
 	if err != nil {
