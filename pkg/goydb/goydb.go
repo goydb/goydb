@@ -3,10 +3,10 @@ package goydb
 import (
 	"net/http"
 
-	"github.com/goydb/goydb/pkg/port"
+	"github.com/goydb/goydb/internal/adapter/storage"
 )
 
 type Goydb struct {
-	port.Storage
+	*storage.Storage
 	Handler http.Handler
 }

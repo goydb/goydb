@@ -53,3 +53,12 @@ func (tx *ReadTransaction) Cursor(bucket []byte) (port.EngineCursor, error) {
 
 	return b.Cursor(), nil
 }
+
+func (tx *ReadTransaction) Sequence(bucket []byte) (uint64, error) {
+	b := tx.tx.Bucket(bucket)
+	if b == nil {
+		return 0, port.ErrUnknownBucket
+	}
+
+	return b.Sequence(), nil
+}

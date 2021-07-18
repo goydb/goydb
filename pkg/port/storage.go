@@ -19,14 +19,6 @@ type AllDocsQuery struct {
 	ViewGroup   bool
 }
 
-type Stats struct {
-	FileSize    uint64
-	DocCount    uint64
-	DocDelCount uint64
-	Alloc       uint64
-	InUse       uint64
-}
-
 type Observer interface {
 	Close()
 	WaitForDoc(timeout time.Duration) *model.Document

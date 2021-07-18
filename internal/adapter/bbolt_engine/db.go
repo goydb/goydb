@@ -1,6 +1,11 @@
 package bbolt_engine
 
 import (
+	"bytes"
+	"os"
+
+	"github.com/goydb/goydb/internal/adapter/index"
+	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 	"go.etcd.io/bbolt"
 )
@@ -55,4 +60,32 @@ func (db *DB) WriteTransaction(fn func(tx port.EngineWriteTransaction) error) er
 	}
 
 	return nil
+}
+
+func (db *DB) Stats() (stats *model.DatabaseStats, err error) {
+	fi, err := os.Stat(db.db.Path())
+	if err != nil {
+		return stats, err
+	}
+	stats.FileSize = uint64(fi.Size())
+	err = db.db.View(func(tx *bbolt.Tx) error {
+		return tx.ForEach(func(name []byte, b *bbolt.Bucket) error {
+			s := b.Stats()
+			// only take the doc count from the docs bucket
+			if bytes.Equal(name, model.DocsBucket) {
+				stats.DocCount += uint64(s.KeyN)
+			}
+			// if deleted index
+			if bytes.Equal(name, []byte(index.DeletedIndexName)) {
+				stats.DocCount -= uint64(s.KeyN)
+				stats.DocDelCount = uint64(s.KeyN)
+			}
+
+			// accumulate all numbers to have accurate database statistics
+			stats.Alloc += uint64(s.BranchAlloc + s.LeafAlloc)
+			stats.InUse += uint64(s.BranchInuse + s.LeafInuse)
+			return nil
+		})
+	})
+	return
 }

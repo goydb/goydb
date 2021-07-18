@@ -5,7 +5,6 @@ import (
 
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
-	"golang.org/x/mod/sumdb/storage"
 )
 
 func (d *Database) Transaction(ctx context.Context, fn func(tx *Transaction) error) error {
@@ -19,7 +18,7 @@ func (d *Database) Transaction(ctx context.Context, fn func(tx *Transaction) err
 
 func (d *Database) PutDocument(ctx context.Context, doc *model.Document) (string, error) {
 	var rev string
-	err := d.Transaction(ctx, func(tx *storage.Transaction) error {
+	err := d.Transaction(ctx, func(tx *Transaction) error {
 		var err error
 		rev, err = tx.PutDocument(ctx, doc)
 		return err
@@ -29,7 +28,7 @@ func (d *Database) PutDocument(ctx context.Context, doc *model.Document) (string
 
 func (d *Database) GetDocument(ctx context.Context, docID string) (*model.Document, error) {
 	var doc *model.Document
-	err := d.Transaction(ctx, func(tx *storage.Transaction) error {
+	err := d.Transaction(ctx, func(tx *Transaction) error {
 		var err error
 		doc, err = tx.GetDocument(ctx, docID)
 		return err
@@ -43,7 +42,7 @@ func (d *Database) GetDocument(ctx context.Context, docID string) (*model.Docume
 
 func (d *Database) DeleteDocument(ctx context.Context, docID, rev string) (*model.Document, error) {
 	var doc *model.Document
-	err := d.Transaction(ctx, func(tx *storage.Transaction) error {
+	err := d.Transaction(ctx, func(tx *Transaction) error {
 		var err error
 		doc, err = tx.DeleteDocument(ctx, docID, rev)
 		return err

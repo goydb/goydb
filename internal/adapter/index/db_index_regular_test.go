@@ -5,14 +5,14 @@ import (
 	"testing"
 
 	"github.com/goydb/goydb/internal/adapter/index"
+	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/model"
-	"github.com/goydb/goydb/pkg/port"
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/mgo.v2/bson"
 )
 
 func TestRegularIndex(t *testing.T) {
-	WithTestDatabase(t, func(ctx context.Context, db port.Database) {
+	WithTestDatabase(t, func(ctx context.Context, db *storage.Database) {
 		ri := index.NewRegularIndex(
 			&model.DesignDocFn{
 				Type:        model.ViewFn,
@@ -38,7 +38,7 @@ func TestRegularIndex(t *testing.T) {
 				return keys, values
 			},
 		)
-		err := db.Transaction(ctx, func(tx port.Transaction) error {
+		err := db.Transaction(ctx, func(tx *storage.Transaction) error {
 			err := ri.Ensure(ctx, tx)
 			assert.NoError(t, err)
 
@@ -55,7 +55,7 @@ func TestRegularIndex(t *testing.T) {
 			})
 
 			t.Run("iterator with no documents", func(t *testing.T) {
-				iter, err := ri.Iterator(ctx, tx)
+				iter, err := db.IndexIterator(ctx, tx, ri)
 				assert.NoError(t, err)
 				assert.Equal(t, 0, iter.Remaining())
 			})
@@ -88,7 +88,7 @@ func TestRegularIndex(t *testing.T) {
 				assert.NoError(t, err)
 
 				t.Run("iterator", func(t *testing.T) {
-					iter, err := ri.Iterator(ctx, tx)
+					iter, err := db.IndexIterator(ctx, tx, ri)
 					assert.NoError(t, err)
 					var docs []*model.Document
 					for doc := iter.First(); iter.Continue(); doc = iter.Next() {
@@ -139,7 +139,7 @@ func TestRegularIndex(t *testing.T) {
 					assert.NoError(t, err)
 
 					t.Run("iterator", func(t *testing.T) {
-						iter, err := ri.Iterator(ctx, tx)
+						iter, err := db.IndexIterator(ctx, tx, ri)
 						assert.NoError(t, err)
 						var docs []*model.Document
 						for doc := iter.First(); iter.Continue(); doc = iter.Next() {

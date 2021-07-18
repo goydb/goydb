@@ -3,6 +3,8 @@ package bbolt_engine
 import (
 	"fmt"
 
+	"log"
+
 	"github.com/goydb/goydb/pkg/port"
 	"go.etcd.io/bbolt"
 )
@@ -88,10 +90,13 @@ func (t *WriteTransaction) Commit(tx *bbolt.Tx) error {
 		var err error
 		switch op.code {
 		case opEnsureBucket:
+			log.Printf("OP ensure bucket %q", op.arg1)
 			_, err = tx.CreateBucketIfNotExists(op.arg1)
 		case opDeleteBucket:
+			log.Printf("OP delete bucket %q", op.arg1)
 			err = tx.DeleteBucket(op.arg1)
 		case opPut:
+			log.Printf("OP put %q (%d) to %q", op.arg2, len(op.arg3), op.arg1)
 			b := tx.Bucket(op.arg1)
 			if b == nil {
 				return fmt.Errorf("failed to put %q to bucket %q: no bucket", string(op.arg2), string(op.arg1))
@@ -105,9 +110,18 @@ func (t *WriteTransaction) Commit(tx *bbolt.Tx) error {
 			var seq uint64
 			seq, err = b.NextSequence()
 			if err == nil {
-				err = b.Put(op.keyWithSeq(op.arg2, seq), op.arg3)
+				nk, nv := op.keyWithSeq(op.arg2, seq)
+				if nk == nil { // key not changed
+					nk = op.arg2
+				}
+				if nv == nil { // value not changed
+					nv = op.arg3
+				}
+				log.Printf("OP put with seq %q (%d) to %q", op.arg2, len(op.arg3), op.arg1)
+				err = b.Put(nk, nv)
 			}
 		case opDelete:
+			log.Printf("OP delete %q", op.arg1)
 			b := tx.Bucket(op.arg1)
 			if b != nil {
 				err = b.Delete(op.arg2)

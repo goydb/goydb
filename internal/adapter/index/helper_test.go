@@ -8,7 +8,6 @@ import (
 
 	"github.com/d5/tengo/v2/require"
 	"github.com/goydb/goydb/internal/adapter/storage"
-	"github.com/goydb/goydb/pkg/port"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -26,7 +25,7 @@ func WithTestStorage(t *testing.T, fn func(ctx context.Context, s *storage.Stora
 	}
 }
 
-func WithTestDatabase(t *testing.T, fn func(ctx context.Context, db port.Database)) {
+func WithTestDatabase(t *testing.T, fn func(ctx context.Context, db *storage.Database)) {
 	WithTestStorage(t, func(ctx context.Context, s *storage.Storage) {
 		db, err := s.CreateDatabase(ctx, "test")
 		assert.NoError(t, err)

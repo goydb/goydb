@@ -6,10 +6,12 @@ import (
 	"log"
 	"os"
 	"path"
+	"strconv"
 	"sync"
 
 	"github.com/goydb/goydb/internal/adapter/bbolt_engine"
 	"github.com/goydb/goydb/internal/adapter/index"
+	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 )
 
@@ -38,7 +40,7 @@ func (d Database) Name() string {
 }
 
 func (d Database) String() string {
-	stats, err := d.Stats(context.Background())
+	stats, err := d.db.Stats()
 	if err == nil {
 		return fmt.Sprintf("<Database name=%q stats=%+v>", d.name, stats)
 	}
@@ -46,18 +48,25 @@ func (d Database) String() string {
 	return fmt.Sprintf("<Database name=%q stats=%v>", d.name, err)
 }
 
-/*
+func (d *Database) Stats(ctx context.Context) (stats *model.DatabaseStats, err error) {
+	return d.db.Stats()
+}
+
 func (d Database) Sequence() string {
 	var seq uint64
-	err := d.Transaction(context.Background(), func(tx *storage.Transaction) error {
-		seq = tx.Sequence()
+	err := d.Transaction(context.Background(), func(tx *Transaction) error {
+		var err error
+		seq, err = tx.Sequence(model.DocsBucket)
+		if err != nil {
+			seq = 0
+		}
 		return nil
 	})
 	if err != nil {
 		log.Fatal(err) // FIXME
 	}
 	return strconv.FormatUint(seq, 10)
-}*/
+}
 
 func (s *Storage) CreateDatabase(ctx context.Context, name string) (*Database, error) {
 	s.mu.Lock()
@@ -87,6 +96,8 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (*Database, e
 	// create all required database Indices
 	log.Println("BuildIndices")
 	err = database.Transaction(ctx, func(tx *Transaction) error {
+		tx.EnsureBucket(model.DocsBucket)
+
 		err := database.BuildIndices(ctx, tx, false)
 		if err != nil {
 			return err
@@ -114,7 +125,7 @@ func (s *Storage) DeleteDatabase(ctx context.Context, name string) error {
 
 	db, ok := s.dbs[name]
 	if !ok {
-		return fmt.Errorf("unknown database %q", name)
+		return fmt.Errorf("%w: %q", ErrUnknownDatabase, name)
 	}
 
 	err := db.db.Close()

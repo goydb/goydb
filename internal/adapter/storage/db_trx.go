@@ -15,6 +15,7 @@ import (
 
 var ErrNotFound = errors.New("resource not found")
 var ErrConflict = errors.New("rev doesn't match for update")
+var ErrUnknownDatabase = errors.New("unknown database")
 
 type Transaction struct {
 	Database   *Database
@@ -67,11 +68,7 @@ func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (re
 	}
 
 	// find next sequences (rev, changes)
-	revSeq := doc.NextSequence()
-	doc.LocalSeq, err = tx.NextSequence()
-	if err != nil {
-		return
-	}
+	revSeq := doc.NextSequenceRevision()
 
 	hash := md5.New()
 	err = cbor.NewEncoder(hash).Encode(doc)
@@ -91,10 +88,14 @@ func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (re
 		}
 	}
 
-	err = tx.PutRaw(ctx, []byte(doc.ID), doc)
-	if err != nil {
-		return
-	}
+	tx.PutWithSequence(tx.bucket(), []byte(doc.ID), nil, func(key []byte, seq uint64) ([]byte, []byte) {
+		doc.LocalSeq = seq
+		data, err := bson.Marshal(doc)
+		if err != nil {
+			panic(err)
+		}
+		return key, data
+	})
 
 	if doc.IsDesignDoc() {
 		err = tx.Database.BuildDesignDocIndices(ctx, tx, doc, true)
@@ -165,13 +166,4 @@ func (tx *Transaction) DeleteDocument(ctx context.Context, docID, rev string) (*
 		return 0, err
 	}
 	return seq, nil
-}
-
-// Sequence returns the current sequence
-func (tx *Transaction) Sequence() uint64 {
-	bucket := tx.tx.Bucket(model.DocsBucket)
-	if bucket == nil {
-		return 0
-	}
-	return bucket.Sequence()
 }*/

@@ -11,14 +11,16 @@ var ErrNotFound = errors.New("resource not found")
 var ErrConflict = errors.New("rev doesn't match for update")
 
 type DatabaseEngine interface {
+	Stats() (stats *model.DatabaseStats, err error)
 	ReadTransaction(fn func(tx EngineReadTransaction) error) error
 	WriteTransaction(fn func(tx EngineWriteTransaction) error) error
 	Close() error
 }
 
 // KeyWithSeq should return a new key based on the given
-// key and a sequence
-type KeyWithSeq func(key []byte, seq uint64) []byte
+// key and a sequence. The function may return a new key or new
+// data. If the new returned data is new, the original data is used.
+type KeyWithSeq func(key []byte, seq uint64) (newKey []byte, newValue []byte)
 
 type EngineWriteTransaction interface {
 	EnsureBucket(bucket []byte)
@@ -36,6 +38,7 @@ type EngineReadTransaction interface {
 	BucketStats(bucket []byte) (*model.IndexStats, error)
 	Cursor(bucket []byte) (EngineCursor, error)
 	Get(bucket, key []byte) ([]byte, error)
+	Sequence(bucket []byte) (uint64, error)
 }
 
 type EngineCursor interface {

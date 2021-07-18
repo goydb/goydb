@@ -12,6 +12,7 @@ import (
 	"strconv"
 
 	"github.com/gorilla/mux"
+	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/model"
 )
 
@@ -78,11 +79,11 @@ func (s *DBDocGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type MultipartResponse struct {
-	db *Database
+	db *storage.Database
 	mw *multipart.Writer
 }
 
-func NewMultipartResponse(db *Database, w http.ResponseWriter) *MultipartResponse {
+func NewMultipartResponse(db *storage.Database, w http.ResponseWriter) *MultipartResponse {
 	// root writer
 	mw := multipart.NewWriter(w)
 	w.Header().Set("Content-Type", fmt.Sprintf(`multipart/mixed; boundary="%s"`, mw.Boundary()))

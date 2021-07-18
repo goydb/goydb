@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"github.com/goydb/goydb/internal/adapter/storage"
 )
 
 type DBDelete struct {
@@ -20,6 +22,10 @@ func (s *DBDelete) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	dbName := mux.Vars(r)["db"]
 
 	err := s.Storage.DeleteDatabase(r.Context(), dbName)
+	if errors.Is(err, storage.ErrUnknownDatabase) {
+		WriteError(w, http.StatusNotFound, err.Error())
+		return
+	}
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, err.Error())
 		return

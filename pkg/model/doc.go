@@ -77,7 +77,7 @@ func (doc Document) Revisions() Revisions {
 	}
 }
 
-func (doc Document) NextSequence() int {
+func (doc Document) NextSequenceRevision() int {
 	rev, ok := doc.Revision()
 	if !ok {
 		return 1

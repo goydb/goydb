@@ -15,6 +15,14 @@ const (
 	indexExt  = ".bleve"
 )
 
+func (d *Database) IndexIterator(ctx context.Context, tx *Transaction, idx port.DocumentIndex) (*Iterator, error) {
+	opts, err := idx.IteratorOptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return NewIterator(tx, WithOptions(opts)), nil
+}
+
 // BuildIndices loads all design documents and builds
 // their indices
 func (d *Database) BuildIndices(ctx context.Context, tx *Transaction, update bool) error {
@@ -127,12 +135,12 @@ func (d *Database) UpdateAllDocuments(ctx context.Context, tx port.EngineWriteTr
 }
 
 func (d *Database) SearchDocuments(ctx context.Context, ddfn *model.DesignDocFn, sq *port.SearchQuery) (*port.SearchResult, error) {
-	index, ok := d.indices[ddfn.String()]
+	idx, ok := d.indices[ddfn.String()]
 	if !ok {
 		return nil, ErrNotFound
 	}
 
-	si, ok := index.(*index.ExternalSearchIndex)
+	si, ok := idx.(*index.ExternalSearchIndex)
 	if !ok {
 		return nil, fmt.Errorf("can't SearchDocuments on non search index: %q", ddfn)
 	}

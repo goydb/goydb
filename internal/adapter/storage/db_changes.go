@@ -5,10 +5,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/goydb/goydb/internal/adapter/bbolt_engine"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
-	"golang.org/x/mod/sumdb/storage"
 )
 
 func (d *Database) Changes(ctx context.Context, options *model.ChangesOptions) ([]*model.Document, int, error) {
@@ -33,14 +31,14 @@ start:
 		t.Stop()
 	}
 
-	err := d.Transaction(ctx, func(tx *storage.Transaction) error {
+	err := d.Transaction(ctx, func(tx *Transaction) error {
 		index := d.ChangesIndex()
 		opts, err := index.IteratorOptions(ctx)
 		if err != nil {
 			return err
 		}
 
-		i := bbolt_engine.NewIterator(tx.(*Transaction).tx, bbolt_engine.WithOptions(opts))
+		i := NewIterator(tx, WithOptions(opts))
 		i.SetLimit(options.Limit)
 
 		if !options.SinceNow() {

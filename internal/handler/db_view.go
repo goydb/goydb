@@ -98,7 +98,7 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		//docs, total, err = db.AllDocs(r.Context(), q)
 		err = db.Transaction(r.Context(), func(tx *storage.Transaction) error {
-			iter, err := idx.Iterator(r.Context(), tx)
+			iter, err := db.IndexIterator(r.Context(), tx, idx)
 			if err != nil {
 				return err
 			}

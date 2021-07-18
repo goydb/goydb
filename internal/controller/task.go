@@ -8,13 +8,12 @@ import (
 
 	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/model"
-	"github.com/goydb/goydb/pkg/port"
 )
 
 const taskProcessCount = 10
 
 type Task struct {
-	Storage port.Storage
+	Storage *storage.Storage
 }
 
 func (c Task) Run(ctx context.Context) {
