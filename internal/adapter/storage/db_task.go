@@ -28,12 +28,12 @@ func (d *Database) AddTasksTx(ctx context.Context, tx port.EngineWriteTransactio
 			return err
 		}
 
-		tx.PutWithSequence(taskBucket, nil, data, func(key []byte, i uint64) ([]byte, []byte) {
+		tx.PutWithSequence(taskBucket, nil, data, func(key []byte, i uint64) []byte {
 			key, err := cbor.Marshal(i)
 			if err != nil {
 				panic(err)
 			}
-			return key, nil
+			return key
 		})
 	}
 
@@ -43,10 +43,7 @@ func (d *Database) AddTasksTx(ctx context.Context, tx port.EngineWriteTransactio
 func (d *Database) GetTasks(ctx context.Context, count int) ([]*model.Task, error) {
 	var tasks []*model.Task
 	err := d.db.WriteTransaction(func(tx port.EngineWriteTransaction) error {
-		c, err := tx.Cursor(taskBucket)
-		if err != nil {
-			return nil
-		}
+		c := tx.Cursor(taskBucket)
 
 		i := 0
 		for k, v := c.First(); k != nil && i < count; k, v = c.Next() {
@@ -101,10 +98,7 @@ func (d *Database) UpdateTask(ctx context.Context, task *model.Task) error {
 func (d *Database) PeekTasks(ctx context.Context, count int) ([]*model.Task, error) {
 	var tasks []*model.Task
 	err := d.db.ReadTransaction(func(tx port.EngineReadTransaction) error {
-		c, err := tx.Cursor(taskBucket)
-		if err != nil {
-			return nil
-		}
+		c := tx.Cursor(taskBucket)
 
 		i := 0
 		for k, v := c.First(); k != nil && i < count; k, v = c.Next() {
@@ -145,10 +139,7 @@ func (d *Database) CompleteTasks(ctx context.Context, tasks []*model.Task) error
 func (d *Database) TaskCount(ctx context.Context) (int, error) {
 	var count int
 	err := d.db.ReadTransaction(func(tx port.EngineReadTransaction) error {
-		stats, err := tx.BucketStats(taskBucket)
-		if err != nil {
-			return nil
-		}
+		stats := tx.BucketStats(taskBucket)
 
 		count = int(stats.Documents)
 		return nil

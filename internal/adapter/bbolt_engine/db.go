@@ -62,7 +62,7 @@ func (db *DB) WriteTransaction(fn func(tx port.EngineWriteTransaction) error) er
 	return nil
 }
 
-func (db *DB) Stats() (stats *model.DatabaseStats, err error) {
+func (db *DB) Stats() (stats model.DatabaseStats, err error) {
 	fi, err := os.Stat(db.db.Path())
 	if err != nil {
 		return stats, err

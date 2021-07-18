@@ -119,6 +119,7 @@ func (a Authenticator) DB(w http.ResponseWriter, r *http.Request, db *storage.Da
 
 	sec, err := db.GetSecurity(r.Context())
 	if err != nil {
+		log.Fatal(err)
 		return nil, false
 	}
 

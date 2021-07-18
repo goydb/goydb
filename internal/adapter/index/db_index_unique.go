@@ -58,7 +58,7 @@ func (i *UniqueIndex) Stats(ctx context.Context, tx port.EngineReadTransaction) 
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 
-	return tx.BucketStats(i.bucketName)
+	return tx.BucketStats(i.bucketName), nil
 }
 
 func (i *UniqueIndex) DocumentStored(ctx context.Context, tx port.EngineWriteTransaction, doc *model.Document) error {

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/port"
 )
 
 var (
@@ -25,7 +26,7 @@ func (d *Database) GetSecurity(ctx context.Context) (*model.Security, error) {
 		err := tx.GetRaw(ctx, securityDoc, &sec)
 		return err
 	})
-	if err == ErrNotFound {
+	if err == port.ErrNotFound {
 		return model.DefaultSecurity(), nil
 	}
 	if err != nil {

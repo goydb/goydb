@@ -68,14 +68,8 @@ func (i *RegularIndex) Stats(ctx context.Context, tx port.EngineReadTransaction)
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 
-	s, err := tx.BucketStats(i.bucketName)
-	if err != nil {
-		return nil, err
-	}
-	si, err := tx.BucketStats(i.indexInvalidationBucket)
-	if err != nil {
-		return nil, err
-	}
+	s := tx.BucketStats(i.bucketName)
+	si := tx.BucketStats(i.indexInvalidationBucket)
 
 	s.Documents = si.Documents // si holds the real number of documents
 	s.Allocated += si.Allocated
@@ -135,10 +129,7 @@ func (i *RegularIndex) DocumentDeleted(ctx context.Context, tx port.EngineWriteT
 func (i *RegularIndex) RemoveOldKeys(tx port.EngineWriteTransaction, doc *model.Document) error {
 	// use the invalidation function to get all keys that are
 	// created based on the provided document
-	c, err := tx.Cursor(i.indexInvalidationBucket)
-	if err != nil {
-		return err
-	}
+	c := tx.Cursor(i.indexInvalidationBucket)
 
 	for k, v := c.Seek([]byte(doc.ID)); k != nil; k, v = c.Next() {
 		// compare key
@@ -184,13 +175,13 @@ func (i *RegularIndex) IteratorOptions(ctx context.Context) (*model.IteratorOpti
 	return iter, nil
 }
 
-func keyWithSeq(key []byte, seq uint64) ([]byte, []byte) {
+func keyWithSeq(key []byte, seq uint64) []byte {
 	lkey := len(key)
 	mk := make([]byte, lkey+8+2)
 	copy(mk[:lkey], key)
 	binary.BigEndian.PutUint64(mk[lkey:], seq)
 	binary.BigEndian.PutUint16(mk[lkey+8:], uint16(lkey))
-	return mk, nil
+	return mk
 }
 
 func keyLen(key []byte) uint16 {

@@ -45,10 +45,7 @@ type Iterator struct {
 }
 
 func (i *Iterator) Total() int {
-	stats, err := i.tx.BucketStats(i.bucket)
-	if err != nil {
-		return 0
-	}
+	stats := i.tx.BucketStats(i.bucket)
 	return int(stats.Documents)
 }
 
@@ -99,11 +96,7 @@ func WithOptions(opts *model.IteratorOptions) IteratorOption {
 }
 
 func (i *Iterator) First() *model.Document {
-	var err error
-	i.cursor, err = i.tx.Cursor(i.bucket)
-	if err != nil {
-		return nil
-	}
+	i.cursor = i.tx.Cursor(i.bucket)
 
 	var v []byte
 	if i.StartKey != nil {
@@ -194,11 +187,7 @@ func (i *Iterator) Continue() bool {
 // the current position till the end of the range
 func (i *Iterator) Remaining() int {
 	if i.cursor == nil {
-		var err error
-		i.cursor, err = i.tx.Cursor(i.bucket)
-		if err != nil {
-			return 0
-		}
+		i.cursor = i.tx.Cursor(i.bucket)
 	}
 
 	var remaining int

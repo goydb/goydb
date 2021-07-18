@@ -27,12 +27,18 @@ func (s *DBIndex) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	seq, err := db.Sequence(r.Context())
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	response := DBResponse{
 		DbName:      db.Name(),
 		DocCount:    stats.DocCount,
 		DocDelCount: stats.DocDelCount,
 		PurgeSeq:    "0",
-		UpdateSeq:   db.Sequence(),
+		UpdateSeq:   seq,
 		Sizes: Sizes{
 			File:     stats.FileSize,
 			Active:   stats.Alloc,

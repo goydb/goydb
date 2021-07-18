@@ -86,6 +86,62 @@ func TestRegularIndex(t *testing.T) {
 					},
 				})
 				assert.NoError(t, err)
+			})
+
+			return nil
+		})
+		assert.NoError(t, err)
+
+		err = db.Transaction(ctx, func(tx *storage.Transaction) error {
+			t.Run("iterator", func(t *testing.T) {
+				iter, err := db.IndexIterator(ctx, tx, ri)
+				assert.NoError(t, err)
+				var docs []*model.Document
+				for doc := iter.First(); iter.Continue(); doc = iter.Next() {
+					docs = append(docs, doc)
+				}
+				assert.EqualValues(t, []*model.Document{
+					&model.Document{
+						ID:          "test",
+						Key:         "name",
+						Value:       "Foo",
+						Data:        map[string]interface{}{},
+						Attachments: map[string]*model.Attachment{},
+					},
+					&model.Document{
+						ID:          "test1",
+						Key:         "name",
+						Value:       "Foo",
+						Data:        map[string]interface{}{},
+						Attachments: map[string]*model.Attachment{},
+					},
+					&model.Document{
+						ID:          "test",
+						Key:         "test",
+						Value:       int(123),
+						Data:        map[string]interface{}{},
+						Attachments: map[string]*model.Attachment{},
+					},
+					&model.Document{
+						ID:          "test1",
+						Key:         "test",
+						Value:       int(234),
+						Data:        map[string]interface{}{},
+						Attachments: map[string]*model.Attachment{},
+					},
+				}, docs)
+			})
+
+			t.Run("stats", func(t *testing.T) {
+				stats, err := ri.Stats(ctx, tx)
+				assert.NoError(t, err)
+				assert.Equal(t, uint64(2), stats.Documents)
+				assert.Equal(t, uint64(4), stats.Keys)
+			})
+
+			t.Run("document removed", func(t *testing.T) {
+				err := ri.DocumentDeleted(ctx, tx, &model.Document{ID: "test"})
+				assert.NoError(t, err)
 
 				t.Run("iterator", func(t *testing.T) {
 					iter, err := db.IndexIterator(ctx, tx, ri)
@@ -96,23 +152,9 @@ func TestRegularIndex(t *testing.T) {
 					}
 					assert.EqualValues(t, []*model.Document{
 						&model.Document{
-							ID:          "test",
-							Key:         "name",
-							Value:       "Foo",
-							Data:        map[string]interface{}{},
-							Attachments: map[string]*model.Attachment{},
-						},
-						&model.Document{
 							ID:          "test1",
 							Key:         "name",
 							Value:       "Foo",
-							Data:        map[string]interface{}{},
-							Attachments: map[string]*model.Attachment{},
-						},
-						&model.Document{
-							ID:          "test",
-							Key:         "test",
-							Value:       int(123),
 							Data:        map[string]interface{}{},
 							Attachments: map[string]*model.Attachment{},
 						},
@@ -124,44 +166,6 @@ func TestRegularIndex(t *testing.T) {
 							Attachments: map[string]*model.Attachment{},
 						},
 					}, docs)
-				})
-
-				t.Run("stats", func(t *testing.T) {
-					t.SkipNow()
-					stats, err := ri.Stats(ctx, tx)
-					assert.NoError(t, err)
-					assert.Equal(t, uint64(2), stats.Documents)
-					assert.Equal(t, uint64(4), stats.Keys)
-				})
-
-				t.Run("document removed", func(t *testing.T) {
-					err := ri.DocumentDeleted(ctx, tx, &model.Document{ID: "test"})
-					assert.NoError(t, err)
-
-					t.Run("iterator", func(t *testing.T) {
-						iter, err := db.IndexIterator(ctx, tx, ri)
-						assert.NoError(t, err)
-						var docs []*model.Document
-						for doc := iter.First(); iter.Continue(); doc = iter.Next() {
-							docs = append(docs, doc)
-						}
-						assert.EqualValues(t, []*model.Document{
-							&model.Document{
-								ID:          "test1",
-								Key:         "name",
-								Value:       "Foo",
-								Data:        map[string]interface{}{},
-								Attachments: map[string]*model.Attachment{},
-							},
-							&model.Document{
-								ID:          "test1",
-								Key:         "test",
-								Value:       int(234),
-								Data:        map[string]interface{}{},
-								Attachments: map[string]*model.Attachment{},
-							},
-						}, docs)
-					})
 				})
 			})
 

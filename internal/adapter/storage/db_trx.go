@@ -78,6 +78,11 @@ func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (re
 	rev = strconv.Itoa(revSeq) + "-" + hex.EncodeToString(hash.Sum(nil))
 	doc.Rev = rev
 
+	// BUG:
+	// the local sequence can't be assigned correctly this way
+	// idea use an index to create the local sequence
+	doc.LocalSeq = 1 // FIXME: tx.Sequence()
+
 	if oldDoc != nil {
 		// maintain indices - remove old value
 		for _, index := range tx.Database.Indices() {
@@ -88,14 +93,10 @@ func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (re
 		}
 	}
 
-	tx.PutWithSequence(tx.bucket(), []byte(doc.ID), nil, func(key []byte, seq uint64) ([]byte, []byte) {
-		doc.LocalSeq = seq
-		data, err := bson.Marshal(doc)
-		if err != nil {
-			panic(err)
-		}
-		return key, data
-	})
+	err = tx.PutRaw(ctx, []byte(doc.ID), doc)
+	if err != nil {
+		return
+	}
 
 	if doc.IsDesignDoc() {
 		err = tx.Database.BuildDesignDocIndices(ctx, tx, doc, true)
@@ -155,15 +156,3 @@ func (tx *Transaction) DeleteDocument(ctx context.Context, docID, rev string) (*
 	}
 	return doc, err
 }
-
-/*func (tx *Transaction) NextSequence() (uint64, error) {
-	bucket, err := tx.tx.CreateBucketIfNotExists(model.DocsBucket)
-	if err != nil {
-		return 0, err
-	}
-	seq, err := bucket.NextSequence()
-	if err != nil {
-		return 0, err
-	}
-	return seq, nil
-}*/

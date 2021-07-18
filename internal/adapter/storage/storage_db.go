@@ -48,24 +48,20 @@ func (d Database) String() string {
 	return fmt.Sprintf("<Database name=%q stats=%v>", d.name, err)
 }
 
-func (d *Database) Stats(ctx context.Context) (stats *model.DatabaseStats, err error) {
+func (d *Database) Stats(ctx context.Context) (stats model.DatabaseStats, err error) {
 	return d.db.Stats()
 }
 
-func (d Database) Sequence() string {
+func (d Database) Sequence(ctx context.Context) (string, error) {
 	var seq uint64
-	err := d.Transaction(context.Background(), func(tx *Transaction) error {
-		var err error
-		seq, err = tx.Sequence(model.DocsBucket)
-		if err != nil {
-			seq = 0
-		}
+	err := d.Transaction(ctx, func(tx *Transaction) error {
+		seq = tx.Sequence(model.DocsBucket)
 		return nil
 	})
 	if err != nil {
-		log.Fatal(err) // FIXME
+		return "", err
 	}
-	return strconv.FormatUint(seq, 10)
+	return strconv.FormatUint(seq, 10), nil
 }
 
 func (s *Storage) CreateDatabase(ctx context.Context, name string) (*Database, error) {

@@ -1,6 +1,8 @@
 package index
 
 import (
+	"log"
+
 	"github.com/goydb/goydb/pkg/model"
 	"gopkg.in/mgo.v2/bson"
 )
@@ -12,6 +14,7 @@ func NewChangesIndex(name string) *UniqueIndexUint64 {
 		name,
 		// key is the local sequence of the document
 		func(doc *model.Document) uint64 {
+			log.Println("doc.LocalSeq", doc.LocalSeq)
 			return doc.LocalSeq
 		},
 		// value is a bson marshaled document

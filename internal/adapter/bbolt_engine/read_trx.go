@@ -18,10 +18,10 @@ func NewReadTransaction(tx *bbolt.Tx) *ReadTransaction {
 	}
 }
 
-func (tx *ReadTransaction) BucketStats(bucket []byte) (*model.IndexStats, error) {
+func (tx *ReadTransaction) BucketStats(bucket []byte) *model.IndexStats {
 	b := tx.tx.Bucket(bucket)
 	if b == nil {
-		return nil, port.ErrUnknownBucket
+		return &model.IndexStats{}
 	}
 	s := b.Stats()
 
@@ -30,13 +30,13 @@ func (tx *ReadTransaction) BucketStats(bucket []byte) (*model.IndexStats, error)
 		Documents: uint64(s.KeyN),
 		Used:      uint64(s.BranchInuse + s.LeafInuse),
 		Allocated: uint64(s.BranchAlloc + s.LeafAlloc),
-	}, nil
+	}
 }
 
 func (tx *ReadTransaction) Get(bucket, key []byte) ([]byte, error) {
 	b := tx.tx.Bucket(bucket)
 	if b == nil {
-		return nil, port.ErrUnknownBucket
+		return nil, port.ErrNotFound
 	}
 	value := b.Get(key)
 	if value == nil {
@@ -45,20 +45,20 @@ func (tx *ReadTransaction) Get(bucket, key []byte) ([]byte, error) {
 	return value, nil
 }
 
-func (tx *ReadTransaction) Cursor(bucket []byte) (port.EngineCursor, error) {
+func (tx *ReadTransaction) Cursor(bucket []byte) port.EngineCursor {
 	b := tx.tx.Bucket(bucket)
 	if b == nil {
-		return nil, port.ErrUnknownBucket
+		return &NoopCursor{}
 	}
 
-	return b.Cursor(), nil
+	return b.Cursor()
 }
 
-func (tx *ReadTransaction) Sequence(bucket []byte) (uint64, error) {
+func (tx *ReadTransaction) Sequence(bucket []byte) uint64 {
 	b := tx.tx.Bucket(bucket)
 	if b == nil {
-		return 0, port.ErrUnknownBucket
+		return 0
 	}
 
-	return b.Sequence(), nil
+	return b.Sequence()
 }
