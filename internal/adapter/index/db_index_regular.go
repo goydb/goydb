@@ -175,13 +175,13 @@ func (i *RegularIndex) IteratorOptions(ctx context.Context) (*model.IteratorOpti
 	return iter, nil
 }
 
-func keyWithSeq(key []byte, seq uint64) []byte {
+func keyWithSeq(key []byte, seq uint64) ([]byte, []byte) {
 	lkey := len(key)
 	mk := make([]byte, lkey+8+2)
 	copy(mk[:lkey], key)
 	binary.BigEndian.PutUint64(mk[lkey:], seq)
 	binary.BigEndian.PutUint16(mk[lkey+8:], uint16(lkey))
-	return mk
+	return mk, nil
 }
 
 func keyLen(key []byte) uint16 {

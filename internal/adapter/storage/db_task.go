@@ -28,12 +28,12 @@ func (d *Database) AddTasksTx(ctx context.Context, tx port.EngineWriteTransactio
 			return err
 		}
 
-		tx.PutWithSequence(taskBucket, nil, data, func(key []byte, i uint64) []byte {
+		tx.PutWithSequence(taskBucket, nil, data, func(key []byte, i uint64) ([]byte, []byte) {
 			key, err := cbor.Marshal(i)
 			if err != nil {
 				panic(err)
 			}
-			return key
+			return key, nil
 		})
 	}
 

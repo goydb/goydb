@@ -2,7 +2,6 @@ package index
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 
@@ -11,8 +10,6 @@ import (
 )
 
 var _ port.DocumentIndex = (*UniqueIndex)(nil)
-
-var ErrBucketUnavailable = errors.New("bucket unavailable")
 
 type IndexFunc func(doc *model.Document) []byte
 

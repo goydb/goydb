@@ -19,7 +19,7 @@ type DatabaseEngine interface {
 // KeyWithSeq should return a new key based on the given
 // key and a sequence. The function may return a new key or new
 // data. If the returned data is nil, the original data is used.
-type KeyWithSeq func(key []byte, seq uint64) (newKey []byte)
+type KeyWithSeq func(key []byte, seq uint64) (newKey []byte, newValue []byte)
 
 type EngineWriteTransaction interface {
 	EnsureBucket(bucket []byte)

@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/fxamacker/cbor/v2"
+	"github.com/goydb/goydb/internal/adapter/index"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 	"gopkg.in/mgo.v2/bson"
@@ -78,11 +79,6 @@ func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (re
 	rev = strconv.Itoa(revSeq) + "-" + hex.EncodeToString(hash.Sum(nil))
 	doc.Rev = rev
 
-	// BUG:
-	// the local sequence can't be assigned correctly this way
-	// idea use an index to create the local sequence
-	doc.LocalSeq = 1 // FIXME: tx.Sequence()
-
 	if oldDoc != nil {
 		// maintain indices - remove old value
 		for _, index := range tx.Database.Indices() {
@@ -138,6 +134,10 @@ func (tx *Transaction) GetDocument(ctx context.Context, docID string) (*model.Do
 	}
 	if len(doc.Attachments) > 0 {
 		doc.Data["_attachments"] = doc.Attachments
+	}
+	err = index.LocalSeq(ctx, tx.EngineWriteTransaction, &doc)
+	if err != nil {
+		return nil, err
 	}
 
 	return &doc, nil

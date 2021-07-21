@@ -110,12 +110,15 @@ func (t *WriteTransaction) Commit(tx *bbolt.Tx) error {
 			var seq uint64
 			seq, err = b.NextSequence()
 			if err == nil {
-				nk := op.keyWithSeq(op.arg2, seq)
+				nk, nv := op.keyWithSeq(op.arg2, seq)
 				if nk == nil { // key not changed
 					nk = op.arg2
 				}
-				log.Printf("OP put with seq %q (%d) to %q", op.arg2, len(op.arg3), op.arg1)
-				err = b.Put(nk, op.arg3)
+				if nv == nil { // value not changed
+					nv = op.arg3
+				}
+				log.Printf("OP put with seq %q (%d) to %q", nk, len(nv), op.arg1)
+				err = b.Put(nk, nv)
 			}
 		case opDelete:
 			b := tx.Bucket(op.arg1)

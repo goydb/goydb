@@ -6,9 +6,9 @@ import (
 
 const DeletedIndexName = "_deleted"
 
-func NewDeletedIndex(name string) *UniqueIndex {
+func NewDeletedIndex() *UniqueIndex {
 	return NewUniqueIndex(
-		name,
+		DeletedIndexName,
 		// key is the local sequence of the document
 		func(doc *model.Document) []byte {
 			if !doc.Deleted {
