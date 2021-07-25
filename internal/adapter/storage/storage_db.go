@@ -20,26 +20,25 @@ type Database struct {
 	databaseDir string
 	db          port.DatabaseEngine
 
-	mu       sync.RWMutex
 	listener sync.Map
 
 	indices map[string]port.DocumentIndex
 	engines map[string]port.ViewServerBuilder
 }
 
-func (d Database) ChangesIndex() port.DocumentIndex {
+func (d *Database) ChangesIndex() port.DocumentIndex {
 	return d.indices[index.ChangesIndexName]
 }
 
-func (d Database) Indices() map[string]port.DocumentIndex {
+func (d *Database) Indices() map[string]port.DocumentIndex {
 	return d.indices
 }
 
-func (d Database) Name() string {
+func (d *Database) Name() string {
 	return d.name
 }
 
-func (d Database) String() string {
+func (d *Database) String() string {
 	stats, err := d.db.Stats()
 	if err == nil {
 		return fmt.Sprintf("<Database name=%q stats=%+v>", d.name, stats)
@@ -52,7 +51,7 @@ func (d *Database) Stats(ctx context.Context) (stats model.DatabaseStats, err er
 	return d.db.Stats()
 }
 
-func (d Database) Sequence(ctx context.Context) (string, error) {
+func (d *Database) Sequence(ctx context.Context) (string, error) {
 	var seq uint64
 	err := d.Transaction(ctx, func(tx *Transaction) error {
 		seq = tx.Sequence(model.DocsBucket)

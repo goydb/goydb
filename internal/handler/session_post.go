@@ -46,8 +46,12 @@ func (s *SessionPost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	session.Save(r, w)
-	json.NewEncoder(w).Encode(resp)
+	err = session.Save(r, w)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "Failed to save.")
+		return
+	}
+	json.NewEncoder(w).Encode(resp) // nolint: errcheck
 }
 
 type SessionPostResponse struct {

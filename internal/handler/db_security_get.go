@@ -28,5 +28,5 @@ func (s *DBSecurityGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(sec)
+	json.NewEncoder(w).Encode(sec) // nolint: errcheck
 }

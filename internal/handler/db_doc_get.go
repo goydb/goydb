@@ -71,10 +71,14 @@ func (s *DBDocGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "multipart/mixed":
 		mw := NewMultipartResponse(db, w)
 		defer mw.Close()
-		mw.WriteDocument(r.Context(), dbdoc)
+		err = mw.WriteDocument(r.Context(), dbdoc)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	default:
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(dbdoc.Data)
+		json.NewEncoder(w).Encode(dbdoc.Data) // nolint: errcheck
 	}
 }
 
@@ -105,7 +109,10 @@ func (r *MultipartResponse) WriteDocument(ctx context.Context, doc *model.Docume
 	if err != nil {
 		return err
 	}
-	json.NewEncoder(jw).Encode(doc.Data)
+	err = json.NewEncoder(jw).Encode(doc.Data)
+	if err != nil {
+		return err
+	}
 
 	// attachments
 	for _, attachement := range doc.Attachments {

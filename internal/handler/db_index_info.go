@@ -55,7 +55,7 @@ func (s *DBIndexInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(response) // nolint: errcheck
 }
 
 type ViewInfoResponse struct {

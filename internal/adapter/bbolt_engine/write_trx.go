@@ -18,6 +18,7 @@ const (
 	opDeleteBucket
 	opPut
 	opPutWithSequence
+	opPutWithReusedSequence
 	opDelete
 )
 
@@ -32,6 +33,7 @@ type op struct {
 // The aim is to unblock write transactions to the database
 // by packing the transactions into a log.
 type WriteTransaction struct {
+	seq uint64
 	ReadTransaction
 	opLog []op
 }
@@ -77,6 +79,16 @@ func (t *WriteTransaction) PutWithSequence(bucket, k, v []byte, fn port.KeyWithS
 	})
 }
 
+func (t *WriteTransaction) PutWithReusedSequence(bucket, k, v []byte, fn port.KeyWithSeq) {
+	t.opLog = append(t.opLog, op{
+		code:       opPutWithReusedSequence,
+		arg1:       bucket,
+		arg2:       k,
+		arg3:       v,
+		keyWithSeq: fn,
+	})
+}
+
 func (t *WriteTransaction) Delete(bucket, k []byte) {
 	t.opLog = append(t.opLog, op{
 		code: opDelete,
@@ -102,15 +114,16 @@ func (t *WriteTransaction) Commit(tx *bbolt.Tx) error {
 				return fmt.Errorf("failed to put %q to bucket %q: no bucket", string(op.arg2), string(op.arg1))
 			}
 			err = b.Put(op.arg2, op.arg3)
-		case opPutWithSequence:
+		case opPutWithSequence, opPutWithReusedSequence:
 			b := tx.Bucket(op.arg1)
 			if b == nil {
 				return fmt.Errorf("failed to put %q to bucket %q: no bucket", string(op.arg2), string(op.arg1))
 			}
-			var seq uint64
-			seq, err = b.NextSequence()
+			if op.code == opPutWithSequence {
+				t.seq, err = b.NextSequence()
+			}
 			if err == nil {
-				nk, nv := op.keyWithSeq(op.arg2, seq)
+				nk, nv := op.keyWithSeq(op.arg2, op.arg3, t.seq)
 				if nk == nil { // key not changed
 					nk = op.arg2
 				}

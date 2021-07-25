@@ -28,7 +28,7 @@ func (a Authenticator) Authenticate(ctx context.Context, username, password stri
 		log.Println("failed to load users", err)
 		return nil
 	}
-	db.Transaction(ctx, func(tx *storage.Transaction) error {
+	err = db.Transaction(ctx, func(tx *storage.Transaction) error {
 		doc, err := tx.GetDocument(ctx, "org.couchdb.user:"+username)
 		if err != nil {
 			return err

@@ -34,7 +34,6 @@ type Iterator struct {
 	SkipLocalDoc  bool
 
 	key []byte
-	ctx context.Context
 
 	CleanKey func([]byte) string
 	KeyFn    func([]byte) []byte

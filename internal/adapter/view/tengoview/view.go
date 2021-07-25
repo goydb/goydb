@@ -59,7 +59,10 @@ func NewViewServer(fn string) (port.ViewServer, error) {
 		"base64", // base64 encoding and decoding functions
 	))
 
-	script.Add("docs", []interface{}{})
+	err := script.Add("docs", []interface{}{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to add docs: %w", err)
+	}
 
 	compiled, err := script.Compile()
 	if err != nil {

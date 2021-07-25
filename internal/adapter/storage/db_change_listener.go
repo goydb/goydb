@@ -46,7 +46,7 @@ func (d *Database) NotifyDocumentUpdate(doc *model.Document) {
 			}
 			if err != nil {
 				deletionKeys = append(deletionKeys, k)
-				log.Println("failed to update change listener, removing: %v", err)
+				log.Printf("failed to update change listener, removing: %v", err)
 			}
 			return true
 		})

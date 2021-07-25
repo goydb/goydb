@@ -1,4 +1,10 @@
-PHONY: build push
+PHONY: build push lint test
+
+test:
+	go test -race -v ./...
+
+lint:
+	go run github.com/golangci/golangci-lint/cmd/golangci-lint run
 
 build:
 	docker build -t goydb/goydb:latest .

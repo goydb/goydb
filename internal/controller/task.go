@@ -18,13 +18,10 @@ type Task struct {
 
 func (c Task) Run(ctx context.Context) {
 	t := time.NewTicker(time.Millisecond * 500)
-	for {
-		select {
-		case <-t.C:
-			err := c.ProcessAllTasks(ctx)
-			if err != nil {
-				log.Printf("Failed processing of all tasks: %v", err)
-			}
+	for range t.C {
+		err := c.ProcessAllTasks(ctx)
+		if err != nil {
+			log.Printf("Failed processing of all tasks: %v", err)
 		}
 	}
 }
@@ -41,7 +38,7 @@ func (c Task) ProcessAllTasks(ctx context.Context) error {
 			return err
 		}
 
-		c.ProcessTasksForDatabase(ctx, db)
+		err = c.ProcessTasksForDatabase(ctx, db)
 		if err != nil {
 			return err
 		}

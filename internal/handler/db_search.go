@@ -63,7 +63,7 @@ func (s *DBSearch) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
+	json.NewEncoder(w).Encode(res) // nolint: errcheck
 }
 
 type SearchResult struct {

@@ -48,7 +48,7 @@ func (u *User) VerifyPassword(password string) (bool, error) {
 		return false, err
 	}
 	dk := pbkdf2.Key([]byte(password), []byte(u.Salt), u.Iterations, userHashIterations, userHash)
-	return bytes.Compare(key, dk) == 0, nil
+	return bytes.Equal(key, dk), nil
 }
 
 // GeneratePBKDF2 generates a pbkdf in a couchdb compatible fashion

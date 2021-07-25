@@ -71,7 +71,6 @@ func (i *RegularIndex) Stats(ctx context.Context, tx port.EngineReadTransaction)
 	s := tx.BucketStats(i.bucketName)
 	si := tx.BucketStats(i.indexInvalidationBucket)
 
-	s.Documents = si.Documents // si holds the real number of documents
 	s.Allocated += si.Allocated
 	s.Used += si.Used
 
@@ -101,14 +100,20 @@ func (i *RegularIndex) UpdateStored(ctx context.Context, tx port.EngineWriteTran
 			return err
 		}
 
-		// 2. add new keys and invalidation records
+		// 2. ignore design documents and local documents when
+		//    creating the index
+		if doc.IsDesignDoc() || doc.IsLocalDoc() {
+			return nil
+		}
+
+		// 3. add new keys and invalidation records
 		keys, values := i.idxFn(ctx, doc)
 		for j, key := range keys {
 			// enable multi key
 			tx.PutWithSequence(i.bucketName, key, values[j], keyWithSeq)
 
 			// store information about the key
-			tx.PutWithSequence(i.indexInvalidationBucket, []byte(doc.ID), values[j], keyWithSeq)
+			tx.PutWithReusedSequence(i.indexInvalidationBucket, []byte(doc.ID), key, keyWithSeqInv)
 		}
 	}
 
@@ -133,7 +138,10 @@ func (i *RegularIndex) RemoveOldKeys(tx port.EngineWriteTransaction, doc *model.
 
 	for k, v := c.Seek([]byte(doc.ID)); k != nil; k, v = c.Next() {
 		// compare key
-		if !bytes.Equal(k[:keyLen(k)], []byte(doc.ID)) {
+		if len(k) < len(doc.ID) {
+			break
+		}
+		if !bytes.Equal(k[:len(doc.ID)], []byte(doc.ID)) {
 			break // not the same document
 		}
 
@@ -175,13 +183,22 @@ func (i *RegularIndex) IteratorOptions(ctx context.Context) (*model.IteratorOpti
 	return iter, nil
 }
 
-func keyWithSeq(key []byte, seq uint64) ([]byte, []byte) {
+func keyWithSeq(key, _ []byte, seq uint64) ([]byte, []byte) {
 	lkey := len(key)
 	mk := make([]byte, lkey+8+2)
 	copy(mk[:lkey], key)
 	binary.BigEndian.PutUint64(mk[lkey:], seq)
 	binary.BigEndian.PutUint16(mk[lkey+8:], uint16(lkey))
 	return mk, nil
+}
+
+func keyWithSeqInv(_, value []byte, seq uint64) ([]byte, []byte) {
+	lkey := len(value)
+	mk := make([]byte, lkey+8+2)
+	copy(mk[:lkey], value)
+	binary.BigEndian.PutUint64(mk[lkey:], seq)
+	binary.BigEndian.PutUint16(mk[lkey+8:], uint16(lkey))
+	return nil, mk
 }
 
 func keyLen(key []byte) uint16 {

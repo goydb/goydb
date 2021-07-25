@@ -54,7 +54,7 @@ func (s *DBDocDelete) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	resp.Ok = true
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	json.NewEncoder(w).Encode(resp) // nolint: errcheck
 }
 
 type SimpleDocResponse struct {

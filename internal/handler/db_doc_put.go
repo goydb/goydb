@@ -35,7 +35,11 @@ func (s *DBDocPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var attachments map[string]*model.Attachment
-	mapstructure.Decode(doc["_attachments"], &attachments)
+	err = mapstructure.Decode(doc["_attachments"], &attachments)
+	if err != nil || !docIDok {
+		WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	rev, err := db.PutDocument(r.Context(), &model.Document{
 		ID:          docID,
@@ -54,5 +58,5 @@ func (s *DBDocPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	doc["_rev"] = rev
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(doc)
+	json.NewEncoder(w).Encode(doc) // nolint: errcheck
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"log"
 
 	"github.com/caarlos0/env/v6"
 	"github.com/gorilla/mux"
@@ -95,7 +96,10 @@ func (c *Config) BuildDatabase() (*Goydb, error) {
 
 	r := mux.NewRouter()
 	for _, c := range c.Containers {
-		public.MountContainer(r, c)
+		err = public.MountContainer(r, c)
+		if err != nil {
+			log.Printf("failed to mount container %q: %v", c.FolderName(), err)
+		}
 	}
 	gdb.Handler = r
 

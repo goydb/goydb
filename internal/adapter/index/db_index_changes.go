@@ -74,11 +74,11 @@ func (i *ChangesIndex) UpdateStored(ctx context.Context, tx port.EngineWriteTran
 	defer i.mu.Unlock()
 
 	for _, doc := range docs {
-		tx.PutWithSequence([]byte(ChangesIndexName), nil, []byte(doc.ID), func(_ []byte, seq uint64) (newKey []byte, newValue []byte) {
+		tx.PutWithSequence([]byte(ChangesIndexName), nil, []byte(doc.ID), func(_, _ []byte, seq uint64) (newKey []byte, newValue []byte) {
 			return uint64ToKey(seq), nil
 		})
 		// also add invalidation record
-		tx.PutWithSequence([]byte(ChangesIndexInvalidationName), []byte(doc.ID), nil, func(_ []byte, seq uint64) (newKey []byte, newValue []byte) {
+		tx.PutWithSequence([]byte(ChangesIndexInvalidationName), []byte(doc.ID), nil, func(_, _ []byte, seq uint64) (newKey []byte, newValue []byte) {
 			return nil, uint64ToKey(seq - 1)
 		})
 	}

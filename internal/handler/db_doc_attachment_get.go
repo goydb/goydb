@@ -34,5 +34,5 @@ func (s *DBDocAttachmentGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer a.Reader.Close()
 
 	w.Header().Set("Content-Type", a.ContentType)
-	io.Copy(w, a.Reader)
+	io.Copy(w, a.Reader) // nolint: errcheck
 }

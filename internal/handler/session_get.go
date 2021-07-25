@@ -35,7 +35,7 @@ func (s *SessionGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	json.NewEncoder(w).Encode(resp) // nolint: errcheck
 }
 
 type SessionResponse struct {

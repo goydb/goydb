@@ -15,10 +15,6 @@ import (
 	"github.com/goydb/goydb/pkg/port"
 )
 
-const (
-	searchBucket = "_searches"
-)
-
 var _ port.DocumentIndex = (*ExternalSearchIndex)(nil)
 var _ port.DocumentIndexSourceUpdate = (*ExternalSearchIndex)(nil)
 
@@ -243,7 +239,7 @@ func (i *ExternalSearchIndex) UpdateMapping(docs []*model.Document) error {
 	cfg := make(map[string]struct{})
 
 	// Step 1 load config from mapping
-	for name, _ := range i.mapping.DefaultMapping.Properties {
+	for name := range i.mapping.DefaultMapping.Properties {
 		cfg[name] = struct{}{}
 	}
 

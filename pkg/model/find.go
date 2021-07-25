@@ -535,7 +535,6 @@ func (fs FieldSelector) Match(df DocumentField) (bool, error) {
 	default:
 		return false, fmt.Errorf("undefined operation: %q", fs.Operation)
 	}
-	return false, nil
 }
 
 type SelectorValueType int

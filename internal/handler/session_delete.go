@@ -24,5 +24,5 @@ func (s *SessionDelete) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c := http.Cookie{Name: sessionName, MaxAge: -1}
 	http.SetCookie(w, &c)
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"ok":true}`))
+	w.Write([]byte(`{"ok":true}`)) // nolint: errcheck
 }

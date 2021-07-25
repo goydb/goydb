@@ -15,11 +15,7 @@ type Router struct {
 }
 
 func (router Router) Build(r *mux.Router) error {
-	b := Base{
-		Storage:      router.Storage,
-		SessionStore: router.SessionStore,
-		Admins:       router.Admins,
-	}
+	b := Base(router)
 
 	r.Methods("GET").Path("/_all_dbs").Handler(&DBAll{Base: b})
 	r.Methods("GET").Path("/_uuids").Handler(&UUIDs{})

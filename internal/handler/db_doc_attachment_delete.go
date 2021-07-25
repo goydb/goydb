@@ -32,5 +32,5 @@ func (s *DBDocAttachmentDelete) ServeHTTP(w http.ResponseWriter, r *http.Request
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"ok":true}`))
+	w.Write([]byte(`{"ok":true}`)) // nolint: errcheck
 }

@@ -25,5 +25,5 @@ func (s *DBAll) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	sort.Stable(sort.StringSlice(names))
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(names)
+	json.NewEncoder(w).Encode(names) // nolint: errcheck
 }

@@ -13,7 +13,7 @@ func WriteError(w http.ResponseWriter, status int, reason string) {
 	statusText = strings.ReplaceAll(statusText, "'", "")
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(ErrorResponse{
+	json.NewEncoder(w).Encode(ErrorResponse{ // nolint: errcheck
 		Error:  statusText,
 		Reason: reason,
 	})
