@@ -18,14 +18,14 @@ func (s *DBCreate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	db := Database{Base: s.Base}.Do(w, r)
+	dbName := mux.Vars(r)["db"]
+	db, err := s.Storage.Database(r.Context(), dbName)
 	if db != nil {
 		WriteError(w, http.StatusConflict, "Database already exists.")
 		return
 	}
 
-	dbName := mux.Vars(r)["db"]
-	_, err := s.Storage.CreateDatabase(r.Context(), dbName)
+	_, err = s.Storage.CreateDatabase(r.Context(), dbName)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, err.Error())
 		return

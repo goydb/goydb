@@ -82,6 +82,7 @@ func (c *Config) BuildDatabase() (*Goydb, error) {
 
 	s, err := storage.Open(
 		c.DatabaseDir,
+		storage.WithEngine("", gojaview.NewViewServer), // default langage
 		storage.WithEngine("javascript", gojaview.NewViewServer),
 		storage.WithEngine("tengo", tengoview.NewViewServer),
 	)
