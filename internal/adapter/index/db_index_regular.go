@@ -103,7 +103,7 @@ func (i *RegularIndex) UpdateStored(ctx context.Context, tx port.EngineWriteTran
 		// 2. ignore design documents and local documents when
 		//    creating the index
 		if doc.IsDesignDoc() || doc.IsLocalDoc() {
-			return nil
+			continue
 		}
 
 		// 3. add new keys and invalidation records

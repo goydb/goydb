@@ -8,6 +8,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/internal/adapter/storage"
+	"github.com/goydb/goydb/internal/controller"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 )
@@ -76,7 +77,7 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var q port.AllDocsQuery
 	q.Skip = intOption("skip", 0, options)
-	q.Limit = intOption("limit", 0, options)
+	q.Limit = intOption("limit", 100, options)
 	q.DDFN = &model.DesignDocFn{
 		Type:        model.ViewFn,
 		DesignDocID: docID,
@@ -89,12 +90,12 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var docs []*model.Document
 	var err error
 	if boolOption("reduce", true, options) {
-		/* FIXME
-		docs, total, err = controller.DesignDoc{
-			DB:        db,
-			SourceDoc: doc,
-			FnName:    viewName,
-		}.ReduceDocs(r.Context(), q)*/
+		err = db.Transaction(r.Context(), func(tx *storage.Transaction) error {
+			docs, total, err = controller.DesignDoc{
+				DB: db,
+			}.ReduceDocs(r.Context(), tx, idx, q, viewName)
+			return err
+		})
 	} else {
 		//docs, total, err = db.AllDocs(r.Context(), q)
 		err = db.Transaction(r.Context(), func(tx *storage.Transaction) error {

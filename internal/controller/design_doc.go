@@ -12,8 +12,7 @@ import (
 type ReducerFunc func(docs []*model.Document, doc *model.Document, group bool) []*model.Document
 
 type DesignDoc struct {
-	DB        *storage.Database
-	SourceDoc *model.Document
+	DB *storage.Database
 }
 
 func (v DesignDoc) Rebuild(ctx context.Context, task *model.Task, idx port.DocumentIndex) error {
