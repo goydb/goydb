@@ -12,18 +12,20 @@ import (
 )
 
 type Storage struct {
-	path    string
-	dbs     map[string]*Database
-	mu      sync.RWMutex
-	engines port.ViewEngines
+	path           string
+	dbs            map[string]*Database
+	mu             sync.RWMutex
+	viewEngines    port.ViewEngines
+	reducerEngines port.ReducerEngines
 }
 
 type StorageOption func(s *Storage) error
 
 func Open(path string, options ...StorageOption) (*Storage, error) {
 	s := &Storage{
-		path:    path,
-		engines: make(port.ViewEngines),
+		path:           path,
+		viewEngines:    make(port.ViewEngines),
+		reducerEngines: make(port.ReducerEngines),
 	}
 
 	for _, option := range options {
@@ -71,11 +73,19 @@ func (s *Storage) ReloadDatabases(ctx context.Context) error {
 	return nil
 }
 
-func (s *Storage) RegisterEngine(name string, builder port.ViewServerBuilder) error {
-	if _, ok := s.engines[name]; ok {
-		return fmt.Errorf("engine with name %q already registered", name)
+func (s *Storage) RegisterViewEngine(name string, builder port.ViewServerBuilder) error {
+	if _, ok := s.viewEngines[name]; ok {
+		return fmt.Errorf("view engine with name %q already registered", name)
 	}
-	s.engines[name] = builder
+	s.viewEngines[name] = builder
+	return nil
+}
+
+func (s *Storage) RegisterReducerEngine(name string, builder port.ReducerServerBuilder) error {
+	if _, ok := s.reducerEngines[name]; ok {
+		return fmt.Errorf("reducer engine with name %q already registered", name)
+	}
+	s.reducerEngines[name] = builder
 	return nil
 }
 
@@ -94,8 +104,14 @@ func (s *Storage) Close() error {
 	return nil
 }
 
-func WithEngine(name string, builder port.ViewServerBuilder) StorageOption {
+func WithViewEngine(name string, builder port.ViewServerBuilder) StorageOption {
 	return func(s *Storage) error {
-		return s.RegisterEngine(name, builder)
+		return s.RegisterViewEngine(name, builder)
+	}
+}
+
+func WithReducerEngine(name string, builder port.ReducerServerBuilder) StorageOption {
+	return func(s *Storage) error {
+		return s.RegisterReducerEngine(name, builder)
 	}
 }

@@ -22,8 +22,9 @@ type Database struct {
 
 	listener sync.Map
 
-	indices map[string]port.DocumentIndex
-	engines map[string]port.ViewServerBuilder
+	indices        map[string]port.DocumentIndex
+	viewEngines    map[string]port.ViewServerBuilder
+	reducerEngines map[string]port.ReducerServerBuilder
 }
 
 func (d *Database) ChangesIndex() port.DocumentIndex {
@@ -63,6 +64,14 @@ func (d *Database) Sequence(ctx context.Context) (string, error) {
 	return strconv.FormatUint(seq, 10), nil
 }
 
+func (d *Database) ViewEngine(name string) port.ViewServerBuilder {
+	return d.viewEngines[name]
+}
+
+func (d *Database) ReducerEngine(name string) port.ReducerServerBuilder {
+	return d.reducerEngines[name]
+}
+
 func (s *Storage) CreateDatabase(ctx context.Context, name string) (*Database, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -84,7 +93,8 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (*Database, e
 			index.ChangesIndexName: index.NewChangesIndex(),
 			index.DeletedIndexName: index.NewDeletedIndex(),
 		},
-		engines: s.engines,
+		viewEngines:    s.viewEngines,
+		reducerEngines: s.reducerEngines,
 	}
 	s.dbs[name] = database
 

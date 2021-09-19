@@ -82,9 +82,11 @@ func (c *Config) BuildDatabase() (*Goydb, error) {
 
 	s, err := storage.Open(
 		c.DatabaseDir,
-		storage.WithEngine("", gojaview.NewViewServer), // default langage
-		storage.WithEngine("javascript", gojaview.NewViewServer),
-		storage.WithEngine("tengo", tengoview.NewViewServer),
+		storage.WithViewEngine("", gojaview.NewViewServer), // default langage
+		storage.WithViewEngine("javascript", gojaview.NewViewServer),
+		storage.WithViewEngine("tengo", tengoview.NewViewServer),
+		storage.WithReducerEngine("", gojaview.NewReducer),
+		storage.WithReducerEngine("javascript", gojaview.NewReducer),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database dir: %w", err)

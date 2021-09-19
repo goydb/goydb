@@ -88,9 +88,9 @@ func (d *Database) BuildFnIndices(ctx context.Context, tx port.EngineWriteTransa
 	var disu port.DocumentIndexSourceUpdate
 	switch vf.Type {
 	case model.ViewFn:
-		disu = index.NewViewIndex(ddfn, d.engines)
+		disu = index.NewViewIndex(ddfn, d.viewEngines)
 	case model.SearchFn:
-		disu = index.NewExternalSearchIndex(ddfn, d.engines, d.searchIndexPath(ddfn.String()))
+		disu = index.NewExternalSearchIndex(ddfn, d.viewEngines, d.searchIndexPath(ddfn.String()))
 	// TODO: mango index
 	default:
 		return fmt.Errorf("invalid view function type %q for function %q", vf.Type, ddfn.String())
