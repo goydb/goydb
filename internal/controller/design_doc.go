@@ -72,9 +72,9 @@ func (v DesignDoc) Rebuild(ctx context.Context, task *model.Task, idx port.Docum
 	return nil
 }
 
-func (v DesignDoc) ReduceDocs(ctx context.Context, tx *storage.Transaction, idx port.DocumentIndex, opts port.AllDocsQuery, ReduceFn string) ([]*model.Document, int, error) {
+func (v DesignDoc) ReduceDocs(ctx context.Context, tx *storage.Transaction, idx port.DocumentIndex, opts port.AllDocsQuery, view *model.View) ([]*model.Document, int, error) {
 	var reducer ReducerFunc
-	switch ReduceFn {
+	switch view.ReduceFn {
 	case "_sum":
 		reducer = _sum
 	case "_count":

@@ -177,6 +177,32 @@ func (doc *Document) Functions() []*Function {
 	return functions
 }
 
+func (doc *Document) View(name string) (view *View, ok bool) {
+	views, ok := doc.Data["views"].(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+
+	viewInterface, ok := views[name]
+	if !ok {
+		return nil, false
+	}
+
+	viewData, ok := viewInterface.(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+
+	mapFn, _ := viewData["map"].(string)
+	reduceFn, _ := viewData["reduce"].(string)
+
+	return &View{
+		Language: doc.Language(),
+		MapFn:    mapFn,
+		ReduceFn: reduceFn,
+	}, true
+}
+
 func (doc *Document) Field(path string) interface{} {
 	parts := strings.Split(path, ".")
 	v := reflect.ValueOf(doc.Data)

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -91,9 +92,20 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var err error
 	if boolOption("reduce", true, options) {
 		err = db.Transaction(r.Context(), func(tx *storage.Transaction) error {
-			docs, total, err = controller.DesignDoc{
-				DB: db,
-			}.ReduceDocs(r.Context(), tx, idx, q, viewName)
+			designDoc, err := tx.GetDocument(r.Context(), docID)
+			if err != nil {
+				return err
+			}
+
+			view, ok := designDoc.View(ddfn.FnName)
+			if ok {
+				docs, total, err = controller.DesignDoc{
+					DB: db,
+				}.ReduceDocs(r.Context(), tx, idx, q, view)
+			} else {
+				err = fmt.Errorf("unknown view function name: %q", ddfn.FnName)
+			}
+
 			return err
 		})
 	} else {
