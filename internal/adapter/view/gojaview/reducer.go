@@ -3,18 +3,20 @@ package gojaview
 import (
 	"fmt"
 	"log"
+	"reflect"
 
 	"github.com/dop251/goja"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 )
 
-const reduceOver = 100
+const reduceOver = 1000
 
 type Reducer struct {
 	vm          *goja.Runtime
 	reducedDocs []*model.Document
-	docs        []*model.Document
+	keys        []interface{}
+	values      []interface{}
 	reduceOver  int
 }
 
@@ -28,7 +30,7 @@ func NewReducer(source string) (port.Reducer, error) {
 	function sum(values) {
 		var _sum = 0;
 		values.forEach(function (value) {
-			_sum += value
+			_sum += value;
 		});
 		return _sum;
 	}`
@@ -48,32 +50,29 @@ func NewReducer(source string) (port.Reducer, error) {
 	}, nil
 }
 
-func (r *Reducer) Reduce(doc *model.Document, group bool) {
-	r.docs = append(r.docs, doc)
+func (r *Reducer) Reduce(doc *model.Document) {
+	r.reduceDoc(doc, false)
+}
 
-	if len(r.docs) > 0 && len(r.docs)%r.reduceOver == 0 {
-		r.reduce(false)
+func (r *Reducer) reduceDoc(doc *model.Document, rereduce bool) {
+	tooManyElements := len(r.keys) > 0 && len(r.keys)%r.reduceOver == 0
+	keyChange := len(r.keys) > 0 && !reflect.DeepEqual(r.keys[len(r.keys)-1], doc.Key)
+
+	if tooManyElements || keyChange {
+		r.reduce(rereduce)
 	}
+
+	r.keys = append(r.keys, doc.Key)
+	r.values = append(r.values, doc.Value)
 }
 
 func (r *Reducer) reduce(rereduce bool) {
+	keys := r.keys
+	values := r.values
+	r.keys = nil
+	r.values = nil
+
 	r.vm.Set("rereduce", rereduce)
-	var docs []*model.Document
-
-	if rereduce {
-		docs = r.reducedDocs
-		r.reducedDocs = nil
-	} else {
-		docs = r.docs
-		r.docs = nil
-	}
-
-	keys := make([]interface{}, len(docs))
-	values := make([]interface{}, len(docs))
-	for i, doc := range docs {
-		keys[i] = doc.Key
-		values[i] = doc.Value
-	}
 	r.vm.Set("_keys", keys)
 	r.vm.Set("_values", values)
 	_, err := r.vm.RunString(`_result = reduceFn(_keys, _values, rereduce);`)
@@ -86,17 +85,33 @@ func (r *Reducer) reduce(rereduce bool) {
 		log.Printf("JS ERR: unable to export")
 	}
 
-	// fmt.Println(resultData)
 	r.reducedDocs = append(r.reducedDocs, &model.Document{
-		Key:   nil,
+		Key:   keys[0],
 		Value: resultData,
 	})
 }
 
-func (r *Reducer) Result() []*model.Document {
-	if len(r.docs) != 0 {
+func (r *Reducer) Result() map[interface{}]interface{} {
+	// check if a reduce need to happen because there
+	// are still keys and values not reduced
+	if len(r.keys) != 0 {
 		r.reduce(false)
 	}
-	r.reduce(true) // final rereduce
-	return r.reducedDocs
+
+	// add all reduced docs to as preperation
+	// for the rereduce step
+	for _, doc := range r.reducedDocs {
+		r.reduceDoc(doc, true)
+	}
+
+	// final rereduce
+	r.reduce(true)
+
+	// reformat the output
+	result := make(map[interface{}]interface{})
+	for _, doc := range r.reducedDocs {
+		result[doc.Key] = doc.Value
+	}
+
+	return result
 }

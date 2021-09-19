@@ -70,20 +70,20 @@ func (v DesignDoc) Rebuild(ctx context.Context, task *model.Task, idx port.Docum
 	return nil
 }
 
-func (v DesignDoc) ReduceDocs(ctx context.Context, tx *storage.Transaction, idx port.DocumentIndex, opts port.AllDocsQuery, view *model.View) ([]*model.Document, int, error) {
+func (v DesignDoc) ReduceDocs(ctx context.Context, tx *storage.Transaction, idx port.DocumentIndex, opts port.AllDocsQuery, view *model.View) (map[interface{}]interface{}, int, error) {
 	var r port.Reducer
 	switch view.ReduceFn {
 	case "_sum":
-		r = new(reducer.Sum)
+		r = reducer.NewSum()
 	case "_count":
-		r = new(reducer.Count)
+		r = reducer.NewCount()
 	case "_stats":
 		r = reducer.NewStats()
 	case "_approx_count_distinct":
 		// FIXME: this is not giving the same speed but the correctness
 		r = new(reducer.Count)
 	case "": // NONE
-		r = new(reducer.None)
+		r = reducer.NewNone()
 	default: // CUSTOM
 		var err error
 		r, err = v.DB.ReducerEngine(view.Language)(view.ReduceFn)
@@ -103,12 +103,17 @@ func (v DesignDoc) ReduceDocs(ctx context.Context, tx *storage.Transaction, idx 
 		return nil, 0, nil
 	}
 	for doc := i.First(); i.Continue(); doc = i.Next() {
-		r.Reduce(doc, opts.ViewGroup)
+		// if the view group is 0 all values should be treated without the key
+		if opts.ViewGroup == "0" {
+			doc.Key = nil
+		}
+
+		// TODO: implement other group levels using 1-10 if key is
+		// an array
+
+		r.Reduce(doc)
 	}
 
 	docs := r.Result()
-	if !opts.ViewGroup && len(docs) == 1 {
-		docs[0].Key = nil
-	}
 	return docs, total, nil
 }

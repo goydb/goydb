@@ -1,43 +1,47 @@
 package reducer
 
 import (
-	"reflect"
-
 	"github.com/goydb/goydb/pkg/model"
 )
 
 type Sum struct {
-	docs []*model.Document
+	result map[interface{}]interface{}
 }
 
-func (r *Sum) Reduce(doc *model.Document, group bool) {
-	docs := r.docs
-
-	v, ok := doc.Value.(int64)
-	if ok {
-		if len(docs) == 0 {
-			docs = []*model.Document{
-				{
-					Key:   doc.Key,
-					Value: v,
-				},
-			}
-		} else {
-			i := len(docs) - 1
-			if group && !reflect.DeepEqual(docs[i].Key, doc.Key) {
-				docs = append(docs, &model.Document{
-					Key:   doc.Key,
-					Value: v,
-				})
-				i++
-			}
-			docs[i].Value = docs[i].Value.(int64) + v
-		}
+func NewSum() *Sum {
+	return &Sum{
+		result: make(map[interface{}]interface{}),
 	}
-
-	r.docs = docs
 }
 
-func (r *Sum) Result() []*model.Document {
-	return r.docs
+// Reduce will sum up using int64 if integer values are used,
+// and switch to float64 as soon as decimal values are used.
+func (r *Sum) Reduce(doc *model.Document) {
+	value, ok := r.result[doc.Key]
+
+	if ok {
+		if cur, ok := value.(int64); ok {
+			if add, ok := doc.Value.(int64); ok {
+				r.result[doc.Key] = cur + add
+			}
+			if add, ok := doc.Value.(float64); ok {
+				// switch to decimal value
+				r.result[doc.Key] = float64(cur) + add
+			}
+		}
+		if cur, ok := value.(float64); ok {
+			if add, ok := doc.Value.(int64); ok {
+				r.result[doc.Key] = cur + float64(add)
+			}
+			if add, ok := doc.Value.(float64); ok {
+				r.result[doc.Key] = cur + add
+			}
+		}
+	} else {
+		r.result[doc.Key] = doc.Value
+	}
+}
+
+func (r *Sum) Result() map[interface{}]interface{} {
+	return r.result
 }

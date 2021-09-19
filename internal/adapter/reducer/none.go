@@ -5,13 +5,19 @@ import (
 )
 
 type None struct {
-	docs []*model.Document
+	result map[interface{}]interface{}
 }
 
-func (r *None) Reduce(doc *model.Document, group bool) {
-	r.docs = append(r.docs, doc)
+func NewNone() *Count {
+	return &Count{
+		result: make(map[interface{}]interface{}),
+	}
 }
 
-func (r *None) Result() []*model.Document {
-	return r.docs
+func (r *None) Reduce(doc *model.Document) {
+	r.result[doc.ID] = doc
+}
+
+func (r *None) Result() map[interface{}]interface{} {
+	return r.result
 }

@@ -1,40 +1,29 @@
 package reducer
 
 import (
-	"reflect"
-
 	"github.com/goydb/goydb/pkg/model"
 )
 
 type Count struct {
-	docs []*model.Document
+	result map[interface{}]interface{}
 }
 
-func (r *Count) Reduce(doc *model.Document, group bool) {
-	docs := r.docs
-
-	if len(docs) == 0 {
-		docs = []*model.Document{
-			{
-				Key:   doc.Key,
-				Value: int64(1),
-			},
-		}
-	} else {
-		i := len(docs) - 1
-		if group && !reflect.DeepEqual(docs[i].Key, doc.Key) {
-			docs = append(docs, &model.Document{
-				Key:   doc.Key,
-				Value: int64(0),
-			})
-			i++
-		}
-		docs[i].Value = docs[i].Value.(int64) + 1
+func NewCount() *Count {
+	return &Count{
+		result: make(map[interface{}]interface{}),
 	}
-
-	r.docs = docs
 }
 
-func (r *Count) Result() []*model.Document {
-	return r.docs
+func (r *Count) Reduce(doc *model.Document) {
+	value, ok := r.result[doc.Key]
+
+	if ok {
+		r.result[doc.Key] = value.(int64) + 1
+	} else {
+		r.result[doc.Key] = int64(1)
+	}
+}
+
+func (r *Count) Result() map[interface{}]interface{} {
+	return r.result
 }

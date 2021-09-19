@@ -85,10 +85,10 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		FnName:      viewName,
 	}
 	q.IncludeDocs = boolOption("include_docs", false, options)
-	q.ViewGroup = boolOption("group", false, options)
+	q.ViewGroup = stringOption("group", "", options)
 
 	var total int
-	var docs []*model.Document
+	var docs map[interface{}]interface{}
 	var err error
 	if boolOption("reduce", true, options) {
 		err = db.Transaction(r.Context(), func(tx *storage.Transaction) error {
@@ -109,7 +109,7 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return err
 		})
 	} else {
-		//docs, total, err = db.AllDocs(r.Context(), q)
+		docs = make(map[interface{}]interface{})
 		err = db.Transaction(r.Context(), func(tx *storage.Transaction) error {
 			iter, err := db.IndexIterator(r.Context(), tx, idx)
 			if err != nil {
@@ -119,7 +119,7 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			iter.SetSkip(int(q.Skip))
 			iter.SetLimit(int(q.Limit))
 			for doc := iter.First(); iter.Continue(); doc = iter.Next() {
-				docs = append(docs, doc)
+				docs[doc.ID] = doc
 			}
 			total = iter.Remaining() + len(docs)
 
@@ -137,18 +137,25 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Rows:      make([]Rows, len(docs)),
 	}
 
-	for i, doc := range docs {
-		response.Rows[i].ID = doc.ID
-		response.Rows[i].Key = doc.Key
-		response.Rows[i].Value = doc.Value
-		if q.IncludeDocs && doc.Data != nil {
-			response.Rows[i].Doc = doc.Data
-			response.Rows[i].Doc["_id"] = doc.ID
-			response.Rows[i].Doc["_rev"] = doc.Rev
-			if doc.Deleted {
-				response.Rows[i].Doc["_deleted"] = doc.Deleted
+	i := 0
+	for key, value := range docs {
+		if doc, ok := value.(*model.Document); ok {
+			response.Rows[i].ID = doc.ID
+			response.Rows[i].Key = doc.Key
+			response.Rows[i].Value = doc.Value
+			if q.IncludeDocs && doc.Data != nil {
+				response.Rows[i].Doc = doc.Data
+				response.Rows[i].Doc["_id"] = doc.ID
+				response.Rows[i].Doc["_rev"] = doc.Rev
+				if doc.Deleted {
+					response.Rows[i].Doc["_deleted"] = doc.Deleted
+				}
 			}
+		} else {
+			response.Rows[i].Key = key
+			response.Rows[i].Value = value
 		}
+		i++
 	}
 
 	w.Header().Set("Content-Type", "application/json")

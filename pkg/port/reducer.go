@@ -7,6 +7,6 @@ type ReducerEngines map[string]ReducerServerBuilder
 type ReducerServerBuilder func(fn string) (Reducer, error)
 
 type Reducer interface {
-	Reduce(doc *model.Document, group bool)
-	Result() []*model.Document
+	Reduce(doc *model.Document)
+	Result() map[interface{}]interface{}
 }

@@ -16,7 +16,7 @@ type AllDocsQuery struct {
 	// view options
 	DDFN        *model.DesignDocFn
 	IncludeDocs bool
-	ViewGroup   bool
+	ViewGroup   string
 }
 
 type Observer interface {
