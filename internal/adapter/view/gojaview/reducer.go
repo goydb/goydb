@@ -77,14 +77,10 @@ func (r *Reducer) reduce(rereduce bool) {
 	r.vm.Set("_values", values)
 	_, err := r.vm.RunString(`_result = reduceFn(_keys, _values, rereduce);`)
 	if err != nil {
-		log.Printf("JS ERR: #v", err)
+		log.Printf("JS ERR: %#v", err)
 	}
 
-	resultData, ok := r.vm.Get("_result").Export().(interface{})
-	if !ok {
-		log.Printf("JS ERR: unable to export")
-	}
-
+	resultData := r.vm.Get("_result").Export()
 	r.reducedDocs = append(r.reducedDocs, &model.Document{
 		Key:   keys[0],
 		Value: resultData,
