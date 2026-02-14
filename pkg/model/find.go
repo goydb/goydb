@@ -339,9 +339,8 @@ func (sg SelectorGroup) Match(df DocumentField) (bool, error) {
 			}
 		}
 		return true, nil // no match
-	default:
-		panic(fmt.Errorf("undefined operation: %q", sg.Operation))
 	}
+	panic(fmt.Errorf("undefined operation: %q", sg.Operation))
 }
 
 type SelectorOp string

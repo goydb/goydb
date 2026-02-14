@@ -112,7 +112,7 @@ func (i *ExternalSearchIndex) Ensure(ctx context.Context, tx port.EngineWriteTra
 	// needs to be opened
 	index, err := bleve.Open(i.path)
 	if err != nil {
-		return fmt.Errorf("failed to open search index %q: %w", i.path, index)
+		return fmt.Errorf("failed to open search index %q: %w", i.path, err)
 	}
 
 	// there is no other way to access the index mapping implementation
