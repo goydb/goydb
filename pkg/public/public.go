@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"path"
@@ -19,7 +18,7 @@ type Public struct {
 }
 
 func (p Public) Mount(r *mux.Router) error {
-	files, err := ioutil.ReadDir(p.Dir)
+	files, err := os.ReadDir(p.Dir)
 	if err != nil {
 		return err
 	}
@@ -40,7 +39,7 @@ func (p Public) Mount(r *mux.Router) error {
 	return nil
 }
 
-func IsZipFile(f os.FileInfo) bool {
+func IsZipFile(f os.DirEntry) bool {
 	return !f.IsDir() && path.Ext(f.Name()) == ".zip"
 }
 

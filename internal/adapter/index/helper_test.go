@@ -2,7 +2,6 @@ package index_test
 
 import (
 	"context"
-	"io/ioutil"
 	"os"
 	"testing"
 
@@ -13,7 +12,7 @@ import (
 
 func WithTestStorage(t *testing.T, fn func(ctx context.Context, s *storage.Storage)) {
 	ctx := context.Background()
-	dir, err := ioutil.TempDir(os.TempDir(), "goydb-test-*")
+	dir, err := os.MkdirTemp(os.TempDir(), "goydb-test-*")
 	require.NoError(t, err)
 	defer os.RemoveAll(dir)
 

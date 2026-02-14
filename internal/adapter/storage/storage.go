@@ -3,7 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"log"
 	"path"
 	"sync"
@@ -47,7 +47,7 @@ func (s *Storage) String() string {
 }
 
 func (s *Storage) ReloadDatabases(ctx context.Context) error {
-	files, err := ioutil.ReadDir(s.path)
+	files, err := os.ReadDir(s.path)
 	if err != nil {
 		return err
 	}

@@ -43,7 +43,7 @@ func (s *ViewServer) ExecuteView(ctx context.Context, docs []*model.Document) ([
 		simpleDocs[i] = doc.Data
 	}
 
-	s.vm.Set("docs", simpleDocs)
+	_ = s.vm.Set("docs", simpleDocs)
 
 	_, err := s.vm.RunString(`_result = [];
 	docs.forEach(function (doc) {

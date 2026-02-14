@@ -34,7 +34,7 @@ func NewReducer(source string) (port.Reducer, error) {
 		});
 		return _sum;
 	}`
-	vm.Set("println", fmt.Println)
+	_ = vm.Set("println", fmt.Println)
 	_, err := vm.RunString(fn)
 	if err != nil {
 		return nil, fmt.Errorf("script error %v: %w", fn, err)
@@ -72,9 +72,9 @@ func (r *Reducer) reduce(rereduce bool) {
 	r.keys = nil
 	r.values = nil
 
-	r.vm.Set("rereduce", rereduce)
-	r.vm.Set("_keys", keys)
-	r.vm.Set("_values", values)
+	_ = r.vm.Set("rereduce", rereduce)
+	_ = r.vm.Set("_keys", keys)
+	_ = r.vm.Set("_values", values)
 	_, err := r.vm.RunString(`_result = reduceFn(_keys, _values, rereduce);`)
 	if err != nil {
 		log.Printf("JS ERR: %#v", err)
