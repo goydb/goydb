@@ -95,6 +95,10 @@ func (c *Config) BuildDatabase() (*Goydb, error) {
 		Storage: s,
 	}
 	go tc.Run(context.Background())
+	rc := &controller.Replication{
+		Storage: s,
+	}
+	go rc.Run(context.Background())
 	gdb.Storage = s
 
 	r := mux.NewRouter()
