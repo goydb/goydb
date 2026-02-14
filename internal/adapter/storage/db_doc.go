@@ -26,6 +26,12 @@ func (d *Database) PutDocument(ctx context.Context, doc *model.Document) (string
 	return rev, err
 }
 
+func (d *Database) PutDocumentForReplication(ctx context.Context, doc *model.Document) error {
+	return d.Transaction(ctx, func(tx *Transaction) error {
+		return tx.PutDocumentForReplication(ctx, doc)
+	})
+}
+
 func (d *Database) GetDocument(ctx context.Context, docID string) (*model.Document, error) {
 	var doc *model.Document
 	err := d.Transaction(ctx, func(tx *Transaction) error {
