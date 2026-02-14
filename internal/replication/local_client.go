@@ -1,0 +1,221 @@
+package replication
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+
+	"github.com/goydb/goydb/internal/adapter/storage"
+	"github.com/goydb/goydb/pkg/model"
+)
+
+// LocalDB adapts a storage.Database to the Peer interface
+type LocalDB struct {
+	Storage *storage.Storage
+	DBName  string
+}
+
+var _ Peer = (*LocalDB)(nil)
+
+func (l *LocalDB) db(ctx context.Context) (*storage.Database, error) {
+	return l.Storage.Database(ctx, l.DBName)
+}
+
+func (l *LocalDB) Head(ctx context.Context) error {
+	_, err := l.db(ctx)
+	return err
+}
+
+func (l *LocalDB) GetDBInfo(ctx context.Context) (*DBInfo, error) {
+	db, err := l.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	seq, err := db.Sequence(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DBInfo{
+		DBName:    l.DBName,
+		UpdateSeq: seq,
+	}, nil
+}
+
+func (l *LocalDB) GetLocalDoc(ctx context.Context, docID string) (*model.Document, error) {
+	db, err := l.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	fullID := string(model.LocalDocPrefix) + docID
+	doc, err := db.GetDocument(ctx, fullID)
+	if err != nil {
+		return nil, err
+	}
+	if doc == nil {
+		return nil, fmt.Errorf("local doc %q not found", docID)
+	}
+	return doc, nil
+}
+
+func (l *LocalDB) PutLocalDoc(ctx context.Context, doc *model.Document) error {
+	db, err := l.db(ctx)
+	if err != nil {
+		return err
+	}
+
+	_, err = db.PutDocument(ctx, doc)
+	return err
+}
+
+func (l *LocalDB) GetChanges(ctx context.Context, since string, limit int) (*ChangesResponse, error) {
+	db, err := l.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	sinceSeq, sinceErr := strconv.ParseUint(since, 10, 64)
+	hasSince := sinceErr == nil && since != "" && since != "0"
+
+	// Get all doc IDs from the docs bucket using a cursor directly.
+	// This avoids the changes index iterator (which stores seq->docID mappings
+	// that aren't bson-encoded documents) and the long-polling behavior of Changes().
+	var allDocIDs []string
+	err = db.Transaction(ctx, func(tx *storage.Transaction) error {
+		cursor := tx.Cursor(model.DocsBucket)
+		for k, _ := cursor.First(); k != nil; k, _ = cursor.Next() {
+			docID := string(k)
+			// Skip local docs
+			if len(docID) >= 7 && docID[:7] == "_local/" {
+				continue
+			}
+			allDocIDs = append(allDocIDs, docID)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &ChangesResponse{}
+
+	var count int
+	var lastSeq uint64
+	for _, docID := range allDocIDs {
+		// Fetch the full document to get LocalSeq, Rev, Deleted
+		doc, err := db.GetDocument(ctx, docID)
+		if err != nil || doc == nil {
+			continue
+		}
+
+		if hasSince && doc.LocalSeq <= sinceSeq {
+			continue
+		}
+		if limit > 0 && count >= limit {
+			resp.Pending++
+			continue
+		}
+
+		cr := ChangeResult{
+			Seq:     strconv.FormatUint(doc.LocalSeq, 10),
+			ID:      doc.ID,
+			Deleted: doc.Deleted,
+			Changes: []ChangeRev{{Rev: doc.Rev}},
+			Doc:     doc,
+		}
+		resp.Results = append(resp.Results, cr)
+		count++
+
+		if doc.LocalSeq > lastSeq {
+			lastSeq = doc.LocalSeq
+		}
+	}
+
+	if lastSeq > 0 {
+		resp.LastSeq = strconv.FormatUint(lastSeq, 10)
+	} else {
+		resp.LastSeq = since
+	}
+
+	return resp, nil
+}
+
+func (l *LocalDB) RevsDiff(ctx context.Context, revs map[string][]string) (map[string]*RevsDiffResult, error) {
+	db, err := l.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]*RevsDiffResult)
+	for docID, docRevs := range revs {
+		doc, err := db.GetDocument(ctx, docID)
+		if err != nil || doc == nil {
+			result[docID] = &RevsDiffResult{Missing: docRevs}
+			continue
+		}
+
+		var missing []string
+		for _, rev := range docRevs {
+			if rev != doc.Rev {
+				missing = append(missing, rev)
+			}
+		}
+		if len(missing) > 0 {
+			result[docID] = &RevsDiffResult{Missing: missing}
+		}
+	}
+
+	return result, nil
+}
+
+func (l *LocalDB) GetDoc(ctx context.Context, docID string, revs bool, openRevs []string) (*model.Document, error) {
+	db, err := l.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	doc, err := db.GetDocument(ctx, docID)
+	if err != nil {
+		return nil, err
+	}
+	if doc == nil {
+		return nil, fmt.Errorf("document %q not found", docID)
+	}
+
+	if revs {
+		doc.Data["_revisions"] = doc.Revisions()
+	}
+
+	return doc, nil
+}
+
+func (l *LocalDB) BulkDocs(ctx context.Context, docs []*model.Document, newEdits bool) error {
+	db, err := l.db(ctx)
+	if err != nil {
+		return err
+	}
+
+	return db.Transaction(ctx, func(tx *storage.Transaction) error {
+		for _, doc := range docs {
+			if !newEdits {
+				err := tx.PutDocumentForReplication(ctx, doc)
+				if err != nil {
+					return err
+				}
+			} else {
+				_, err := tx.PutDocument(ctx, doc)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+}
+
+func (l *LocalDB) CreateDB(ctx context.Context) error {
+	_, err := l.Storage.CreateDatabase(ctx, l.DBName)
+	return err
+}
