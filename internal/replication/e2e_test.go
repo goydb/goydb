@@ -1,0 +1,343 @@
+package replication
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/goydb/goydb/internal/adapter/storage"
+	"github.com/goydb/goydb/pkg/model"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func setupE2E(t *testing.T) (source *storage.Storage, target *storage.Storage, cleanup func()) {
+	dir1, err := os.MkdirTemp(os.TempDir(), "goydb-e2e-src-*")
+	require.NoError(t, err)
+	dir2, err := os.MkdirTemp(os.TempDir(), "goydb-e2e-tgt-*")
+	require.NoError(t, err)
+
+	s1, err := storage.Open(dir1)
+	require.NoError(t, err)
+	s2, err := storage.Open(dir2)
+	require.NoError(t, err)
+
+	return s1, s2, func() {
+		s1.Close()
+		s2.Close()
+		os.RemoveAll(dir1)
+		os.RemoveAll(dir2)
+	}
+}
+
+func TestE2E_PullReplication_OneShot(t *testing.T) {
+	srcStorage, tgtStorage, cleanup := setupE2E(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	srcDB, err := srcStorage.CreateDatabase(ctx, "sourcedb")
+	require.NoError(t, err)
+	_, err = tgtStorage.CreateDatabase(ctx, "targetdb")
+	require.NoError(t, err)
+
+	// Create 10 docs in source
+	for i := 0; i < 10; i++ {
+		_, err := srcDB.PutDocument(ctx, &model.Document{
+			ID:   fmt.Sprintf("doc%d", i),
+			Data: map[string]interface{}{"value": i},
+		})
+		require.NoError(t, err)
+	}
+
+	source := &LocalDB{Storage: srcStorage, DBName: "sourcedb"}
+	target := &LocalDB{Storage: tgtStorage, DBName: "targetdb"}
+
+	repDoc := &model.ReplicationDoc{Source: "sourcedb", Target: "targetdb"}
+	r := NewReplicator(source, target, repDoc)
+	result, err := r.Run(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 10, result.DocsWritten)
+
+	// Verify all docs are in target
+	for i := 0; i < 10; i++ {
+		doc, err := target.GetDoc(ctx, fmt.Sprintf("doc%d", i), false, nil)
+		require.NoError(t, err)
+		assert.NotNil(t, doc)
+	}
+
+	// Run again -- should transfer 0 docs (checkpoint resume)
+	result2, err := r.Run(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result2.DocsWritten)
+}
+
+func TestE2E_PullReplication_WithDeletedDocs(t *testing.T) {
+	srcStorage, tgtStorage, cleanup := setupE2E(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	srcDB, err := srcStorage.CreateDatabase(ctx, "sourcedb")
+	require.NoError(t, err)
+	_, err = tgtStorage.CreateDatabase(ctx, "targetdb")
+	require.NoError(t, err)
+
+	// Create 5 docs, delete 2
+	for i := 0; i < 5; i++ {
+		_, err := srcDB.PutDocument(ctx, &model.Document{
+			ID:   fmt.Sprintf("doc%d", i),
+			Data: map[string]interface{}{"value": i},
+		})
+		require.NoError(t, err)
+	}
+
+	// Delete doc0 and doc1
+	doc0, err := srcDB.GetDocument(ctx, "doc0")
+	require.NoError(t, err)
+	_, err = srcDB.DeleteDocument(ctx, "doc0", doc0.Rev)
+	require.NoError(t, err)
+
+	doc1, err := srcDB.GetDocument(ctx, "doc1")
+	require.NoError(t, err)
+	_, err = srcDB.DeleteDocument(ctx, "doc1", doc1.Rev)
+	require.NoError(t, err)
+
+	source := &LocalDB{Storage: srcStorage, DBName: "sourcedb"}
+	target := &LocalDB{Storage: tgtStorage, DBName: "targetdb"}
+
+	repDoc := &model.ReplicationDoc{Source: "sourcedb", Target: "targetdb"}
+	r := NewReplicator(source, target, repDoc)
+	result, err := r.Run(ctx)
+	require.NoError(t, err)
+	assert.True(t, result.DocsWritten >= 3, "should have written at least the non-deleted docs")
+}
+
+func TestE2E_ContinuousReplication_LiveUpdates(t *testing.T) {
+	srcStorage, tgtStorage, cleanup := setupE2E(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	srcDB, err := srcStorage.CreateDatabase(ctx, "sourcedb")
+	require.NoError(t, err)
+	_, err = tgtStorage.CreateDatabase(ctx, "targetdb")
+	require.NoError(t, err)
+
+	// Create initial docs
+	for i := 0; i < 3; i++ {
+		_, err := srcDB.PutDocument(ctx, &model.Document{
+			ID:   fmt.Sprintf("doc%d", i),
+			Data: map[string]interface{}{"value": i},
+		})
+		require.NoError(t, err)
+	}
+
+	source := &LocalDB{Storage: srcStorage, DBName: "sourcedb"}
+	target := &LocalDB{Storage: tgtStorage, DBName: "targetdb"}
+
+	repDoc := &model.ReplicationDoc{Source: "sourcedb", Target: "targetdb", Continuous: true}
+	r := NewReplicator(source, target, repDoc)
+
+	repCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	go func() {
+		r.Run(repCtx) // nolint: errcheck
+	}()
+
+	// Wait for initial 3 docs to appear in target
+	require.Eventually(t, func() bool {
+		for i := 0; i < 3; i++ {
+			doc, err := target.GetDoc(ctx, fmt.Sprintf("doc%d", i), false, nil)
+			if err != nil || doc == nil {
+				return false
+			}
+		}
+		return true
+	}, 8*time.Second, 200*time.Millisecond)
+
+	// Add more docs
+	for i := 3; i < 8; i++ {
+		_, err := srcDB.PutDocument(ctx, &model.Document{
+			ID:   fmt.Sprintf("doc%d", i),
+			Data: map[string]interface{}{"value": i},
+		})
+		require.NoError(t, err)
+	}
+
+	// Wait for all 8 docs to appear in target
+	require.Eventually(t, func() bool {
+		for i := 0; i < 8; i++ {
+			doc, err := target.GetDoc(ctx, fmt.Sprintf("doc%d", i), false, nil)
+			if err != nil || doc == nil {
+				return false
+			}
+		}
+		return true
+	}, 8*time.Second, 200*time.Millisecond)
+
+	cancel()
+}
+
+func TestE2E_BidirectionalReplication(t *testing.T) {
+	srcStorage, tgtStorage, cleanup := setupE2E(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	dbA, err := srcStorage.CreateDatabase(ctx, "dba")
+	require.NoError(t, err)
+	dbB, err := tgtStorage.CreateDatabase(ctx, "dbb")
+	require.NoError(t, err)
+
+	// DB A has docs 1-5
+	for i := 1; i <= 5; i++ {
+		_, err := dbA.PutDocument(ctx, &model.Document{
+			ID:   fmt.Sprintf("doc%d", i),
+			Data: map[string]interface{}{"from": "A"},
+		})
+		require.NoError(t, err)
+	}
+
+	// DB B has docs 6-10
+	for i := 6; i <= 10; i++ {
+		_, err := dbB.PutDocument(ctx, &model.Document{
+			ID:   fmt.Sprintf("doc%d", i),
+			Data: map[string]interface{}{"from": "B"},
+		})
+		require.NoError(t, err)
+	}
+
+	peerA := &LocalDB{Storage: srcStorage, DBName: "dba"}
+	peerB := &LocalDB{Storage: tgtStorage, DBName: "dbb"}
+
+	// A -> B
+	repDoc1 := &model.ReplicationDoc{Source: "dba", Target: "dbb"}
+	r1 := NewReplicator(peerA, peerB, repDoc1)
+	_, err = r1.Run(ctx)
+	require.NoError(t, err)
+
+	// B -> A
+	repDoc2 := &model.ReplicationDoc{Source: "dbb", Target: "dba"}
+	r2 := NewReplicator(peerB, peerA, repDoc2)
+	_, err = r2.Run(ctx)
+	require.NoError(t, err)
+
+	// Both should have docs 1-10
+	for i := 1; i <= 10; i++ {
+		docA, err := peerA.GetDoc(ctx, fmt.Sprintf("doc%d", i), false, nil)
+		require.NoError(t, err)
+		assert.NotNil(t, docA)
+
+		docB, err := peerB.GetDoc(ctx, fmt.Sprintf("doc%d", i), false, nil)
+		require.NoError(t, err)
+		assert.NotNil(t, docB)
+	}
+}
+
+func TestE2E_CreateTarget(t *testing.T) {
+	srcStorage, tgtStorage, cleanup := setupE2E(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	srcDB, err := srcStorage.CreateDatabase(ctx, "sourcedb")
+	require.NoError(t, err)
+
+	for i := 0; i < 3; i++ {
+		_, err := srcDB.PutDocument(ctx, &model.Document{
+			ID:   fmt.Sprintf("doc%d", i),
+			Data: map[string]interface{}{"value": i},
+		})
+		require.NoError(t, err)
+	}
+
+	source := &LocalDB{Storage: srcStorage, DBName: "sourcedb"}
+	target := &LocalDB{Storage: tgtStorage, DBName: "targetdb"}
+
+	repDoc := &model.ReplicationDoc{Source: "sourcedb", Target: "targetdb", CreateTarget: true}
+	r := NewReplicator(source, target, repDoc)
+	result, err := r.Run(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 3, result.DocsWritten)
+
+	// Target should now exist
+	assert.NoError(t, target.Head(ctx))
+}
+
+func TestE2E_LargeReplication(t *testing.T) {
+	srcStorage, tgtStorage, cleanup := setupE2E(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	srcDB, err := srcStorage.CreateDatabase(ctx, "sourcedb")
+	require.NoError(t, err)
+	_, err = tgtStorage.CreateDatabase(ctx, "targetdb")
+	require.NoError(t, err)
+
+	// Create 500 docs
+	for i := 0; i < 500; i++ {
+		_, err := srcDB.PutDocument(ctx, &model.Document{
+			ID:   fmt.Sprintf("doc%04d", i),
+			Data: map[string]interface{}{"index": i},
+		})
+		require.NoError(t, err)
+	}
+
+	source := &LocalDB{Storage: srcStorage, DBName: "sourcedb"}
+	target := &LocalDB{Storage: tgtStorage, DBName: "targetdb"}
+
+	repDoc := &model.ReplicationDoc{Source: "sourcedb", Target: "targetdb"}
+	r := NewReplicator(source, target, repDoc)
+	result, err := r.Run(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 500, result.DocsWritten)
+}
+
+func TestE2E_ReplicationPreservesRevisions(t *testing.T) {
+	srcStorage, tgtStorage, cleanup := setupE2E(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	srcDB, err := srcStorage.CreateDatabase(ctx, "sourcedb")
+	require.NoError(t, err)
+	_, err = tgtStorage.CreateDatabase(ctx, "targetdb")
+	require.NoError(t, err)
+
+	// Create and update a doc multiple times
+	_, err = srcDB.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"version": 1},
+	})
+	require.NoError(t, err)
+
+	doc, err := srcDB.GetDocument(ctx, "doc1")
+	require.NoError(t, err)
+	doc.Data["version"] = 2
+	_, err = srcDB.PutDocument(ctx, doc)
+	require.NoError(t, err)
+
+	doc, err = srcDB.GetDocument(ctx, "doc1")
+	require.NoError(t, err)
+	doc.Data["version"] = 3
+	rev3, err := srcDB.PutDocument(ctx, doc)
+	require.NoError(t, err)
+
+	source := &LocalDB{Storage: srcStorage, DBName: "sourcedb"}
+	target := &LocalDB{Storage: tgtStorage, DBName: "targetdb"}
+
+	repDoc := &model.ReplicationDoc{Source: "sourcedb", Target: "targetdb"}
+	r := NewReplicator(source, target, repDoc)
+	_, err = r.Run(ctx)
+	require.NoError(t, err)
+
+	// Target should have same revision
+	tgtDoc, err := target.GetDoc(ctx, "doc1", false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, rev3, tgtDoc.Rev)
+}
