@@ -33,13 +33,18 @@ func (s *DBDocsBulk) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	newEdits := req.NewEdits == nil || *req.NewEdits
+
 	resp := make([]SimpleDocResponse, len(req.Docs))
 	err = db.Transaction(r.Context(), func(tx *storage.Transaction) error {
 		for i, doc := range req.Docs {
 			var rev string
 			var err error
 
-			if doc.Deleted {
+			if !newEdits {
+				err = tx.PutDocumentForReplication(r.Context(), doc)
+				rev = doc.Rev
+			} else if doc.Deleted {
 				doc, err2 := tx.DeleteDocument(r.Context(), doc.ID, doc.Rev)
 				rev, err = doc.Rev, err2
 			} else {
@@ -68,5 +73,6 @@ func (s *DBDocsBulk) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type BulkDocRequest struct {
-	Docs []*model.Document `json:"docs"`
+	Docs     []*model.Document `json:"docs"`
+	NewEdits *bool             `json:"new_edits,omitempty"`
 }
