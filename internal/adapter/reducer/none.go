@@ -8,8 +8,8 @@ type None struct {
 	result map[interface{}]interface{}
 }
 
-func NewNone() *Count {
-	return &Count{
+func NewNone() *None {
+	return &None{
 		result: make(map[interface{}]interface{}),
 	}
 }
