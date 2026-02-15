@@ -3,9 +3,10 @@ package storage
 import (
 	"context"
 	"fmt"
-	"os"
 	"log"
+	"os"
 	"path"
+	"strings"
 	"sync"
 
 	"github.com/goydb/goydb/pkg/port"
@@ -42,6 +43,8 @@ func Open(path string, options ...StorageOption) (*Storage, error) {
 	return s, nil
 }
 
+func (s *Storage) Path() string { return s.path }
+
 func (s *Storage) String() string {
 	return "<Storage path=" + s.path + ">"
 }
@@ -58,6 +61,11 @@ func (s *Storage) ReloadDatabases(ctx context.Context) error {
 
 	for _, f := range files {
 		if f.IsDir() {
+			continue
+		}
+		// Skip non-database files (e.g. _config.json). CouchDB database names
+		// never contain a dot, so any file with an extension is not a database.
+		if strings.Contains(f.Name(), ".") {
 			continue
 		}
 
