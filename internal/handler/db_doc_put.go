@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
+	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/mitchellh/mapstructure"
@@ -28,15 +30,30 @@ func (s *DBDocPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var doc map[string]interface{}
 	err := json.NewDecoder(r.Body).Decode(&doc)
-	docID, docIDok := doc["_id"].(string)
-	if err != nil || !docIDok {
+	if err != nil {
 		WriteError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	docID, docIDok := doc["_id"].(string)
+	if !docIDok {
+		// Fall back to the URL path variable when _id is not in the body
+		if id, ok := mux.Vars(r)["docid"]; ok {
+			if strings.Contains(r.URL.Path, "/_design/") {
+				docID = string(model.DesignDocPrefix) + id
+			} else if strings.Contains(r.URL.Path, "/_local/") {
+				docID = "_local/" + id
+			} else {
+				docID = id
+			}
+		} else {
+			WriteError(w, http.StatusBadRequest, "missing _id")
+			return
+		}
 	}
 
 	var attachments map[string]*model.Attachment
 	err = mapstructure.Decode(doc["_attachments"], &attachments)
-	if err != nil || !docIDok {
+	if err != nil {
 		WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -55,8 +72,11 @@ func (s *DBDocPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	doc["_rev"] = rev
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(doc) // nolint: errcheck
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{ // nolint: errcheck
+		"ok":  true,
+		"id":  docID,
+		"rev": rev,
+	})
 }
