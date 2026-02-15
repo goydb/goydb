@@ -103,8 +103,10 @@ func (v DesignDoc) ReduceDocs(ctx context.Context, tx *storage.Transaction, idx 
 		return nil, 0, nil
 	}
 	for doc := i.First(); i.Continue(); doc = i.Next() {
-		// if the view group is 0 all values should be treated without the key
-		if opts.ViewGroup == "0" {
+		// Without explicit group=true, collapse all keys to nil so the reducer
+		// produces a single aggregated row (CouchDB default behaviour).
+		// Map-only views (no ReduceFn) skip this: they preserve keys like reduce=false.
+		if view.ReduceFn != "" && opts.ViewGroup != "true" {
 			doc.Key = nil
 		}
 
