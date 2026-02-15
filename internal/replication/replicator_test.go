@@ -3,6 +3,7 @@ package replication
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"sync"
 	"testing"
@@ -116,6 +117,11 @@ func (m *MockPeer) GetChanges(ctx context.Context, since string, limit int) (*Ch
 			maxSeq = int(doc.LocalSeq)
 		}
 	}
+
+	// Sort by LocalSeq for deterministic batching across multiple calls
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Doc.LocalSeq < results[j].Doc.LocalSeq
+	})
 
 	// Apply limit
 	if limit > 0 && len(results) > limit {
