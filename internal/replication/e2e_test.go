@@ -26,10 +26,10 @@ func setupE2E(t *testing.T) (source *storage.Storage, target *storage.Storage, c
 	require.NoError(t, err)
 
 	return s1, s2, func() {
-		s1.Close()
-		s2.Close()
-		os.RemoveAll(dir1)
-		os.RemoveAll(dir2)
+		_ = s1.Close()
+		_ = s2.Close()
+		_ = os.RemoveAll(dir1)
+		_ = os.RemoveAll(dir2)
 	}
 }
 

@@ -23,7 +23,7 @@ type DBDocGet struct {
 }
 
 func (s *DBDocGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 
 	db := Database{Base: s.Base}.Do(w, r)
 	if db == nil {
@@ -166,5 +166,5 @@ func (r *MultipartResponse) WriteDocument(ctx context.Context, doc *model.Docume
 }
 
 func (r *MultipartResponse) Close() {
-	r.mw.Close()
+	_ = r.mw.Close()
 }

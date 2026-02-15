@@ -26,7 +26,7 @@ func (d *Database) AttachmentReader(docID, attachment string) (io.ReadCloser, er
 }
 
 func (d *Database) PutAttachment(ctx context.Context, docID string, att *model.Attachment) (string, error) {
-	defer att.Reader.Close()
+	defer func() { _ = att.Reader.Close() }()
 
 	var rev string
 	err := d.Transaction(ctx, func(tx *Transaction) error {
@@ -44,7 +44,7 @@ func (d *Database) PutAttachment(ctx context.Context, docID string, att *model.A
 		filePath := filepath.Join(docDir, att.Filename)
 		f, err := os.Create(filePath)
 		if err != nil {
-			defer os.Remove(filePath) // don't leaf broken files
+			defer func() { _ = os.Remove(filePath) }() // don't leaf broken files
 			return err
 		}
 
@@ -52,7 +52,7 @@ func (d *Database) PutAttachment(ctx context.Context, docID string, att *model.A
 
 		n, err := io.Copy(f, io.TeeReader(att.Reader, sum))
 		if err != nil {
-			defer os.Remove(filePath) // don't leaf broken files
+			defer func() { _ = os.Remove(filePath) }() // don't leaf broken files
 			return err
 		}
 

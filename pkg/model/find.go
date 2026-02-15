@@ -493,7 +493,7 @@ func (fs FieldSelector) Match(df DocumentField) (bool, error) {
 		if svValue.o == nil {
 			re, err := regexp.Compile(svValue.s)
 			if err != nil {
-				return false, fmt.Errorf("Failed to compile regex: %v", err)
+				return false, fmt.Errorf("failed to compile regex: %v", err)
 			}
 			svValue.o = re
 		}

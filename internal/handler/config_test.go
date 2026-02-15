@@ -224,7 +224,7 @@ func TestNodeConfig(t *testing.T) {
 func TestConfigPersistence(t *testing.T) {
 	dir, err := os.MkdirTemp(os.TempDir(), "goydb-config-persist-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(dir)
+	defer os.RemoveAll(dir) //nolint:errcheck
 
 	store := sessions.NewCookieStore([]byte("test-secret-32-bytes-long-enough"))
 	admins := model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}}
@@ -235,7 +235,7 @@ func TestConfigPersistence(t *testing.T) {
 		r := mux.NewRouter()
 		err = Router{Storage: s, SessionStore: store, Admins: admins}.Build(r)
 		require.NoError(t, err)
-		return r, func() { s.Close() }
+		return r, func() { _ = s.Close() }
 	}
 
 	// --- First server instance: write a value ---

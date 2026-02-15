@@ -20,8 +20,8 @@ func setupTestStorage(t *testing.T) (*storage.Storage, func()) {
 	require.NoError(t, err)
 
 	cleanup := func() {
-		s.Close()
-		os.RemoveAll(dir)
+		_ = s.Close()
+		_ = os.RemoveAll(dir)
 	}
 	return s, cleanup
 }

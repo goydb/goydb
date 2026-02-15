@@ -14,7 +14,7 @@ type Membership struct {
 }
 
 func (s *Membership) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{ // nolint: errcheck
@@ -29,7 +29,7 @@ type ClusterSetupGet struct {
 }
 
 func (s *ClusterSetupGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{ // nolint: errcheck
@@ -44,7 +44,7 @@ type ClusterSetupPost struct {
 }
 
 func (s *ClusterSetupPost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"ok": true}) // nolint: errcheck

@@ -83,7 +83,7 @@ func (c *Client) Head(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
 		return fmt.Errorf("database not found")
 	}
@@ -98,7 +98,7 @@ func (c *Client) GetDBInfo(ctx context.Context) (*DBInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET db info returned status %d", resp.StatusCode)
 	}
@@ -115,7 +115,7 @@ func (c *Client) GetLocalDoc(ctx context.Context, docID string) (*model.Document
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("local doc %q not found", docID)
 	}
@@ -150,7 +150,7 @@ func (c *Client) PutLocalDoc(ctx context.Context, doc *model.Document) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("PUT _local/%s returned status %d: %s", docID, resp.StatusCode, body)
@@ -168,7 +168,7 @@ func (c *Client) GetChanges(ctx context.Context, since string, limit int) (*Chan
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET _changes returned status %d", resp.StatusCode)
 	}
@@ -185,7 +185,7 @@ func (c *Client) RevsDiff(ctx context.Context, revs map[string][]string) (map[st
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("POST _revs_diff returned status %d: %s", resp.StatusCode, body)
@@ -216,7 +216,7 @@ func (c *Client) GetDoc(ctx context.Context, docID string, revs bool, openRevs [
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET %s returned status %d", docID, resp.StatusCode)
 	}
@@ -271,7 +271,7 @@ func (c *Client) BulkDocs(ctx context.Context, docs []*model.Document, newEdits 
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("POST _bulk_docs returned status %d: %s", resp.StatusCode, body)
@@ -284,7 +284,7 @@ func (c *Client) CreateDB(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode >= 400 && resp.StatusCode != http.StatusPreconditionFailed {
 		return fmt.Errorf("PUT db returned status %d", resp.StatusCode)
 	}

@@ -29,7 +29,7 @@ func (p Public) Mount(r *mux.Router) error {
 		if IsZipFile(f) {
 			err := MountZIPFile(r, fullPath)
 			if err != nil {
-				return fmt.Errorf("Unable to serve zip %s due to: %w", fullPath, err)
+				return fmt.Errorf("unable to serve zip %s due to: %w", fullPath, err)
 			}
 		} else {
 			r.PathPrefix("/" + f.Name() + "/").Handler(http.FileServer(http.Dir(p.Dir)))
@@ -48,7 +48,7 @@ func MountZIPFile(r *mux.Router, fullPath string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	folder := strings.TrimRight(path.Base(f.Name()), path.Ext(f.Name()))
 

@@ -13,7 +13,7 @@ type ConfigAll struct {
 }
 
 func (s *ConfigAll) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.Config.All()) // nolint: errcheck
 }
@@ -24,7 +24,7 @@ type ConfigSection struct {
 }
 
 func (s *ConfigSection) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 	section := mux.Vars(r)["section"]
 	kv, ok := s.Config.Section(section)
 	if !ok {
@@ -41,7 +41,7 @@ type ConfigKey struct {
 }
 
 func (s *ConfigKey) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 	vars := mux.Vars(r)
 	val, ok := s.Config.Get(vars["section"], vars["key"])
 	if !ok {
@@ -59,7 +59,7 @@ type ConfigKeyPut struct {
 }
 
 func (s *ConfigKeyPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 	vars := mux.Vars(r)
 
 	var value string
@@ -79,7 +79,7 @@ type ConfigKeyDelete struct {
 }
 
 func (s *ConfigKeyDelete) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 	vars := mux.Vars(r)
 	old, ok := s.Config.Delete(vars["section"], vars["key"])
 	if !ok {

@@ -14,13 +14,13 @@ func WithTestStorage(t *testing.T, fn func(ctx context.Context, s *storage.Stora
 	ctx := context.Background()
 	dir, err := os.MkdirTemp(os.TempDir(), "goydb-test-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(dir)
+	defer os.RemoveAll(dir) //nolint:errcheck
 
 	s, err := storage.Open(dir)
 	assert.NoError(t, err)
 	if err == nil {
 		fn(ctx, s)
-		s.Close()
+		_ = s.Close()
 	}
 }
 

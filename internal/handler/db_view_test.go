@@ -47,8 +47,8 @@ func setupViewTest(t *testing.T) (*storage.Storage, *mux.Router, func()) {
 
 	return s, r, func() {
 		cancelTasks()
-		s.Close()
-		os.RemoveAll(dir)
+		_ = s.Close()
+		_ = os.RemoveAll(dir)
 	}
 }
 

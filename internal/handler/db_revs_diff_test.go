@@ -34,8 +34,8 @@ func setupRevsDiffTest(t *testing.T) (*storage.Storage, *mux.Router, func()) {
 	require.NoError(t, err)
 
 	return s, r, func() {
-		s.Close()
-		os.RemoveAll(dir)
+		_ = s.Close()
+		_ = os.RemoveAll(dir)
 	}
 }
 

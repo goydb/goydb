@@ -23,7 +23,7 @@ func (a Authenticator) Authenticate(ctx context.Context, username, password stri
 
 	// try to find user document
 	var sb port.SessionBuilder
-	db, err := a.Base.Storage.Database(ctx, "_users")
+	db, err := a.Storage.Database(ctx, "_users")
 	if err != nil {
 		log.Println("failed to load users", err)
 		return nil

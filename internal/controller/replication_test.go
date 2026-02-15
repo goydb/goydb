@@ -21,8 +21,8 @@ func setupReplicationTest(t *testing.T) (*storage.Storage, func()) {
 	require.NoError(t, err)
 
 	return s, func() {
-		s.Close()
-		os.RemoveAll(dir)
+		_ = s.Close()
+		_ = os.RemoveAll(dir)
 	}
 }
 

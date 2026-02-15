@@ -30,7 +30,7 @@ type SchedulerJobs struct {
 }
 
 func (s *SchedulerJobs) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 
 	ctx := r.Context()
 	jobs := make([]SchedulerJob, 0)
@@ -118,7 +118,7 @@ type SchedulerDocs struct {
 }
 
 func (s *SchedulerDocs) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{ // nolint: errcheck

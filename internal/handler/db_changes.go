@@ -20,7 +20,7 @@ type DBChanges struct {
 const maxTimeout = time.Second * 60
 
 func (s *DBChanges) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 
 	if _, ok := (Authenticator{Base: s.Base, RequiresAdmin: true}.Do(w, r)); !ok {
 		return
@@ -83,15 +83,16 @@ func (s *DBChanges) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	if feed == "normal" {
-		fmt.Fprintln(w, `{"results":[`)
-	} else if feed == "continuous" {
+	switch feed {
+	case "normal":
+		_, _ = fmt.Fprintln(w, `{"results":[`)
+	case "continuous":
 		w.Header().Set("Transfer-Encoding", "chunked")
 	}
 
 	// print an empty line like couchdb
 	if options.Limit == 0 {
-		fmt.Fprintln(w, "")
+		_, _ = fmt.Fprintln(w, "")
 	}
 
 	var lastSeq uint64
@@ -117,7 +118,7 @@ func (s *DBChanges) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if feed == "normal" {
 			if i < len(changes)-1 {
-				fmt.Fprint(w, `,`)
+				_, _ = fmt.Fprint(w, `,`)
 			}
 		}
 	}
@@ -127,8 +128,8 @@ func (s *DBChanges) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if feed == "normal" {
-		fmt.Fprintln(w, `],`)
-		fmt.Fprintf(w, `"last_seq":"%d","pending":"%d"}`, lastSeq, pending)
+		_, _ = fmt.Fprintln(w, `],`)
+		_, _ = fmt.Fprintf(w, `"last_seq":"%d","pending":"%d"}`, lastSeq, pending)
 	}
 }
 

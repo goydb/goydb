@@ -30,7 +30,7 @@ func NewViewIndex(ddfn *model.DesignDocFn, engines port.ViewEngines) *ViewIndex 
 	}
 
 	vi.RegularIndex = NewRegularIndex(ddfn, vi.indexSingleDocument)
-	vi.RegularIndex.cleanKey = func(b []byte) string {
+	vi.cleanKey = func(b []byte) string {
 		var i interface{}
 		err := cbor.Unmarshal(b, &i)
 		if err != nil {
@@ -43,7 +43,7 @@ func NewViewIndex(ddfn *model.DesignDocFn, engines port.ViewEngines) *ViewIndex 
 }
 
 func (i *ViewIndex) String() string {
-	return fmt.Sprintf("<ViewIndex name=%q>", i.RegularIndex.ddfn)
+	return fmt.Sprintf("<ViewIndex name=%q>", i.ddfn)
 }
 
 func (i *ViewIndex) indexSingleDocument(ctx context.Context, doc *model.Document) ([][]byte, [][]byte) {

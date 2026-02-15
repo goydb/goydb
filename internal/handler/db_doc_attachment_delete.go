@@ -11,7 +11,7 @@ type DBDocAttachmentDelete struct {
 }
 
 func (s *DBDocAttachmentDelete) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 
 	db := Database{Base: s.Base}.Do(w, r)
 	if db == nil {

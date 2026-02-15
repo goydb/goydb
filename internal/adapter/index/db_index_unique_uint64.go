@@ -34,7 +34,7 @@ func NewUniqueIndexUint64(name string, kf UniqueIndexUint64KeyFunc, value IndexF
 }
 
 func (i *UniqueIndexUint64) String() string {
-	return fmt.Sprintf("<UniqueIndexUint64 name=%q>", string(i.UniqueIndex.bucketName))
+	return fmt.Sprintf("<UniqueIndexUint64 name=%q>", string(i.bucketName))
 }
 
 // uint64ToKey big endian bytes of passed v
