@@ -11,4 +11,5 @@ type Base struct {
 	Storage      *storage.Storage
 	SessionStore sessions.Store
 	Admins       model.AdminUsers
+	Config       *ConfigStore
 }
