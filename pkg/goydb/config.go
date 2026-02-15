@@ -6,8 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"path/filepath"
+	"strings"
 
 	"github.com/caarlos0/env/v6"
+	gorilla_handlers "github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
 	"github.com/goydb/goydb/internal/adapter/storage"
@@ -101,6 +104,11 @@ func (c *Config) BuildDatabase() (*Goydb, error) {
 	go rc.Run(context.Background())
 	gdb.Storage = s
 
+	// Create the config store early so we can read it for listen address and CORS.
+	configPath := filepath.Join(c.DatabaseDir, "_config.json")
+	cs := handler.NewConfigStore(configPath)
+	gdb.Config = cs
+
 	r := mux.NewRouter()
 	for _, c := range c.Containers {
 		err = public.MountContainer(r, c)
@@ -121,10 +129,46 @@ func (c *Config) BuildDatabase() (*Goydb, error) {
 		SessionStore: store,
 		Storage:      s,
 		Admins:       admins,
+		Config:       cs,
 	}.Build(r)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build router: %w", err)
 	}
 
+	// Apply CORS middleware if configured.
+	if enable, _ := cs.Get("httpd", "enable_cors"); enable == "true" {
+		opts := buildCORSOpts(cs)
+		gdb.Handler = gorilla_handlers.CORS(opts...)(gdb.Handler)
+	}
+
 	return &gdb, nil
+}
+
+func buildCORSOpts(cs *handler.ConfigStore) []gorilla_handlers.CORSOption {
+	var opts []gorilla_handlers.CORSOption
+	if origins, ok := cs.Get("cors", "origins"); ok && origins != "" {
+		opts = append(opts, gorilla_handlers.AllowedOrigins(splitTrim(origins)))
+	}
+	if methods, ok := cs.Get("cors", "methods"); ok && methods != "" {
+		opts = append(opts, gorilla_handlers.AllowedMethods(splitTrim(methods)))
+	}
+	if hdrs, ok := cs.Get("cors", "headers"); ok && hdrs != "" {
+		opts = append(opts, gorilla_handlers.AllowedHeaders(splitTrim(hdrs)))
+	}
+	if creds, _ := cs.Get("cors", "credentials"); creds == "true" {
+		opts = append(opts, gorilla_handlers.AllowCredentials())
+	}
+	return opts
+}
+
+// splitTrim splits a comma-separated string and trims whitespace from each part.
+func splitTrim(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
