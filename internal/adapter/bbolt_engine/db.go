@@ -87,5 +87,25 @@ func (db *DB) Stats() (stats model.DatabaseStats, err error) {
 			return nil
 		})
 	})
+
+	// Subtract _local/* docs — CouchDB never counts them in doc_count.
+	// Must be done in a separate View since tx.ForEach cannot open cursors.
+	err2 := db.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(model.DocsBucket)
+		if b == nil {
+			return nil
+		}
+		prefix := []byte(model.LocalDocPrefix)
+		cursor := b.Cursor()
+		for k, _ := cursor.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = cursor.Next() {
+			if stats.DocCount > 0 {
+				stats.DocCount--
+			}
+		}
+		return nil
+	})
+	if err == nil {
+		err = err2
+	}
 	return
 }
