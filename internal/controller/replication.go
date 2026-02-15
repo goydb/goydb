@@ -19,13 +19,22 @@ const replicatorDBName = "_replicator"
 type Replication struct {
 	Storage *storage.Storage
 
-	mu     sync.Mutex
-	active map[string]context.CancelFunc
+	mu                 sync.Mutex
+	active             map[string]context.CancelFunc
+	trigger            chan struct{}
+	listenerRegistered bool
 }
 
-// Run polls the _replicator database every 5 seconds
+// Run polls the _replicator database every 5 seconds and also reacts
+// immediately when a document is written to _replicator.
 func (c *Replication) Run(ctx context.Context) {
 	c.active = make(map[string]context.CancelFunc)
+	c.trigger = make(chan struct{}, 1)
+
+	c.tryRegisterListener(ctx)
+
+	// Poll once immediately on startup rather than waiting for the first tick.
+	c.processReplicatorDB(ctx)
 
 	t := time.NewTicker(5 * time.Second)
 	defer t.Stop()
@@ -35,13 +44,41 @@ func (c *Replication) Run(ctx context.Context) {
 		case <-ctx.Done():
 			c.cancelAll()
 			return
+		case <-c.trigger:
+			c.processReplicatorDB(ctx)
 		case <-t.C:
 			c.processReplicatorDB(ctx)
 		}
 	}
 }
 
+// tryRegisterListener hooks a change listener onto the _replicator database so
+// that writes wake the controller immediately. It is a no-op if the database
+// does not exist yet or if the listener was already registered.
+func (c *Replication) tryRegisterListener(ctx context.Context) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.listenerRegistered {
+		return
+	}
+	db, err := c.Storage.Database(ctx, replicatorDBName)
+	if err != nil {
+		return
+	}
+	_ = db.AddListener(ctx, port.ChangeListenerFunc(func(_ context.Context, _ *model.Document) error {
+		select {
+		case c.trigger <- struct{}{}:
+		default:
+		}
+		return nil
+	}))
+	c.listenerRegistered = true
+}
+
 func (c *Replication) processReplicatorDB(ctx context.Context) {
+	// Register listener now if _replicator was created after startup.
+	c.tryRegisterListener(ctx)
+
 	db, err := c.Storage.Database(ctx, replicatorDBName)
 	if err != nil {
 		return // _replicator doesn't exist yet, nothing to do
@@ -71,6 +108,16 @@ func (c *Replication) processReplicatorDB(ctx context.Context) {
 
 		repDoc, err := model.ParseReplicationDoc(doc)
 		if err != nil {
+			log.Printf("replication controller: skipping %q: %v", doc.ID, err)
+			continue
+		}
+
+		// Skip non-continuous replications that already finished successfully.
+		if repDoc.ReplicationState == model.ReplicationStateCompleted && !repDoc.Continuous {
+			continue
+		}
+		// Skip permanently-failed replications; user can inspect and recreate.
+		if repDoc.ReplicationState == model.ReplicationStateError {
 			continue
 		}
 
