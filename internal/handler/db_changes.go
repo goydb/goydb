@@ -39,11 +39,35 @@ func (s *DBChanges) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Timeout: durationOption("timeout", time.Millisecond, maxTimeout, query),
 	}
 
+	if r.Method == "POST" {
+		var body struct {
+			DocIDs []string `json:"doc_ids"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+			options.DocIDs = body.DocIDs
+		}
+	}
+
 	changes, pending, err := db.Changes(r.Context(), &options)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	if len(options.DocIDs) > 0 {
+		allowed := make(map[string]bool, len(options.DocIDs))
+		for _, id := range options.DocIDs {
+			allowed[id] = true
+		}
+		filtered := changes[:0]
+		for _, doc := range changes {
+			if allowed[doc.ID] {
+				filtered = append(filtered, doc)
+			}
+		}
+		changes = filtered
+	}
+
 	if includeDocs {
 		err := db.EnrichDocuments(r.Context(), changes)
 		if err != nil {

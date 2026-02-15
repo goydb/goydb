@@ -3,9 +3,10 @@ package model
 import "time"
 
 type ChangesOptions struct {
-	Since   string
-	Limit   int
+	Since  string
+	Limit  int
 	Timeout time.Duration
+	DocIDs []string
 }
 
 func (o *ChangesOptions) SinceNow() bool {
