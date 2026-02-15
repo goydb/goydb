@@ -154,3 +154,44 @@ func TestRevsDiff_NonexistentDB(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
+
+func TestAllDocs_TotalRowsExcludesDeleted(t *testing.T) {
+	s, router, cleanup := setupRevsDiffTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	rev1, err := db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"x": 1},
+	})
+	require.NoError(t, err)
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "doc2",
+		Data: map[string]interface{}{"x": 2},
+	})
+	require.NoError(t, err)
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "doc3",
+		Data: map[string]interface{}{"x": 3},
+	})
+	require.NoError(t, err)
+
+	// Delete doc1 — it becomes a tombstone in the docs bucket
+	_, err = db.DeleteDocument(ctx, "doc1", rev1)
+	require.NoError(t, err)
+
+	// total_rows must reflect only live documents (2), not the tombstone
+	req := httptest.NewRequest("GET", "/testdb/_all_docs", nil)
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var result AllDocsResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	assert.Equal(t, 2, result.TotalRows)
+	assert.Len(t, result.Rows, 2)
+}
