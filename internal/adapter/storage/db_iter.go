@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 
+	"github.com/goydb/goydb/internal/adapter/index"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 	"gopkg.in/mgo.v2/bson"
@@ -45,7 +46,22 @@ type Iterator struct {
 
 func (i *Iterator) Total() int {
 	stats := i.tx.BucketStats(i.bucket)
-	return int(stats.Documents)
+	total := int(stats.Documents)
+	if bytes.Equal(i.bucket, model.DocsBucket) {
+		// Subtract deleted tombstones — tracked in the _deleted index bucket.
+		deletedStats := i.tx.BucketStats([]byte(index.DeletedIndexName))
+		total -= int(deletedStats.Documents)
+
+		// Subtract _local/* docs — CouchDB never counts them in total_rows.
+		// They are stored in the docs bucket with a known key prefix, so a
+		// prefix scan is sufficient (no separate index needed).
+		prefix := []byte(model.LocalDocPrefix)
+		cursor := i.tx.Cursor(i.bucket)
+		for k, _ := cursor.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = cursor.Next() {
+			total--
+		}
+	}
+	return total
 }
 
 func NewIterator(tx *Transaction, opts ...IteratorOption) *Iterator {
@@ -112,11 +128,20 @@ func (i *Iterator) First() *model.Document {
 
 	if v != nil {
 		for {
+			if i.key == nil {
+				return nil
+			}
 			var doc model.Document
 			i.unmarshalDoc(i.key, v, &doc)
 
 			// skip over all deleted documents
 			if doc.Deleted {
+				i.key, v = i.cursor.Next()
+				continue
+			}
+
+			// skip local docs if requested (same behaviour as Next())
+			if i.SkipLocalDoc && doc.IsLocalDoc() {
 				i.key, v = i.cursor.Next()
 				continue
 			}
