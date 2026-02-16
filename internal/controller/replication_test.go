@@ -63,7 +63,8 @@ func TestReplicationController_CompletesOneShot(t *testing.T) {
 	require.NoError(t, err)
 
 	// Start controller
-	rc := &Replication{Storage: s}
+	svc := &ReplicationService{Storage: s}
+	rc := &Replication{Storage: s, Service: svc}
 	ctrlCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
@@ -107,16 +108,16 @@ func TestReplicationController_IgnoresDesignDocs(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	rc := &Replication{Storage: s}
-	rc.active = make(map[string]context.CancelFunc)
+	svc := &ReplicationService{Storage: s}
+	rc := &Replication{Storage: s, Service: svc}
 
 	// Process once
 	rc.processReplicatorDB(ctx)
 
 	// Should not have started any replications
-	rc.mu.Lock()
-	count := len(rc.active)
-	rc.mu.Unlock()
+	svc.mu.Lock()
+	count := len(svc.active)
+	svc.mu.Unlock()
 	assert.Equal(t, 0, count)
 }
 
@@ -140,7 +141,8 @@ func TestReplicationController_ErrorState(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	rc := &Replication{Storage: s}
+	svc := &ReplicationService{Storage: s}
+	rc := &Replication{Storage: s, Service: svc}
 	ctrlCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
@@ -210,7 +212,8 @@ func TestReplicationController_CancelAllOnShutdown(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	rc := &Replication{Storage: s}
+	svc := &ReplicationService{Storage: s}
+	rc := &Replication{Storage: s, Service: svc}
 	ctrlCtx, cancel := context.WithCancel(ctx)
 
 	done := make(chan struct{})
@@ -231,7 +234,7 @@ func TestReplicationController_CancelAllOnShutdown(t *testing.T) {
 		t.Fatal("controller did not stop after cancellation")
 	}
 
-	rc.mu.Lock()
-	assert.Empty(t, rc.active)
-	rc.mu.Unlock()
+	svc.mu.Lock()
+	assert.Empty(t, svc.active)
+	svc.mu.Unlock()
 }

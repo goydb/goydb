@@ -3,9 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 
-	"github.com/goydb/goydb/internal/replication"
 	"github.com/goydb/goydb/pkg/model"
 )
 
@@ -42,15 +40,7 @@ func (s *Replicate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		CreateTarget: body.CreateTarget,
 	}
 
-	source := s.buildPeer(body.Source)
-	target := s.buildPeer(body.Target)
-	if source == nil || target == nil {
-		WriteError(w, http.StatusBadRequest, "invalid source or target")
-		return
-	}
-
-	replicator := replication.NewReplicator(source, target, repDoc)
-	result, err := replicator.Run(r.Context())
+	result, err := s.Base.ReplicationService.Run(r.Context(), repDoc)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -58,9 +48,9 @@ func (s *Replicate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{ // nolint: errcheck
-		"ok":                      true,
-		"source_last_seq":         result.DocsRead,
-		"replication_id_version":  4,
+		"ok":                     true,
+		"source_last_seq":        result.DocsRead,
+		"replication_id_version": 4,
 		"history": []map[string]interface{}{
 			{
 				"docs_read":    result.DocsRead,
@@ -70,18 +60,4 @@ func (s *Replicate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			},
 		},
 	})
-}
-
-func (s *Replicate) buildPeer(addr string) replication.Peer {
-	if strings.HasPrefix(addr, "http://") || strings.HasPrefix(addr, "https://") {
-		client, err := replication.NewClient(addr)
-		if err != nil {
-			return nil
-		}
-		return client
-	}
-	return &replication.LocalDB{
-		Storage: s.Storage,
-		DBName:  addr,
-	}
 }

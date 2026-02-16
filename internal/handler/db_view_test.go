@@ -35,9 +35,10 @@ func setupViewTest(t *testing.T) (*storage.Storage, *mux.Router, func()) {
 
 	r := mux.NewRouter()
 	err = Router{
-		Storage:      s,
-		SessionStore: store,
-		Admins:       model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}},
+		Storage:            s,
+		SessionStore:       store,
+		Admins:             model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}},
+		ReplicationService: &controller.ReplicationService{Storage: s},
 	}.Build(r)
 	require.NoError(t, err)
 

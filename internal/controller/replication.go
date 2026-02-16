@@ -3,12 +3,9 @@ package controller
 import (
 	"context"
 	"log"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/goydb/goydb/internal/adapter/storage"
-	"github.com/goydb/goydb/internal/replication"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 )
@@ -17,10 +14,10 @@ const replicatorDBName = "_replicator"
 
 // Replication watches the _replicator database and manages replication jobs
 type Replication struct {
-	Storage *storage.Storage
+	Storage port.Storage
+	Service *ReplicationService
 
 	mu                 sync.Mutex
-	active             map[string]context.CancelFunc
 	trigger            chan struct{}
 	listenerRegistered bool
 }
@@ -28,7 +25,6 @@ type Replication struct {
 // Run polls the _replicator database every 5 seconds and also reacts
 // immediately when a document is written to _replicator.
 func (c *Replication) Run(ctx context.Context) {
-	c.active = make(map[string]context.CancelFunc)
 	c.trigger = make(chan struct{}, 1)
 
 	c.tryRegisterListener(ctx)
@@ -42,7 +38,7 @@ func (c *Replication) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			c.cancelAll()
+			c.Service.CancelAll()
 			return
 		case <-c.trigger:
 			c.processReplicatorDB(ctx)
@@ -123,86 +119,20 @@ func (c *Replication) processReplicatorDB(ctx context.Context) {
 
 		activeIDs[repDoc.ID] = true
 
-		c.mu.Lock()
-		_, running := c.active[repDoc.ID]
-		c.mu.Unlock()
-
-		if running {
+		if c.Service.IsRunning(repDoc.ID) {
 			continue
 		}
 
-		c.startReplication(ctx, db, repDoc)
+		c.Service.Submit(ctx, repDoc, func(state model.ReplicationState, reason string) {
+			c.updateState(ctx, db, repDoc, state, reason)
+		})
 	}
 
 	// Cancel replications whose docs have been deleted
-	c.mu.Lock()
-	for id, cancel := range c.active {
-		if !activeIDs[id] {
-			cancel()
-			delete(c.active, id)
-		}
-	}
-	c.mu.Unlock()
+	c.Service.CancelStaleJobs(activeIDs)
 }
 
-func (c *Replication) startReplication(ctx context.Context, replicatorDB *storage.Database, repDoc *model.ReplicationDoc) {
-	source := c.buildPeer(repDoc.Source)
-	target := c.buildPeer(repDoc.Target)
-
-	if source == nil || target == nil {
-		c.updateState(ctx, replicatorDB, repDoc, model.ReplicationStateError, "invalid source or target")
-		return
-	}
-
-	replicator := replication.NewReplicator(source, target, repDoc)
-
-	repCtx, cancel := context.WithCancel(ctx)
-
-	c.mu.Lock()
-	c.active[repDoc.ID] = cancel
-	c.mu.Unlock()
-
-	c.updateState(ctx, replicatorDB, repDoc, model.ReplicationStateInitializing, "")
-
-	go func() {
-		defer func() {
-			c.mu.Lock()
-			delete(c.active, repDoc.ID)
-			c.mu.Unlock()
-		}()
-
-		c.updateState(ctx, replicatorDB, repDoc, model.ReplicationStateRunning, "")
-
-		_, err := replicator.Run(repCtx)
-		if err != nil {
-			log.Printf("Replication %s failed: %v", repDoc.ID, err)
-			c.updateState(ctx, replicatorDB, repDoc, model.ReplicationStateError, err.Error())
-			return
-		}
-
-		if !repDoc.Continuous {
-			c.updateState(ctx, replicatorDB, repDoc, model.ReplicationStateCompleted, "")
-		}
-	}()
-}
-
-func (c *Replication) buildPeer(target string) replication.Peer {
-	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
-		client, err := replication.NewClient(target)
-		if err != nil {
-			log.Printf("Failed to create remote peer for %s: %v", target, err)
-			return nil
-		}
-		return client
-	}
-
-	return &replication.LocalDB{
-		Storage: c.Storage,
-		DBName:  target,
-	}
-}
-
-func (c *Replication) updateState(ctx context.Context, db *storage.Database, repDoc *model.ReplicationDoc, state model.ReplicationState, reason string) {
+func (c *Replication) updateState(ctx context.Context, db port.Database, repDoc *model.ReplicationDoc, state model.ReplicationState, reason string) {
 	doc, err := db.GetDocument(ctx, repDoc.ID)
 	if err != nil || doc == nil {
 		return
@@ -219,15 +149,5 @@ func (c *Replication) updateState(ctx context.Context, db *storage.Database, rep
 	_, err = db.PutDocument(ctx, doc)
 	if err != nil {
 		log.Printf("Failed to update replication state for %s: %v", repDoc.ID, err)
-	}
-}
-
-func (c *Replication) cancelAll() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	for id, cancel := range c.active {
-		cancel()
-		delete(c.active, id)
 	}
 }

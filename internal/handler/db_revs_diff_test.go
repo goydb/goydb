@@ -11,6 +11,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
 	"github.com/goydb/goydb/internal/adapter/storage"
+	"github.com/goydb/goydb/internal/controller"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,9 +28,10 @@ func setupRevsDiffTest(t *testing.T) (*storage.Storage, *mux.Router, func()) {
 
 	r := mux.NewRouter()
 	err = Router{
-		Storage:      s,
-		SessionStore: store,
-		Admins:       model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}},
+		Storage:            s,
+		SessionStore:       store,
+		Admins:             model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}},
+		ReplicationService: &controller.ReplicationService{Storage: s},
 	}.Build(r)
 	require.NoError(t, err)
 

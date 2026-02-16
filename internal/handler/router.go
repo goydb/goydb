@@ -3,18 +3,20 @@ package handler
 import (
 	"path/filepath"
 
-	"github.com/goydb/goydb/internal/adapter/storage"
+	"github.com/goydb/goydb/internal/controller"
 	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/port"
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
 )
 
 type Router struct {
-	Storage      *storage.Storage
-	SessionStore sessions.Store
-	Admins       model.AdminUsers
-	Config       *ConfigStore
+	Storage            port.Storage
+	SessionStore       sessions.Store
+	Admins             model.AdminUsers
+	Config             *ConfigStore
+	ReplicationService *controller.ReplicationService
 }
 
 func (router Router) Build(r *mux.Router) error {

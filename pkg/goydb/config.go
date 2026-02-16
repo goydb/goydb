@@ -98,8 +98,10 @@ func (c *Config) BuildDatabase() (*Goydb, error) {
 		Storage: s,
 	}
 	go tc.Run(context.Background())
+	repService := &controller.ReplicationService{Storage: s}
 	rc := &controller.Replication{
 		Storage: s,
+		Service: repService,
 	}
 	go rc.Run(context.Background())
 	gdb.Storage = s
@@ -126,10 +128,11 @@ func (c *Config) BuildDatabase() (*Goydb, error) {
 	}
 
 	err = handler.Router{
-		SessionStore: store,
-		Storage:      s,
-		Admins:       admins,
-		Config:       cs,
+		SessionStore:       store,
+		Storage:            s,
+		Admins:             admins,
+		Config:             cs,
+		ReplicationService: repService,
 	}.Build(r)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build router: %w", err)
