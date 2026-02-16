@@ -11,7 +11,7 @@ import (
 )
 
 func (d *Database) Iterator(ctx context.Context, ddfn *model.DesignDocFn, fn func(i port.Iterator) error) error {
-	return d.Transaction(ctx, func(tx *Transaction) error {
+	return d.rawTx(func(tx *Transaction) error {
 		io := ForDocuments()
 		if ddfn != nil {
 			io = ForDesignDocFn(ddfn)
@@ -40,7 +40,7 @@ type Iterator struct {
 	KeyFn    func([]byte) []byte
 
 	bucket []byte
-	tx     *Transaction
+	tx     port.EngineReadTransaction
 	cursor port.EngineCursor
 }
 
@@ -64,7 +64,7 @@ func (i *Iterator) Total() int {
 	return total
 }
 
-func NewIterator(tx *Transaction, opts ...IteratorOption) *Iterator {
+func NewIterator(tx port.EngineReadTransaction, opts ...IteratorOption) *Iterator {
 	iter := &Iterator{
 		Skip:        0,
 		Limit:       -1,

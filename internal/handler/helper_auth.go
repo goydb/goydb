@@ -5,7 +5,6 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 )
@@ -28,35 +27,29 @@ func (a Authenticator) Authenticate(ctx context.Context, username, password stri
 		log.Println("failed to load users", err)
 		return nil
 	}
-	err = db.Transaction(ctx, func(tx *storage.Transaction) error {
-		doc, err := tx.GetDocument(ctx, "org.couchdb.user:"+username)
-		if err != nil {
-			return err
-		}
-		var u model.User
-		err = u.FromDocument(doc)
-		if err != nil {
-			return err
-		}
-		ok, err := u.VerifyPassword(password)
-		if err != nil {
-			return err
-		}
-		if ok {
-			sb = &u
-		}
-
-		return nil
-	})
+	doc, err := db.GetDocument(ctx, "org.couchdb.user:"+username)
 	if err != nil {
 		log.Println("failed to load users", err)
 		return nil
 	}
-	if sb != nil {
-		return sb
+	if doc != nil {
+		var u model.User
+		err = u.FromDocument(doc)
+		if err != nil {
+			log.Println("failed to parse user document", err)
+			return nil
+		}
+		ok, err := u.VerifyPassword(password)
+		if err != nil {
+			log.Println("failed to verify password", err)
+			return nil
+		}
+		if ok {
+			sb = &u
+		}
 	}
 
-	return nil
+	return sb
 }
 
 func (a Authenticator) Auth(r *http.Request) (*model.Session, string) {
@@ -111,7 +104,7 @@ func (a Authenticator) Do(w http.ResponseWriter, r *http.Request) (*model.Sessio
 	return s, true
 }
 
-func (a Authenticator) DB(w http.ResponseWriter, r *http.Request, db *storage.Database) (*model.Session, bool) {
+func (a Authenticator) DB(w http.ResponseWriter, r *http.Request, db port.Database) (*model.Session, bool) {
 	s, ok := a.Do(w, r)
 	if !ok {
 		return nil, false

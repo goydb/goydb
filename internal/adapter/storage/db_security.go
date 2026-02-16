@@ -13,7 +13,7 @@ var (
 )
 
 func (d *Database) PutSecurity(ctx context.Context, sec *model.Security) error {
-	return d.Transaction(ctx, func(tx *Transaction) error {
+	return d.rawTx(func(tx *Transaction) error {
 		tx.SetBucketName(internalDocsBucket)
 		return tx.PutRaw(ctx, securityDoc, sec)
 	})
@@ -21,7 +21,7 @@ func (d *Database) PutSecurity(ctx context.Context, sec *model.Security) error {
 
 func (d *Database) GetSecurity(ctx context.Context) (*model.Security, error) {
 	var sec model.Security
-	err := d.Transaction(ctx, func(tx *Transaction) error {
+	err := d.rawTx(func(tx *Transaction) error {
 		tx.SetBucketName(internalDocsBucket)
 		err := tx.GetRaw(ctx, securityDoc, &sec)
 		return err

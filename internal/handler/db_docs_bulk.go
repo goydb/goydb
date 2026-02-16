@@ -5,8 +5,8 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/port"
 )
 
 type DBDocsBulk struct {
@@ -36,7 +36,7 @@ func (s *DBDocsBulk) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	newEdits := req.NewEdits == nil || *req.NewEdits
 
 	resp := make([]SimpleDocResponse, len(req.Docs))
-	err = db.Transaction(r.Context(), func(tx *storage.Transaction) error {
+	err = db.Transaction(r.Context(), func(tx port.DatabaseTx) error {
 		for i, doc := range req.Docs {
 			var rev string
 			var err error

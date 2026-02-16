@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/port"
 	"github.com/mitchellh/mapstructure"
 )
 
@@ -122,7 +123,7 @@ func (s *DBDocPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *DBDocPut) handleMultipart(w http.ResponseWriter, r *http.Request, db *storage.Database, boundary string) {
+func (s *DBDocPut) handleMultipart(w http.ResponseWriter, r *http.Request, db port.Database, boundary string) {
 	mr := multipart.NewReader(r.Body, boundary)
 
 	// Part 1: JSON document.

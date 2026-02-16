@@ -31,7 +31,7 @@ start:
 		t.Stop()
 	}
 
-	err := d.Transaction(ctx, func(tx *Transaction) error {
+	err := d.rawTx(func(tx *Transaction) error {
 		index := d.ChangesIndex()
 		opts, err := index.IteratorOptions(ctx)
 		if err != nil {

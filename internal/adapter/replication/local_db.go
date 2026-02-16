@@ -5,19 +5,22 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/goydb/goydb/internal/adapter/storage"
+	"github.com/goydb/goydb/internal/replication"
 	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/port"
 )
 
-// LocalDB adapts a storage.Database to the Peer interface
+// LocalDB adapts a port.Storage/port.Database to the replication.Peer interface.
+// It lives here (adapter layer) rather than in the protocol package so that
+// internal/replication stays free of storage adapter imports.
 type LocalDB struct {
-	Storage *storage.Storage
+	Storage port.Storage
 	DBName  string
 }
 
-var _ Peer = (*LocalDB)(nil)
+var _ replication.Peer = (*LocalDB)(nil)
 
-func (l *LocalDB) db(ctx context.Context) (*storage.Database, error) {
+func (l *LocalDB) db(ctx context.Context) (port.Database, error) {
 	return l.Storage.Database(ctx, l.DBName)
 }
 
@@ -26,7 +29,7 @@ func (l *LocalDB) Head(ctx context.Context) error {
 	return err
 }
 
-func (l *LocalDB) GetDBInfo(ctx context.Context) (*DBInfo, error) {
+func (l *LocalDB) GetDBInfo(ctx context.Context) (*replication.DBInfo, error) {
 	db, err := l.db(ctx)
 	if err != nil {
 		return nil, err
@@ -37,7 +40,7 @@ func (l *LocalDB) GetDBInfo(ctx context.Context) (*DBInfo, error) {
 		return nil, err
 	}
 
-	return &DBInfo{
+	return &replication.DBInfo{
 		DBName:    l.DBName,
 		UpdateSeq: seq,
 	}, nil
@@ -70,7 +73,7 @@ func (l *LocalDB) PutLocalDoc(ctx context.Context, doc *model.Document) error {
 	return err
 }
 
-func (l *LocalDB) GetChanges(ctx context.Context, since string, limit int) (*ChangesResponse, error) {
+func (l *LocalDB) GetChanges(ctx context.Context, since string, limit int) (*replication.ChangesResponse, error) {
 	db, err := l.db(ctx)
 	if err != nil {
 		return nil, err
@@ -83,7 +86,7 @@ func (l *LocalDB) GetChanges(ctx context.Context, since string, limit int) (*Cha
 	// This avoids the changes index iterator (which stores seq->docID mappings
 	// that aren't bson-encoded documents) and the long-polling behavior of Changes().
 	var allDocIDs []string
-	err = db.Transaction(ctx, func(tx *storage.Transaction) error {
+	err = db.Transaction(ctx, func(tx port.DatabaseTx) error {
 		cursor := tx.Cursor(model.DocsBucket)
 		for k, _ := cursor.First(); k != nil; k, _ = cursor.Next() {
 			docID := string(k)
@@ -99,7 +102,7 @@ func (l *LocalDB) GetChanges(ctx context.Context, since string, limit int) (*Cha
 		return nil, err
 	}
 
-	resp := &ChangesResponse{}
+	resp := &replication.ChangesResponse{}
 
 	var count int
 	var lastSeq uint64
@@ -118,11 +121,11 @@ func (l *LocalDB) GetChanges(ctx context.Context, since string, limit int) (*Cha
 			continue
 		}
 
-		cr := ChangeResult{
+		cr := replication.ChangeResult{
 			Seq:     strconv.FormatUint(doc.LocalSeq, 10),
 			ID:      doc.ID,
 			Deleted: doc.Deleted,
-			Changes: []ChangeRev{{Rev: doc.Rev}},
+			Changes: []replication.ChangeRev{{Rev: doc.Rev}},
 			Doc:     doc,
 		}
 		resp.Results = append(resp.Results, cr)
@@ -142,17 +145,17 @@ func (l *LocalDB) GetChanges(ctx context.Context, since string, limit int) (*Cha
 	return resp, nil
 }
 
-func (l *LocalDB) RevsDiff(ctx context.Context, revs map[string][]string) (map[string]*RevsDiffResult, error) {
+func (l *LocalDB) RevsDiff(ctx context.Context, revs map[string][]string) (map[string]*replication.RevsDiffResult, error) {
 	db, err := l.db(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	result := make(map[string]*RevsDiffResult)
+	result := make(map[string]*replication.RevsDiffResult)
 	for docID, docRevs := range revs {
 		doc, err := db.GetDocument(ctx, docID)
 		if err != nil || doc == nil {
-			result[docID] = &RevsDiffResult{Missing: docRevs}
+			result[docID] = &replication.RevsDiffResult{Missing: docRevs}
 			continue
 		}
 
@@ -163,7 +166,7 @@ func (l *LocalDB) RevsDiff(ctx context.Context, revs map[string][]string) (map[s
 			}
 		}
 		if len(missing) > 0 {
-			result[docID] = &RevsDiffResult{Missing: missing}
+			result[docID] = &replication.RevsDiffResult{Missing: missing}
 		}
 	}
 
@@ -197,7 +200,7 @@ func (l *LocalDB) BulkDocs(ctx context.Context, docs []*model.Document, newEdits
 		return err
 	}
 
-	return db.Transaction(ctx, func(tx *storage.Transaction) error {
+	return db.Transaction(ctx, func(tx port.DatabaseTx) error {
 		for _, doc := range docs {
 			if !newEdits {
 				err := tx.PutDocumentForReplication(ctx, doc)

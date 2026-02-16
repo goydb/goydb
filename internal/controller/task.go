@@ -6,14 +6,14 @@ import (
 	"log"
 	"time"
 
-	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/port"
 )
 
 const taskProcessCount = 10
 
 type Task struct {
-	Storage *storage.Storage
+	Storage port.Storage
 }
 
 func (c Task) Run(ctx context.Context) {
@@ -53,7 +53,7 @@ func (c Task) ProcessAllTasks(ctx context.Context) error {
 	return nil
 }
 
-func (c Task) ProcessTasksForDatabase(ctx context.Context, db *storage.Database) error {
+func (c Task) ProcessTasksForDatabase(ctx context.Context, db port.Database) error {
 	for {
 		// check if context should be canceled
 		select {

@@ -15,7 +15,7 @@ const (
 	indexExt  = ".bleve"
 )
 
-func (d *Database) IndexIterator(ctx context.Context, tx *Transaction, idx port.DocumentIndex) (*Iterator, error) {
+func (d *Database) IndexIterator(ctx context.Context, tx port.EngineReadTransaction, idx port.DocumentIndex) (port.Iterator, error) {
 	opts, err := idx.IteratorOptions(ctx)
 	if err != nil {
 		return nil, err

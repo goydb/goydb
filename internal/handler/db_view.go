@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/internal/controller"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
@@ -91,7 +90,7 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var docs map[interface{}]interface{}
 	var err error
 	if boolOption("reduce", true, options) {
-		err = db.Transaction(r.Context(), func(tx *storage.Transaction) error {
+		err = db.Transaction(r.Context(), func(tx port.DatabaseTx) error {
 			designDoc, err := tx.GetDocument(r.Context(), docID)
 			if err != nil {
 				return err
@@ -110,7 +109,7 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 	} else {
 		docs = make(map[interface{}]interface{})
-		err = db.Transaction(r.Context(), func(tx *storage.Transaction) error {
+		err = db.Transaction(r.Context(), func(tx port.DatabaseTx) error {
 			iter, err := db.IndexIterator(r.Context(), tx, idx)
 			if err != nil {
 				return err

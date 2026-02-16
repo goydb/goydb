@@ -54,7 +54,7 @@ func (d *Database) Stats(ctx context.Context) (stats model.DatabaseStats, err er
 
 func (d *Database) Sequence(ctx context.Context) (string, error) {
 	var seq uint64
-	err := d.Transaction(ctx, func(tx *Transaction) error {
+	err := d.rawTx(func(tx *Transaction) error {
 		seq = tx.Sequence(model.DocsBucket)
 		return nil
 	})
@@ -72,7 +72,7 @@ func (d *Database) ReducerEngine(name string) port.ReducerServerBuilder {
 	return d.reducerEngines[name]
 }
 
-func (s *Storage) CreateDatabase(ctx context.Context, name string) (*Database, error) {
+func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Database, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -100,7 +100,7 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (*Database, e
 
 	// create all required database Indices
 	log.Println("BuildIndices")
-	err = database.Transaction(ctx, func(tx *Transaction) error {
+	err = database.rawTx(func(tx *Transaction) error {
 		tx.EnsureBucket(model.DocsBucket)
 
 		err := database.BuildIndices(ctx, tx, false)
@@ -162,7 +162,7 @@ func (s *Storage) Databases(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
-func (s *Storage) Database(ctx context.Context, name string) (*Database, error) {
+func (s *Storage) Database(ctx context.Context, name string) (port.Database, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

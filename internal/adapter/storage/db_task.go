@@ -13,10 +13,9 @@ import (
 var taskBucket = []byte("tasks")
 
 func (d *Database) AddTasks(ctx context.Context, tasks []*model.Task) error {
-	err := d.Transaction(ctx, func(tx *Transaction) error {
+	return d.Transaction(ctx, func(tx port.DatabaseTx) error {
 		return d.AddTasksTx(ctx, tx, tasks)
 	})
-	return err
 }
 
 func (d *Database) AddTasksTx(ctx context.Context, tx port.EngineWriteTransaction, tasks []*model.Task) error {
