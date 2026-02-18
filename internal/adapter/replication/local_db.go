@@ -5,12 +5,11 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/goydb/goydb/internal/replication"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 )
 
-// LocalDB adapts a port.Storage/port.Database to the replication.Peer interface.
+// LocalDB adapts a port.Storage/port.Database to the port.ReplicationPeer interface.
 // It lives here (adapter layer) rather than in the protocol package so that
 // internal/replication stays free of storage adapter imports.
 type LocalDB struct {
@@ -18,7 +17,7 @@ type LocalDB struct {
 	DBName  string
 }
 
-var _ replication.Peer = (*LocalDB)(nil)
+var _ port.ReplicationPeer = (*LocalDB)(nil)
 
 func (l *LocalDB) db(ctx context.Context) (port.Database, error) {
 	return l.Storage.Database(ctx, l.DBName)
@@ -29,7 +28,7 @@ func (l *LocalDB) Head(ctx context.Context) error {
 	return err
 }
 
-func (l *LocalDB) GetDBInfo(ctx context.Context) (*replication.DBInfo, error) {
+func (l *LocalDB) GetDBInfo(ctx context.Context) (*model.DBInfo, error) {
 	db, err := l.db(ctx)
 	if err != nil {
 		return nil, err
@@ -40,7 +39,7 @@ func (l *LocalDB) GetDBInfo(ctx context.Context) (*replication.DBInfo, error) {
 		return nil, err
 	}
 
-	return &replication.DBInfo{
+	return &model.DBInfo{
 		DBName:    l.DBName,
 		UpdateSeq: seq,
 	}, nil
@@ -73,7 +72,7 @@ func (l *LocalDB) PutLocalDoc(ctx context.Context, doc *model.Document) error {
 	return err
 }
 
-func (l *LocalDB) GetChanges(ctx context.Context, since string, limit int) (*replication.ChangesResponse, error) {
+func (l *LocalDB) GetChanges(ctx context.Context, since string, limit int) (*model.ChangesResponse, error) {
 	db, err := l.db(ctx)
 	if err != nil {
 		return nil, err
@@ -102,7 +101,7 @@ func (l *LocalDB) GetChanges(ctx context.Context, since string, limit int) (*rep
 		return nil, err
 	}
 
-	resp := &replication.ChangesResponse{}
+	resp := &model.ChangesResponse{}
 
 	var count int
 	var lastSeq uint64
@@ -121,11 +120,11 @@ func (l *LocalDB) GetChanges(ctx context.Context, since string, limit int) (*rep
 			continue
 		}
 
-		cr := replication.ChangeResult{
+		cr := model.ChangeResult{
 			Seq:     strconv.FormatUint(doc.LocalSeq, 10),
 			ID:      doc.ID,
 			Deleted: doc.Deleted,
-			Changes: []replication.ChangeRev{{Rev: doc.Rev}},
+			Changes: []model.ChangeRev{{Rev: doc.Rev}},
 			Doc:     doc,
 		}
 		resp.Results = append(resp.Results, cr)
@@ -145,17 +144,17 @@ func (l *LocalDB) GetChanges(ctx context.Context, since string, limit int) (*rep
 	return resp, nil
 }
 
-func (l *LocalDB) RevsDiff(ctx context.Context, revs map[string][]string) (map[string]*replication.RevsDiffResult, error) {
+func (l *LocalDB) RevsDiff(ctx context.Context, revs map[string][]string) (map[string]*model.RevsDiffResult, error) {
 	db, err := l.db(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	result := make(map[string]*replication.RevsDiffResult)
+	result := make(map[string]*model.RevsDiffResult)
 	for docID, docRevs := range revs {
 		doc, err := db.GetDocument(ctx, docID)
 		if err != nil || doc == nil {
-			result[docID] = &replication.RevsDiffResult{Missing: docRevs}
+			result[docID] = &model.RevsDiffResult{Missing: docRevs}
 			continue
 		}
 
@@ -166,7 +165,7 @@ func (l *LocalDB) RevsDiff(ctx context.Context, revs map[string][]string) (map[s
 			}
 		}
 		if len(missing) > 0 {
-			result[docID] = &replication.RevsDiffResult{Missing: missing}
+			result[docID] = &model.RevsDiffResult{Missing: missing}
 		}
 	}
 

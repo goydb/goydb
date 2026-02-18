@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"reflect"
 	"sync"
@@ -27,13 +26,15 @@ type ExternalSearchIndex struct {
 	idx      bleve.Index
 	mu       sync.RWMutex
 	SearchFn string
+	logger   port.Logger
 }
 
-func NewExternalSearchIndex(ddfn *model.DesignDocFn, engines port.ViewEngines, path string) *ExternalSearchIndex {
+func NewExternalSearchIndex(ddfn *model.DesignDocFn, engines port.ViewEngines, path string, logger port.Logger) *ExternalSearchIndex {
 	return &ExternalSearchIndex{
 		path:    path,
 		ddfn:    ddfn,
 		engines: engines,
+		logger:  logger,
 	}
 }
 
@@ -41,7 +42,7 @@ func (i *ExternalSearchIndex) String() string {
 	if i.idx != nil {
 		cnt, err := i.idx.DocCount()
 		if err != nil {
-			log.Printf("failed to get search index %s count: %v", i.path, err)
+			i.logger.Warnf(context.Background(), "search index count failed", "error", err)
 		}
 		return fmt.Sprintf("<ExternalSearchIndex name=%q count=%v>", i.ddfn, cnt)
 	}
@@ -131,7 +132,7 @@ func (i *ExternalSearchIndex) Ensure(ctx context.Context, tx port.EngineWriteTra
 func (i *ExternalSearchIndex) Remove(ctx context.Context, tx port.EngineWriteTransaction) error {
 	err := i.idx.Close()
 	if err != nil {
-		log.Printf("failed to close search index %s before destroy: %v", i.path, err)
+		i.logger.Warnf(ctx, "search index close failed", "error", err)
 	}
 
 	return os.RemoveAll(i.path)
@@ -282,7 +283,7 @@ func (i *ExternalSearchIndex) UpdateMapping(docs []*model.Document) error {
 		default:
 			// we can't add a dedicated mapping here
 			// using default mapping mechanism as a fallback
-			log.Printf("fallback to default mapping for %q for index %q", field, i.ddfn)
+			i.logger.Debugf(context.Background(), "using default field mapping", "field", field)
 			continue
 		}
 
@@ -292,7 +293,7 @@ func (i *ExternalSearchIndex) UpdateMapping(docs []*model.Document) error {
 		fm.DocValues = opt.Facet // TODO: unsure, verify mapping
 		fm.Name = field
 
-		log.Printf("add field mapping for %v, %#v", field, fm)
+		i.logger.Debugf(context.Background(), "added field mapping", "field", field, "type", fm.Type)
 		i.mapping.DefaultMapping.AddFieldMappingsAt(field, fm)
 	}
 

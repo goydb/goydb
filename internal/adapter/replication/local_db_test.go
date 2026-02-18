@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/goydb/goydb/internal/adapter/logger"
 	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/stretchr/testify/assert"
@@ -16,7 +17,7 @@ func setupTestStorage(t *testing.T) (*storage.Storage, func()) {
 	dir, err := os.MkdirTemp(os.TempDir(), "goydb-repl-test-*")
 	require.NoError(t, err)
 
-	s, err := storage.Open(dir)
+	s, err := storage.Open(dir, storage.WithLogger(logger.NewNoLog()))
 	require.NoError(t, err)
 
 	cleanup := func() {

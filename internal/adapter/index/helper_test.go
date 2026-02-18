@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/d5/tengo/v2/require"
+	adapterlogger "github.com/goydb/goydb/internal/adapter/logger"
 	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/port"
 	"github.com/stretchr/testify/assert"
@@ -17,7 +18,7 @@ func WithTestStorage(t *testing.T, fn func(ctx context.Context, s *storage.Stora
 	require.NoError(t, err)
 	defer os.RemoveAll(dir) //nolint:errcheck
 
-	s, err := storage.Open(dir)
+	s, err := storage.Open(dir, storage.WithLogger(adapterlogger.NewNoLog()))
 	assert.NoError(t, err)
 	if err == nil {
 		fn(ctx, s)

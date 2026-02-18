@@ -1,8 +1,8 @@
 package gojaview
 
 import (
+	"context"
 	"fmt"
-	"log"
 	"reflect"
 
 	"github.com/dop251/goja"
@@ -18,9 +18,17 @@ type Reducer struct {
 	keys        []interface{}
 	values      []interface{}
 	reduceOver  int
+	logger      port.Logger
 }
 
-func NewReducer(source string) (port.Reducer, error) {
+// NewReducerBuilder returns a ReducerServerBuilder that captures the logger
+func NewReducerBuilder(logger port.Logger) port.ReducerServerBuilder {
+	return func(source string) (port.Reducer, error) {
+		return NewReducer(source, logger)
+	}
+}
+
+func NewReducer(source string, logger port.Logger) (port.Reducer, error) {
 	vm := goja.New()
 	fn := `
 	var _result = [];
@@ -47,6 +55,7 @@ func NewReducer(source string) (port.Reducer, error) {
 	return &Reducer{
 		vm:         vm,
 		reduceOver: reduceOver,
+		logger:     logger,
 	}, nil
 }
 
@@ -77,7 +86,7 @@ func (r *Reducer) reduce(rereduce bool) {
 	_ = r.vm.Set("_values", values)
 	_, err := r.vm.RunString(`_result = reduceFn(_keys, _values, rereduce);`)
 	if err != nil {
-		log.Printf("JS ERR: %#v", err)
+		r.logger.Errorf(context.Background(), "javascript error", "error", err)
 	}
 
 	resultData := r.vm.Get("_result").Export()
