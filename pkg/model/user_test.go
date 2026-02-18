@@ -1,7 +1,6 @@
 package model
 
 import (
-	"log"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,7 +14,7 @@ func TestUserGeneratePBKDF2(t *testing.T) {
 	assert.NotEmpty(t, u.Salt)
 	assert.NotEmpty(t, u.DerivedKey)
 	assert.Empty(t, u.Password)
-	log.Printf("%#v", u)
+	t.Logf("user: %#v", u)
 }
 
 func TestUserVerifyPassword(t *testing.T) {

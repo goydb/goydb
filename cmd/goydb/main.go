@@ -1,20 +1,25 @@
 package main
 
 import (
-	"log"
+	"context"
 	"net/http"
 	"os"
 
-	"github.com/gorilla/handlers"
+	adapterlogger "github.com/goydb/goydb/internal/adapter/logger"
 	"github.com/goydb/goydb/pkg/goydb"
+	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/public"
 	"github.com/goydb/utils"
 )
 
 func main() {
+	// Create bootstrap logger for startup errors
+	bootstrapLogger := adapterlogger.New(model.LogLevelInfo, os.Stdout)
+
 	cfg, err := goydb.NewConfig()
 	if err != nil {
-		log.Fatal(err)
+		bootstrapLogger.Errorf(context.Background(), "config initialization failed", "error", err)
+		os.Exit(1)
 	}
 
 	cfg.ParseFlags()
@@ -24,7 +29,8 @@ func main() {
 
 	gdb, err := cfg.BuildDatabase()
 	if err != nil {
-		log.Fatal(err)
+		bootstrapLogger.Errorf(context.Background(), "database build failed", "error", err)
+		os.Exit(1)
 	}
 
 	// Override listen address from persisted config (e.g. after PUT /_config/httpd/port).
@@ -38,11 +44,15 @@ func main() {
 		}
 	}
 
-	loggedRouter := handlers.LoggingHandler(os.Stdout, gdb.Handler)
+	defer gdb.Storage.Close()
 
-	log.Printf("Listening on %s...", cfg.ListenAddress)
+	loggedRouter := adapterlogger.NewHTTPLoggingMiddleware(gdb.Handler, gdb.Logger)
+
+	// Use configured logger for runtime info
+	gdb.Logger.Infof(context.Background(), "server starting", "address", cfg.ListenAddress)
 	err = http.ListenAndServe(cfg.ListenAddress, loggedRouter)
 	if err != nil {
-		log.Fatal(err)
+		gdb.Logger.Errorf(context.Background(), "server failed", "error", err)
+		os.Exit(1)
 	}
 }
