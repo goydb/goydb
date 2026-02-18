@@ -1,4 +1,4 @@
-package controller
+package service
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/goydb/goydb/internal/adapter/logger"
 	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/stretchr/testify/assert"
@@ -17,7 +18,7 @@ func setupReplicationTest(t *testing.T) (*storage.Storage, func()) {
 	dir, err := os.MkdirTemp(os.TempDir(), "goydb-repl-ctrl-*")
 	require.NoError(t, err)
 
-	s, err := storage.Open(dir)
+	s, err := storage.Open(dir, storage.WithLogger(logger.NewNoLog()))
 	require.NoError(t, err)
 
 	return s, func() {
@@ -63,12 +64,12 @@ func TestReplicationController_CompletesOneShot(t *testing.T) {
 	require.NoError(t, err)
 
 	// Start controller
-	svc := &ReplicationService{Storage: s}
-	rc := &Replication{Storage: s, Service: svc}
+	
+	repl := &Replication{Storage: s, Logger: logger.NewNoLog()}
 	ctrlCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	go rc.Run(ctrlCtx)
+	go repl.Run(ctrlCtx)
 
 	// Wait for replication to complete
 	require.Eventually(t, func() bool {
@@ -108,16 +109,16 @@ func TestReplicationController_IgnoresDesignDocs(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	svc := &ReplicationService{Storage: s}
-	rc := &Replication{Storage: s, Service: svc}
+	
+	repl := &Replication{Storage: s, Logger: logger.NewNoLog()}
 
 	// Process once
-	rc.processReplicatorDB(ctx)
+	repl.processReplicatorDB(ctx)
 
 	// Should not have started any replications
-	svc.mu.Lock()
-	count := len(svc.active)
-	svc.mu.Unlock()
+	repl.mu.Lock()
+	count := len(repl.active)
+	repl.mu.Unlock()
 	assert.Equal(t, 0, count)
 }
 
@@ -141,21 +142,21 @@ func TestReplicationController_ErrorState(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	svc := &ReplicationService{Storage: s}
-	rc := &Replication{Storage: s, Service: svc}
+	
+	repl := &Replication{Storage: s, Logger: logger.NewNoLog()}
 	ctrlCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	go rc.Run(ctrlCtx)
+	go repl.Run(ctrlCtx)
 
-	// Wait for error state
+	// Wait for crashing state (with new retry mechanism, failures go to crashing, not error)
 	require.Eventually(t, func() bool {
 		doc, err := repDB.GetDocument(ctx, "bad-rep")
 		if err != nil || doc == nil {
 			return false
 		}
 		state, _ := doc.Data["_replication_state"].(string)
-		return state == string(model.ReplicationStateError)
+		return state == string(model.ReplicationStateCrashing)
 	}, 15*time.Second, 500*time.Millisecond)
 
 	cancel()
@@ -212,13 +213,13 @@ func TestReplicationController_CancelAllOnShutdown(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	svc := &ReplicationService{Storage: s}
-	rc := &Replication{Storage: s, Service: svc}
+	
+	repl := &Replication{Storage: s, Logger: logger.NewNoLog()}
 	ctrlCtx, cancel := context.WithCancel(ctx)
 
 	done := make(chan struct{})
 	go func() {
-		rc.Run(ctrlCtx)
+		repl.Run(ctrlCtx)
 		close(done)
 	}()
 
@@ -234,7 +235,7 @@ func TestReplicationController_CancelAllOnShutdown(t *testing.T) {
 		t.Fatal("controller did not stop after cancellation")
 	}
 
-	svc.mu.Lock()
-	assert.Empty(t, svc.active)
-	svc.mu.Unlock()
+	repl.mu.Lock()
+	assert.Empty(t, repl.active)
+	repl.mu.Unlock()
 }

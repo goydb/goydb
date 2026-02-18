@@ -1,30 +1,23 @@
-package replication
+package controller
 
 import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/port"
 )
 
 const changesBatchSize = 100
 
-// ReplicationResult holds statistics from a replication run
-type ReplicationResult struct {
-	DocsRead    int
-	DocsWritten int
-	StartTime   time.Time
-	EndTime     time.Time
-}
-
-// Replicator performs replication between a source and target Peer
+// Replicator performs replication between a source and target ReplicationPeer
 type Replicator struct {
-	Source       Peer
-	Target       Peer
+	Source       port.ReplicationPeer
+	Target       port.ReplicationPeer
+	Logger       port.Logger
 	Continuous   bool
 	CreateTarget bool
 	RepID        string // unique replication ID
@@ -39,30 +32,38 @@ func replicationID(source, target string) string {
 }
 
 // NewReplicator creates a new Replicator
-func NewReplicator(source, target Peer, repDoc *model.ReplicationDoc) *Replicator {
+func NewReplicator(source, target port.ReplicationPeer, repDoc *model.ReplicationDoc, logger port.Logger) *Replicator {
+	repID := replicationID(repDoc.Source, repDoc.Target)
 	return &Replicator{
 		Source:       source,
 		Target:       target,
+		Logger:       logger.With("repID", repID),
 		Continuous:   repDoc.Continuous,
 		CreateTarget: repDoc.CreateTarget,
-		RepID:        replicationID(repDoc.Source, repDoc.Target),
+		RepID:        repID,
 	}
 }
 
 // Run executes the replication. For one-shot it returns when complete.
 // For continuous it runs until context is cancelled.
-func (r *Replicator) Run(ctx context.Context) (*ReplicationResult, error) {
-	result := &ReplicationResult{
+func (r *Replicator) Run(ctx context.Context) (*model.ReplicationResult, error) {
+	r.Logger.Infof(ctx, "replication starting")
+	result := &model.ReplicationResult{
 		StartTime: time.Now(),
 	}
 
 	// 1. Verify peers
 	if err := r.verifyPeers(ctx); err != nil {
+		r.Logger.Errorf(ctx, "peer verification failed", "error", err)
 		return result, err
 	}
+	r.Logger.Debugf(ctx, "peers verified successfully")
 
 	// 2. Find checkpoint
 	since := r.loadCheckpoint(ctx)
+	if since != "" {
+		r.Logger.Infof(ctx, "resuming from checkpoint", "since", since)
+	}
 	sessionID := fmt.Sprintf("%d", time.Now().UnixNano())
 
 	// 3. Replicate
@@ -70,22 +71,29 @@ func (r *Replicator) Run(ctx context.Context) (*ReplicationResult, error) {
 		select {
 		case <-ctx.Done():
 			result.EndTime = time.Now()
+			r.Logger.Infof(ctx, "replication cancelled", "docs_read", result.DocsRead, "docs_written", result.DocsWritten)
 			return result, nil
 		default:
 		}
 
 		batchResult, newSince, pending, err := r.replicateBatch(ctx, since)
 		if err != nil {
+			r.Logger.Errorf(ctx, "batch replication failed", "error", err, "docs_read", result.DocsRead, "docs_written", result.DocsWritten)
 			return result, err
 		}
 
 		result.DocsRead += batchResult.DocsRead
 		result.DocsWritten += batchResult.DocsWritten
 
+		if batchResult.DocsWritten > 0 {
+			r.Logger.Infof(ctx, "batch completed", "docs_read", batchResult.DocsRead, "docs_written", batchResult.DocsWritten, "pending", pending)
+		}
+
 		if newSince != since && newSince != "" {
 			since = newSince
 			// Save checkpoint after each batch
 			r.saveCheckpoint(ctx, since, sessionID, result)
+			r.Logger.Debugf(ctx, "checkpoint saved", "since", since)
 		}
 
 		if !r.Continuous {
@@ -108,23 +116,31 @@ func (r *Replicator) Run(ctx context.Context) (*ReplicationResult, error) {
 	}
 
 	result.EndTime = time.Now()
+	r.Logger.Infof(ctx, "replication completed", "docs_read", result.DocsRead, "docs_written", result.DocsWritten, "duration", result.EndTime.Sub(result.StartTime))
 	return result, nil
 }
 
 func (r *Replicator) verifyPeers(ctx context.Context) error {
 	// Verify source
+	r.Logger.Debugf(ctx, "verifying source database")
 	if err := r.Source.Head(ctx); err != nil {
+		r.Logger.Warnf(ctx, "source database verification failed", "error", err)
 		return fmt.Errorf("source database not available: %w", err)
 	}
 
 	// Verify target
+	r.Logger.Debugf(ctx, "verifying target database")
 	err := r.Target.Head(ctx)
 	if err != nil {
 		if r.CreateTarget {
+			r.Logger.Infof(ctx, "target database does not exist, creating it")
 			if err := r.Target.CreateDB(ctx); err != nil {
+				r.Logger.Errorf(ctx, "failed to create target database", "error", err)
 				return fmt.Errorf("failed to create target database: %w", err)
 			}
+			r.Logger.Infof(ctx, "target database created successfully")
 		} else {
+			r.Logger.Warnf(ctx, "target database verification failed", "error", err)
 			return fmt.Errorf("target database not available: %w", err)
 		}
 	}
@@ -167,7 +183,7 @@ func (r *Replicator) loadCheckpoint(ctx context.Context) string {
 	return ""
 }
 
-func (r *Replicator) saveCheckpoint(ctx context.Context, since, sessionID string, result *ReplicationResult) {
+func (r *Replicator) saveCheckpoint(ctx context.Context, since, sessionID string, result *model.ReplicationResult) {
 	docID := r.checkpointDocID()
 
 	data := map[string]interface{}{
@@ -185,7 +201,7 @@ func (r *Replicator) saveCheckpoint(ctx context.Context, since, sessionID string
 		},
 	}
 
-	saveToOnePeer := func(peer Peer) {
+	saveToOnePeer := func(peer port.ReplicationPeer) {
 		fullID := string(model.LocalDocPrefix) + docID
 		// Try to read existing doc to get rev
 		existing, err := peer.GetLocalDoc(ctx, docID)
@@ -208,7 +224,7 @@ func (r *Replicator) saveCheckpoint(ctx context.Context, since, sessionID string
 
 		err = peer.PutLocalDoc(ctx, doc)
 		if err != nil {
-			log.Printf("Failed to save checkpoint to peer: %v", err)
+			r.Logger.Warnf(ctx, "checkpoint save failed", "error", err)
 		}
 	}
 
@@ -219,7 +235,7 @@ func (r *Replicator) saveCheckpoint(ctx context.Context, since, sessionID string
 type batchResult struct {
 	DocsRead    int
 	DocsWritten int
-	changes     []ChangeResult
+	changes     []model.ChangeResult
 }
 
 func (r *Replicator) replicateBatch(ctx context.Context, since string) (*batchResult, string, int, error) {
@@ -277,7 +293,7 @@ func (r *Replicator) replicateBatch(ctx context.Context, since string) (*batchRe
 
 		doc, err := r.Source.GetDoc(ctx, docID, true, diff.Missing)
 		if err != nil {
-			log.Printf("Failed to get doc %s: %v", docID, err)
+			r.Logger.Warnf(ctx, "failed to get doc", "docID", docID, "error", err)
 			continue
 		}
 		br.DocsRead++

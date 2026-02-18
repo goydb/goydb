@@ -3,7 +3,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/goydb/goydb/pkg/model"
@@ -14,6 +13,7 @@ const taskProcessCount = 10
 
 type Task struct {
 	Storage port.Storage
+	Logger  port.Logger
 }
 
 func (c Task) Run(ctx context.Context) {
@@ -26,7 +26,7 @@ func (c Task) Run(ctx context.Context) {
 		case <-t.C:
 			err := c.ProcessAllTasks(ctx)
 			if err != nil {
-				log.Printf("Failed processing of all tasks: %v", err)
+				c.Logger.Warnf(ctx, "failed processing tasks", "error", err)
 			}
 		}
 	}
@@ -69,7 +69,7 @@ func (c Task) ProcessTasksForDatabase(ctx context.Context, db port.Database) err
 		for _, task := range tasks {
 			err := c.ProcessTask(ctx, task)
 			if err != nil {
-				log.Printf("Failed to process %s due to: %v", task, err)
+				c.Logger.Warnf(ctx, "failed to process task", "task", task, "error", err)
 			}
 		}
 		err = db.CompleteTasks(ctx, tasks)
