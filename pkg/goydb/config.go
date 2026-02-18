@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
-	"log"
 	"path/filepath"
 	"strings"
 
@@ -13,11 +12,13 @@ import (
 	gorilla_handlers "github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
+	adapterlogger "github.com/goydb/goydb/internal/adapter/logger"
 	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/internal/adapter/view/gojaview"
 	"github.com/goydb/goydb/internal/adapter/view/tengoview"
 	"github.com/goydb/goydb/internal/controller"
 	"github.com/goydb/goydb/internal/handler"
+	"github.com/goydb/goydb/internal/service"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/public"
 )
@@ -83,39 +84,52 @@ func (c *Config) BuildDatabase() (*Goydb, error) {
 		return nil, fmt.Errorf("failed to parse admins: %w", err)
 	}
 
+	// Create the config store early so we can read it for logger config.
+	configPath := filepath.Join(c.DatabaseDir, "_config.json")
+	cs := handler.NewConfigStore(configPath, nil) // Pass nil logger for now, will be updated in task #7
+
+	// Create logger from config BEFORE storage
+	logger, err := adapterlogger.NewFromConfig(cs.Get)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create logger: %w", err)
+	}
+	gdb.Logger = logger
+
+	// Open storage with logger
 	s, err := storage.Open(
 		c.DatabaseDir,
+		storage.WithLogger(logger.With("component", "storage")),
 		storage.WithViewEngine("", gojaview.NewViewServer), // default langage
 		storage.WithViewEngine("javascript", gojaview.NewViewServer),
 		storage.WithViewEngine("tengo", tengoview.NewViewServer),
-		storage.WithReducerEngine("", gojaview.NewReducer),
-		storage.WithReducerEngine("javascript", gojaview.NewReducer),
+		storage.WithFilterEngine("", gojaview.NewFilterServer),
+		storage.WithFilterEngine("javascript", gojaview.NewFilterServer),
+		storage.WithFilterEngine("tengo", tengoview.NewFilterServer),
+		storage.WithReducerEngine("", gojaview.NewReducerBuilder(logger.With("component", "reducer"))),
+		storage.WithReducerEngine("javascript", gojaview.NewReducerBuilder(logger.With("component", "reducer"))),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database dir: %w", err)
 	}
+
 	tc := controller.Task{
 		Storage: s,
+		Logger:  logger.With("component", "task"),
 	}
 	go tc.Run(context.Background())
-	repService := &controller.ReplicationService{Storage: s}
-	rc := &controller.Replication{
+	replication := &service.Replication{
 		Storage: s,
-		Service: repService,
+		Logger:  logger.With("component", "replication"),
 	}
-	go rc.Run(context.Background())
+	go replication.Run(context.Background())
 	gdb.Storage = s
-
-	// Create the config store early so we can read it for listen address and CORS.
-	configPath := filepath.Join(c.DatabaseDir, "_config.json")
-	cs := handler.NewConfigStore(configPath)
 	gdb.Config = cs
 
 	r := mux.NewRouter()
 	for _, c := range c.Containers {
 		err = public.MountContainer(r, c)
 		if err != nil {
-			log.Printf("failed to mount container %q: %v", c.FolderName(), err)
+			logger.Warnf(context.Background(), "container mount failed", "container", c.FolderName(), "error", err)
 		}
 	}
 	gdb.Handler = r
@@ -128,11 +142,12 @@ func (c *Config) BuildDatabase() (*Goydb, error) {
 	}
 
 	err = handler.Router{
-		SessionStore:       store,
-		Storage:            s,
-		Admins:             admins,
-		Config:             cs,
-		ReplicationService: repService,
+		SessionStore: store,
+		Storage:      s,
+		Admins:       admins,
+		Config:       cs,
+		Replication:  replication,
+		Logger:       logger,
 	}.Build(r)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build router: %w", err)

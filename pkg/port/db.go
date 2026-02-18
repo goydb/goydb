@@ -57,6 +57,8 @@ type Database interface {
 	IndexIterator(ctx context.Context, tx EngineReadTransaction, idx DocumentIndex) (Iterator, error)
 	Transaction(ctx context.Context, fn func(tx DatabaseTx) error) error
 	SearchDocuments(ctx context.Context, ddfn *model.DesignDocFn, sq *SearchQuery) (*SearchResult, error)
+	ViewEngine(name string) ViewServerBuilder
+	FilterEngine(name string) FilterServerBuilder
 	ReducerEngine(name string) ReducerServerBuilder
 }
 
