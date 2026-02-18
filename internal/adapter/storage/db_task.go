@@ -41,7 +41,7 @@ func (d *Database) AddTasksTx(ctx context.Context, tx port.EngineWriteTransactio
 
 func (d *Database) GetTasks(ctx context.Context, count int) ([]*model.Task, error) {
 	var tasks []*model.Task
-	err := d.db.WriteTransaction(func(tx port.EngineWriteTransaction) error {
+	err := d.db.WriteTransaction(d.logger, func(tx port.EngineWriteTransaction) error {
 		c := tx.Cursor(taskBucket)
 
 		i := 0
@@ -86,7 +86,7 @@ func (d *Database) UpdateTask(ctx context.Context, task *model.Task) error {
 		return err
 	}
 
-	err = d.db.WriteTransaction(func(tx port.EngineWriteTransaction) error {
+	err = d.db.WriteTransaction(d.logger, func(tx port.EngineWriteTransaction) error {
 		tx.Put(taskBucket, key, data)
 		return nil
 	})
@@ -121,7 +121,7 @@ func (d *Database) PeekTasks(ctx context.Context, count int) ([]*model.Task, err
 }
 
 func (d *Database) CompleteTasks(ctx context.Context, tasks []*model.Task) error {
-	err := d.db.WriteTransaction(func(tx port.EngineWriteTransaction) error {
+	err := d.db.WriteTransaction(d.logger, func(tx port.EngineWriteTransaction) error {
 		for _, task := range tasks {
 			key, err := cbor.Marshal(task.ID)
 			if err != nil {

@@ -10,7 +10,7 @@ import (
 // rawTx opens a write transaction with a concrete *Transaction for internal use.
 // Use Transaction (port.DatabaseTx callback) for code that should be testable via port.Database.
 func (d *Database) rawTx(fn func(tx *Transaction) error) error {
-	return d.db.WriteTransaction(func(tx port.EngineWriteTransaction) error {
+	return d.db.WriteTransaction(d.logger, func(tx port.EngineWriteTransaction) error {
 		return fn(&Transaction{
 			EngineWriteTransaction: tx,
 			Database:               d,

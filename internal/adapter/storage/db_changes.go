@@ -2,9 +2,11 @@ package storage
 
 import (
 	"context"
+	"encoding/binary"
 	"strconv"
 	"time"
 
+	"github.com/goydb/goydb/internal/adapter/index"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 )
@@ -32,25 +34,57 @@ start:
 	}
 
 	err := d.rawTx(func(tx *Transaction) error {
-		index := d.ChangesIndex()
-		opts, err := index.IteratorOptions(ctx)
-		if err != nil {
-			return err
+		// Get the changes index bucket
+		cursor := tx.Cursor([]byte(index.ChangesIndexName))
+		if cursor == nil {
+			return nil
 		}
 
-		i := NewIterator(tx, WithOptions(opts))
-		i.SetLimit(options.Limit)
-
-		if !options.SinceNow() {
-			i.SetStartKey([]byte(options.Since))
+		// Determine start position
+		var k, v []byte
+		if options.SinceNow() || options.Since == "" {
+			k, v = cursor.First()
+		} else {
+			// Parse since as uint64 and seek to it
+			since, _ := strconv.ParseUint(options.Since, 10, 64)
+			sinceKey := make([]byte, 8)
+			binary.BigEndian.PutUint64(sinceKey, since)
+			k, v = cursor.Seek(sinceKey)
+			// Move to next since we want changes AFTER this sequence
+			if k != nil {
+				k, v = cursor.Next()
+			}
 		}
 
-		for doc := i.First(); i.Continue(); doc = i.Next() {
+		// Iterate through changes
+		count := 0
+		limit := options.Limit
+		if limit == 0 {
+			limit = 1000 // default
+		}
+
+		for k != nil && count < limit {
+			// Extract document ID from value
+			docID := string(v)
+
+			// Look up the full document
+			doc, err := tx.GetDocument(ctx, docID)
+			if err != nil || doc == nil {
+				// Skip documents that can't be found
+				k, v = cursor.Next()
+				continue
+			}
+
 			docs = append(docs, doc)
+			count++
+			k, v = cursor.Next()
 		}
 
-		// get number of remaining changes
-		pending = i.Remaining()
+		// Count remaining changes
+		for k != nil {
+			pending++
+			k, _ = cursor.Next()
+		}
 
 		return nil
 	})

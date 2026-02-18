@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
-	"log"
 
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
@@ -46,7 +45,7 @@ func (d *Database) NotifyDocumentUpdate(doc *model.Document) {
 			}
 			if err != nil {
 				deletionKeys = append(deletionKeys, k)
-				log.Printf("failed to update change listener, removing: %v", err)
+				d.logger.Warnf(context.Background(), "change listener update failed", "error", err)
 			}
 			return true
 		})
