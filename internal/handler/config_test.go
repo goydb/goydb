@@ -11,7 +11,8 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
 	"github.com/goydb/goydb/internal/adapter/storage"
-	"github.com/goydb/goydb/internal/controller"
+	"github.com/goydb/goydb/internal/adapter/logger"
+	"github.com/goydb/goydb/internal/service"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -231,10 +232,10 @@ func TestConfigPersistence(t *testing.T) {
 	admins := model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}}
 
 	buildRouter := func() (http.Handler, func()) {
-		s, err := storage.Open(dir)
+		s, err := storage.Open(dir, storage.WithLogger(logger.NewNoLog()))
 		require.NoError(t, err)
 		r := mux.NewRouter()
-		err = Router{Storage: s, SessionStore: store, Admins: admins, ReplicationService: &controller.ReplicationService{Storage: s}}.Build(r)
+		err = Router{Storage: s, SessionStore: store, Admins: admins, Replication: &service.Replication{Storage: s, Logger: logger.NewNoLog()}, Logger: logger.NewNoLog()}.Build(r)
 		require.NoError(t, err)
 		return r, func() { _ = s.Close() }
 	}

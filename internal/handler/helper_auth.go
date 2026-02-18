@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"log"
 	"net/http"
 
 	"github.com/goydb/goydb/pkg/model"
@@ -24,24 +23,24 @@ func (a Authenticator) Authenticate(ctx context.Context, username, password stri
 	var sb port.SessionBuilder
 	db, err := a.Storage.Database(ctx, "_users")
 	if err != nil {
-		log.Println("failed to load users", err)
+		a.Logger.Warnf(ctx, "failed to load users database", "error", err)
 		return nil
 	}
 	doc, err := db.GetDocument(ctx, "org.couchdb.user:"+username)
 	if err != nil {
-		log.Println("failed to load users", err)
+		a.Logger.Warnf(ctx, "failed to load user document", "username", username, "error", err)
 		return nil
 	}
 	if doc != nil {
 		var u model.User
 		err = u.FromDocument(doc)
 		if err != nil {
-			log.Println("failed to parse user document", err)
+			a.Logger.Warnf(ctx, "failed to parse user document", "error", err)
 			return nil
 		}
 		ok, err := u.VerifyPassword(password)
 		if err != nil {
-			log.Println("failed to verify password", err)
+			a.Logger.Warnf(ctx, "failed to verify password", "error", err)
 			return nil
 		}
 		if ok {
@@ -112,7 +111,7 @@ func (a Authenticator) DB(w http.ResponseWriter, r *http.Request, db port.Databa
 
 	sec, err := db.GetSecurity(r.Context())
 	if err != nil {
-		log.Fatal(err)
+		a.Logger.Errorf(r.Context(), "failed to get security", "error", err)
 		return nil, false
 	}
 

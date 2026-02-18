@@ -1,10 +1,13 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
-	"log"
+	"fmt"
 	"os"
 	"sync"
+
+	"github.com/goydb/goydb/pkg/port"
 )
 
 // defaultConfig is the seed applied on the very first run (when no file exists).
@@ -36,17 +39,19 @@ var defaultConfig = map[string]map[string]string{
 // When path is non-empty the store is backed by a JSON file and every write
 // is atomically persisted so values survive a server restart.
 type ConfigStore struct {
-	mu   sync.RWMutex
-	path string                      // empty → in-memory only
-	data map[string]map[string]string // section → key → value
+	mu     sync.RWMutex
+	path   string                      // empty → in-memory only
+	data   map[string]map[string]string // section → key → value
+	logger port.Logger                 // optional logger, can be nil during bootstrap
 }
 
 // NewConfigStore returns a ConfigStore for the given file path.
 //   - path == "" → pure in-memory, seeded with defaults (useful for tests)
 //   - path != "" and file exists → loaded from file (file is authoritative)
 //   - path != "" and file absent → seeded with defaults, file created immediately
-func NewConfigStore(path string) *ConfigStore {
-	cs := &ConfigStore{path: path}
+//   - logger can be nil during bootstrap, in which case errors are written to stderr
+func NewConfigStore(path string, logger port.Logger) *ConfigStore {
+	cs := &ConfigStore{path: path, logger: logger}
 
 	if path != "" {
 		if data, err := loadConfigFile(path); err == nil {
@@ -59,7 +64,11 @@ func NewConfigStore(path string) *ConfigStore {
 	cs.data = deepCopyDefaults()
 	if path != "" {
 		if err := cs.saveUnlocked(); err != nil {
-			log.Printf("config: failed to write initial config file %q: %v", path, err)
+			if cs.logger != nil {
+				cs.logger.Warnf(context.Background(), "config file init failed", "path", path, "error", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "WARNING: config: failed to write initial config file %q: %v\n", path, err)
+			}
 		}
 	}
 	return cs
@@ -110,7 +119,11 @@ func (cs *ConfigStore) Set(section, key, value string) string {
 	cs.data[section][key] = value
 	if cs.path != "" {
 		if err := cs.saveUnlocked(); err != nil {
-			log.Printf("config: failed to save config: %v", err)
+			if cs.logger != nil {
+				cs.logger.Warnf(context.Background(), "config save failed", "error", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "WARNING: config: failed to save config: %v\n", err)
+			}
 		}
 	}
 	return old
@@ -131,7 +144,11 @@ func (cs *ConfigStore) Delete(section, key string) (string, bool) {
 	delete(kv, key)
 	if cs.path != "" {
 		if err := cs.saveUnlocked(); err != nil {
-			log.Printf("config: failed to save config: %v", err)
+			if cs.logger != nil {
+				cs.logger.Warnf(context.Background(), "config save failed", "error", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "WARNING: config: failed to save config: %v\n", err)
+			}
 		}
 	}
 	return old, true

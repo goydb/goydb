@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"github.com/goydb/goydb/internal/controller"
+	"github.com/goydb/goydb/internal/service"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 
@@ -9,9 +9,10 @@ import (
 )
 
 type Base struct {
-	Storage            port.Storage
-	SessionStore       sessions.Store
-	Admins             model.AdminUsers
-	Config             *ConfigStore
-	ReplicationService *controller.ReplicationService
+	Storage      port.Storage
+	SessionStore sessions.Store
+	Admins       model.AdminUsers
+	Config       *ConfigStore
+	Replication  *service.Replication
+	Logger       port.Logger
 }

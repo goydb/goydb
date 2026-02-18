@@ -12,8 +12,10 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
 	"github.com/goydb/goydb/internal/adapter/storage"
+	"github.com/goydb/goydb/internal/adapter/logger"
 	"github.com/goydb/goydb/internal/adapter/view/gojaview"
 	"github.com/goydb/goydb/internal/controller"
+	"github.com/goydb/goydb/internal/service"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,6 +28,7 @@ func setupViewTest(t *testing.T) (*storage.Storage, *mux.Router, func()) {
 	require.NoError(t, err)
 
 	s, err := storage.Open(dir,
+		storage.WithLogger(logger.NewNoLog()),
 		storage.WithViewEngine("", gojaview.NewViewServer),
 		storage.WithViewEngine("javascript", gojaview.NewViewServer),
 	)
@@ -38,7 +41,7 @@ func setupViewTest(t *testing.T) (*storage.Storage, *mux.Router, func()) {
 		Storage:            s,
 		SessionStore:       store,
 		Admins:             model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}},
-		ReplicationService: &controller.ReplicationService{Storage: s},
+		Replication: &service.Replication{Storage: s, Logger: logger.NewNoLog()}, Logger: logger.NewNoLog(),
 	}.Build(r)
 	require.NoError(t, err)
 

@@ -60,6 +60,10 @@ func (s *DBDocGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusNotFound, err.Error())
 		return
 	}
+	if dbdoc == nil {
+		WriteError(w, http.StatusNotFound, "document not found")
+		return
+	}
 	if localSeq {
 		dbdoc.Data["_local_seq"] = dbdoc.LocalSeq
 	}

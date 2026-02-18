@@ -11,7 +11,8 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
 	"github.com/goydb/goydb/internal/adapter/storage"
-	"github.com/goydb/goydb/internal/controller"
+	"github.com/goydb/goydb/internal/adapter/logger"
+	"github.com/goydb/goydb/internal/service"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,7 +22,7 @@ func setupRevsDiffTest(t *testing.T) (*storage.Storage, *mux.Router, func()) {
 	dir, err := os.MkdirTemp(os.TempDir(), "goydb-handler-test-*")
 	require.NoError(t, err)
 
-	s, err := storage.Open(dir)
+	s, err := storage.Open(dir, storage.WithLogger(logger.NewNoLog()))
 	require.NoError(t, err)
 
 	store := sessions.NewCookieStore([]byte("test-secret-32-bytes-long-enough"))
@@ -31,7 +32,7 @@ func setupRevsDiffTest(t *testing.T) (*storage.Storage, *mux.Router, func()) {
 		Storage:            s,
 		SessionStore:       store,
 		Admins:             model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}},
-		ReplicationService: &controller.ReplicationService{Storage: s},
+		Replication: &service.Replication{Storage: s, Logger: logger.NewNoLog()}, Logger: logger.NewNoLog(),
 	}.Build(r)
 	require.NoError(t, err)
 

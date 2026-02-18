@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
@@ -55,7 +54,7 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for {
 			n, err := db.TaskCount(r.Context())
 			if err != nil {
-				log.Println(err)
+				s.Logger.Errorf(r.Context(), "failed to get task count", "error", err)
 				WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}

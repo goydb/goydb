@@ -3,7 +3,7 @@ package handler
 import (
 	"path/filepath"
 
-	"github.com/goydb/goydb/internal/controller"
+	"github.com/goydb/goydb/internal/service"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 
@@ -12,11 +12,12 @@ import (
 )
 
 type Router struct {
-	Storage            port.Storage
-	SessionStore       sessions.Store
-	Admins             model.AdminUsers
-	Config             *ConfigStore
-	ReplicationService *controller.ReplicationService
+	Storage      port.Storage
+	SessionStore sessions.Store
+	Admins       model.AdminUsers
+	Config       *ConfigStore
+	Replication  *service.Replication
+	Logger       port.Logger
 }
 
 func (router Router) Build(r *mux.Router) error {
@@ -26,7 +27,7 @@ func (router Router) Build(r *mux.Router) error {
 		if b.Storage != nil {
 			configPath = filepath.Join(b.Storage.Path(), "_config.json")
 		}
-		b.Config = NewConfigStore(configPath)
+		b.Config = NewConfigStore(configPath, b.Logger)
 	}
 
 	r.Methods("GET").Path("/_up").Handler(&Up{Base: b})

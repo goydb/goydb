@@ -40,7 +40,7 @@ func (s *Replicate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		CreateTarget: body.CreateTarget,
 	}
 
-	result, err := s.Base.ReplicationService.Run(r.Context(), repDoc)
+	result, err := s.Base.Replication.RunSync(r.Context(), repDoc)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, err.Error())
 		return
