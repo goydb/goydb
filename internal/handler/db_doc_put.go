@@ -83,7 +83,7 @@ func (s *DBDocPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rev, err := db.PutDocument(r.Context(), &model.Document{
 		ID:          docID,
 		Data:        doc,
-		Deleted:     doc["_deleted"] == "true",
+		Deleted:     isTruthy(doc["_deleted"]),
 		Attachments: attachments,
 	})
 	if errors.Is(err, storage.ErrConflict) {
@@ -149,7 +149,7 @@ func (s *DBDocPut) handleMultipart(w http.ResponseWriter, r *http.Request, db po
 	rev, err := db.PutDocument(r.Context(), &model.Document{
 		ID:      docID,
 		Data:    doc,
-		Deleted: doc["_deleted"] == "true",
+		Deleted: isTruthy(doc["_deleted"]),
 	})
 	if errors.Is(err, storage.ErrConflict) {
 		WriteError(w, http.StatusConflict, err.Error())
@@ -214,4 +214,15 @@ func resolveDocID(doc map[string]interface{}, r *http.Request) string {
 func filenameFromPart(p *multipart.Part) string {
 	_, params, _ := mime.ParseMediaType(p.Header.Get("Content-Disposition"))
 	return params["filename"]
+}
+
+// isTruthy returns true when v is the boolean true or the string "true".
+func isTruthy(v interface{}) bool {
+	switch val := v.(type) {
+	case bool:
+		return val
+	case string:
+		return val == "true"
+	}
+	return false
 }
