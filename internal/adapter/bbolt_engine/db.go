@@ -62,6 +62,38 @@ func (db *DB) WriteTransaction(logger port.Logger, fn func(tx port.EngineWriteTr
 	return nil
 }
 
+func (db *DB) Compact() error {
+	srcPath := db.db.Path()
+	tmpPath := srcPath + ".compact.tmp"
+
+	// Phase 1: compact into temp file (src stays open, concurrent access is fine)
+	dst, err := bbolt.Open(tmpPath, 0666, nil)
+	if err != nil {
+		return err
+	}
+	if err := bbolt.Compact(dst, db.db, 0); err != nil {
+		dst.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := dst.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+
+	// Phase 2: swap (brief window where src is closed)
+	if err := db.db.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, srcPath); err != nil {
+		db.db, _ = bbolt.Open(srcPath, 0666, nil) // best-effort reopen original
+		return err
+	}
+	db.db, err = bbolt.Open(srcPath, 0666, nil)
+	return err
+}
+
 func (db *DB) Stats() (stats model.DatabaseStats, err error) {
 	fi, err := os.Stat(db.db.Path())
 	if err != nil {
