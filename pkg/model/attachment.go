@@ -10,5 +10,6 @@ type Attachment struct {
 	Length      int64  `json:"length"`
 	Stub        bool   `json:"stub"`
 
-	Reader io.ReadCloser `bson:"-" json:"-"`
+	Reader      io.ReadCloser `bson:"-" json:"-"`
+	ExpectedRev string        `bson:"-" json:"-"` // revision the client expects; empty = no check
 }

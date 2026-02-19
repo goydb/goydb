@@ -33,7 +33,7 @@ type Database interface {
 
 	PutAttachment(ctx context.Context, docID string, att *model.Attachment) (string, error)
 	GetAttachment(ctx context.Context, docID, name string) (*model.Attachment, error)
-	DeleteAttachment(ctx context.Context, docID, name string) (string, error)
+	DeleteAttachment(ctx context.Context, docID, name, rev string) (string, error)
 	AttachmentReader(docID, attachment string) (io.ReadCloser, error)
 
 	AllDocs(ctx context.Context, q AllDocsQuery) ([]*model.Document, int, error)
