@@ -108,6 +108,7 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 	} else {
 		docs = make(map[interface{}]interface{})
+		var docList []*model.Document
 		err = db.Transaction(r.Context(), func(tx port.DatabaseTx) error {
 			iter, err := db.IndexIterator(r.Context(), tx, idx)
 			if err != nil {
@@ -118,11 +119,17 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			iter.SetLimit(int(q.Limit))
 			for doc := iter.First(); iter.Continue(); doc = iter.Next() {
 				docs[doc.ID] = doc
+				docList = append(docList, doc)
 			}
 			total = iter.Remaining() + len(docs)
 
 			return err
 		})
+
+		// Enrich documents with full data if include_docs=true
+		if err == nil && q.IncludeDocs && len(docList) > 0 {
+			err = db.EnrichDocuments(r.Context(), docList)
+		}
 	}
 
 	if err != nil {

@@ -326,3 +326,64 @@ func TestView_NonexistentView(t *testing.T) {
 	_, code := queryView(t, router, "testdb", "users", "by_name", "")
 	assert.Equal(t, http.StatusNotFound, code)
 }
+
+func TestView_IncludeDocs(t *testing.T) {
+	s, router, cleanup := setupViewTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"name": "alice", "age": 30, "type": "user"},
+	})
+	require.NoError(t, err)
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "doc2",
+		Data: map[string]interface{}{"name": "bob", "age": 25, "type": "user"},
+	})
+	require.NoError(t, err)
+
+	putDesignDoc(t, router, "testdb", "users", map[string]interface{}{
+		"views": map[string]interface{}{
+			"by_name": map[string]interface{}{
+				"map": `function(doc) { if (doc.type === "user") { emit(doc.name, doc.age); } }`,
+			},
+		},
+	})
+
+	// Query without include_docs
+	result, code := queryView(t, router, "testdb", "users", "by_name", "reduce=false")
+	require.Equal(t, http.StatusOK, code)
+	assert.Equal(t, 2, result.TotalRows)
+	assert.Len(t, result.Rows, 2)
+
+	// Verify we have key and value but no doc
+	for _, row := range result.Rows {
+		assert.NotNil(t, row.Key, "key should be present")
+		assert.NotNil(t, row.Value, "value should be present")
+		assert.Nil(t, row.Doc, "doc should not be included without include_docs=true")
+	}
+
+	// Query with include_docs=true
+	result, code = queryView(t, router, "testdb", "users", "by_name", "reduce=false&include_docs=true")
+	require.Equal(t, http.StatusOK, code)
+	assert.Equal(t, 2, result.TotalRows)
+	assert.Len(t, result.Rows, 2)
+
+	// Verify we have full documents
+	for _, row := range result.Rows {
+		assert.NotNil(t, row.Key, "key should be present")
+		assert.NotNil(t, row.Value, "value should be present")
+		assert.NotNil(t, row.Doc, "doc should be included with include_docs=true")
+
+		// Verify doc contains the full document data
+		assert.NotNil(t, row.Doc["_id"], "doc should have _id")
+		assert.NotNil(t, row.Doc["_rev"], "doc should have _rev")
+		assert.NotNil(t, row.Doc["name"], "doc should have name field")
+		assert.NotNil(t, row.Doc["age"], "doc should have age field")
+		assert.Equal(t, "user", row.Doc["type"], "doc should have type field")
+	}
+}
