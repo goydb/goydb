@@ -58,12 +58,15 @@ func (router Router) Build(r *mux.Router) error {
 	r.Methods("DELETE").Path("/_session").Handler(&SessionDelete{Base: b})
 
 	r.Methods("POST").Path("/{db}/_ensure_full_commit").Handler(&DBEnsureFullCommit{Base: b})
+	r.Methods("POST").Path("/{db}/_compact").Handler(&DBCompact{Base: b})
+	r.Methods("POST").Path("/{db}/_compact/{ddoc}").Handler(&DBCompact{Base: b})
+	r.Methods("POST").Path("/{db}/_view_cleanup").Handler(&DBViewCleanup{Base: b})
 
-	r.Methods("GET").Path("/{db}/_all_docs").Handler(&DBDocsAll{Base: b})
+	r.Methods("GET", "POST").Path("/{db}/_all_docs").Handler(&DBDocsAll{Base: b})
 	r.Methods("GET", "POST").Path("/{db}/_changes").Handler(&DBChanges{Base: b})
 	r.Methods("POST").Path("/{db}/_revs_diff").Handler(&DBRevsDiff{Base: b})
 	r.Methods("POST").Path("/{db}/_find").Handler(&DBDocsFind{Base: b})
-	r.Methods("GET").Path("/{db}/_design_docs").Handler(&DBDesignDocs{Base: b})
+	r.Methods("GET", "POST").Path("/{db}/_design_docs").Handler(&DBDesignDocs{Base: b})
 	r.Methods("POST").Path("/{db}/_bulk_get").Handler(&DBDocsBulkGet{Base: b})
 	r.Methods("POST").Path("/{db}/_missing_revs").Handler(&DBMissingRevs{Base: b})
 
