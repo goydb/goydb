@@ -23,6 +23,7 @@ type DatabaseTx interface {
 type Database interface {
 	Name() string
 	Stats(ctx context.Context) (model.DatabaseStats, error)
+	Compact(ctx context.Context) error
 	Sequence(ctx context.Context) (string, error)
 
 	GetDocument(ctx context.Context, docID string) (*model.Document, error)
