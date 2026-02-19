@@ -109,8 +109,6 @@ func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (re
 		}
 	}
 
-	tx.Database.NotifyDocumentUpdate(doc)
-
 	return
 }
 
@@ -185,7 +183,6 @@ func (tx *Transaction) PutDocumentForReplication(ctx context.Context, doc *model
 		}
 	}
 
-	tx.Database.NotifyDocumentUpdate(doc)
 	return nil
 }
 
