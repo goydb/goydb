@@ -126,10 +126,10 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 
 | Method | Endpoint | Status | Notes |
 |--------|----------|--------|-------|
-| HEAD | `/{db}/{docid}/{attname}` | **No** | No HEAD handler for attachments |
-| GET | `/{db}/{docid}/{attname}` | **Partially** | Returns attachment binary; missing `rev` query param, HTTP Range request support |
-| PUT | `/{db}/{docid}/{attname}` | **Partially** | Uploads attachment; missing `rev` validation in query param |
-| DELETE | `/{db}/{docid}/{attname}` | **Partially** | Deletes attachment; missing `rev` query param validation, `batch=ok` |
+| HEAD | `/{db}/{docid}/{attname}` | **Yes** | Returns `ETag`, `Content-Type`, `Content-Length`; no body |
+| GET | `/{db}/{docid}/{attname}` | **Partially** | Returns attachment binary with `ETag` and `Content-Length`; missing `rev` query param, HTTP Range request support |
+| PUT | `/{db}/{docid}/{attname}` | **Partially** | Uploads attachment; enforces `rev`/`If-Match` conflict detection; returns `{"ok":true,"id":"...","rev":"..."}`; missing `batch=ok` |
+| DELETE | `/{db}/{docid}/{attname}` | **Partially** | Deletes attachment; enforces `rev`/`If-Match` conflict detection; returns `{"ok":true,"id":"...","rev":"..."}`; missing `batch=ok` |
 
 ---
 
@@ -142,10 +142,10 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 | PUT | `/{db}/_design/{ddoc}` | **Yes** | |
 | DELETE | `/{db}/_design/{ddoc}` | **Yes** | |
 | COPY | `/{db}/_design/{ddoc}` | **No** | `COPY` HTTP method not routed |
-| HEAD | `/{db}/_design/{ddoc}/{attname}` | **No** | |
-| GET | `/{db}/_design/{ddoc}/{attname}` | **No** | No route for design doc attachments |
-| PUT | `/{db}/_design/{ddoc}/{attname}` | **No** | |
-| DELETE | `/{db}/_design/{ddoc}/{attname}` | **No** | |
+| HEAD | `/{db}/_design/{ddoc}/{attname}` | **Yes** | Returns `ETag`, `Content-Type`, `Content-Length`; no body |
+| GET | `/{db}/_design/{ddoc}/{attname}` | **Partially** | Returns attachment binary with `ETag` and `Content-Length`; missing `rev` query param, HTTP Range request support |
+| PUT | `/{db}/_design/{ddoc}/{attname}` | **Partially** | Uploads attachment; enforces `rev`/`If-Match` conflict detection; returns full `id`/`rev` response |
+| DELETE | `/{db}/_design/{ddoc}/{attname}` | **Partially** | Deletes attachment; enforces `rev`/`If-Match` conflict detection; returns full `id`/`rev` response |
 | GET | `/{db}/_design/{ddoc}/_info` | **Partially** | Returns index info; may lack `view_index.updater_running`, `waiting_clients`, `compact_running` fields |
 | GET | `/{db}/_design/{ddoc}/_view/{view}` | **Partially** | Supports `skip`, `limit`, `include_docs`, `reduce`, `group`, `update`; missing POST method, `startkey`/`endkey`, `key`, `keys`, `descending`, `inclusive_end`, `conflicts`, `stable`, `update_seq`, `group_level`, `att_encoding_info`, `sorted` |
 | POST | `/{db}/_design/{ddoc}/_view/{view}` | **No** | POST variant not routed |
@@ -200,14 +200,14 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 | Authentication | 1 | 2 | 0 |
 | Database | 8 | 7 | 13 |
 | Document | 0 | 4 | 1 |
-| Attachment | 0 | 3 | 1 |
-| Design Document | 3 | 3 | 15 |
+| Attachment | 1 | 3 | 0 |
+| Design Document | 4 | 6 | 11 |
 | Local Documents | 3 | 1 | 3 |
 | Partitioned DBs | 0 | 0 | 5 |
-| **Total** | **24** | **29** | **66** |
+| **Total** | **26** | **32** | **61** |
 
 ### Key capabilities present
-- Full document CRUD with attachment support (inline base64, multipart/related)
+- Full document CRUD with attachment support (inline base64, multipart/related, PUT/DELETE/HEAD/GET via `/{db}/{docid}/{attname}` and `/_design/{ddoc}/{attname}`)
 - Replication protocol: `_changes`, `_revs_diff`, `_missing_revs`, `_bulk_docs` (with `new_edits:false`), `_local` checkpoint docs
 - Map/reduce views with reduce and grouping
 - Mango `_find` with selector queries
