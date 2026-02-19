@@ -64,25 +64,41 @@ func (s *DBDocGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusNotFound, "document not found")
 		return
 	}
+
+	// Always create a clean response map without modifying dbdoc.Data
+	// This prevents fields like _revisions from persisting in the document
+	responseData := make(map[string]interface{}, len(dbdoc.Data)+3)
+	for k, v := range dbdoc.Data {
+		// Filter out internal fields that should only be added conditionally
+		if k == "_revisions" || k == "_local_seq" {
+			continue
+		}
+		responseData[k] = v
+	}
+
+	// Add conditional fields
 	if localSeq {
-		dbdoc.Data["_local_seq"] = dbdoc.LocalSeq
+		responseData["_local_seq"] = dbdoc.LocalSeq
 	}
 	if revs {
-		dbdoc.Data["_revisions"] = dbdoc.Revisions()
+		responseData["_revisions"] = dbdoc.Revisions()
 	}
 
 	switch r.Header.Get("Accept") {
 	case "multipart/mixed":
+		// For multipart, use a temporary document with clean data
+		tempDoc := *dbdoc
+		tempDoc.Data = responseData
 		mw := NewMultipartResponse(db, w)
 		defer mw.Close()
-		err = mw.WriteDocument(r.Context(), dbdoc)
+		err = mw.WriteDocument(r.Context(), &tempDoc)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 	default:
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(dbdoc.Data) // nolint: errcheck
+		json.NewEncoder(w).Encode(responseData) // nolint: errcheck
 	}
 }
 
