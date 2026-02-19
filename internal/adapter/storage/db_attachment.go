@@ -35,6 +35,9 @@ func (d *Database) PutAttachment(ctx context.Context, docID string, att *model.A
 		if err != nil {
 			return err
 		}
+		if doc == nil {
+			return ErrNotFound
+		}
 
 		docDir := d.DocDir(docID)
 		err = os.MkdirAll(docDir, 0755)
@@ -66,13 +69,17 @@ func (d *Database) PutAttachment(ctx context.Context, docID string, att *model.A
 		}
 		doc.Attachments[att.Filename] = att
 
+		if att.ExpectedRev != "" {
+			doc.Rev = att.ExpectedRev
+		}
+
 		rev, err = tx.PutDocument(ctx, doc)
 		return err
 	})
 	return rev, err
 }
 
-func (d *Database) DeleteAttachment(ctx context.Context, docID, name string) (string, error) {
+func (d *Database) DeleteAttachment(ctx context.Context, docID, name, clientRev string) (string, error) {
 	var rev string
 	err := d.Transaction(ctx, func(tx port.DatabaseTx) error {
 		doc, err := tx.GetDocument(ctx, docID)
@@ -89,8 +96,12 @@ func (d *Database) DeleteAttachment(ctx context.Context, docID, name string) (st
 		delete(doc.Attachments, name)
 
 		err = os.Remove(d.DocAttachment(docID, name))
-		if !ok {
+		if err != nil {
 			return err
+		}
+
+		if clientRev != "" {
+			doc.Rev = clientRev
 		}
 
 		rev, err = tx.PutDocument(ctx, doc)
