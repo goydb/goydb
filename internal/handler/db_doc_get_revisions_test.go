@@ -84,6 +84,7 @@ func TestDBDocGet_RevisionsOnlyWithRevsParam(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
+	result = nil // reset to avoid stale keys from previous decode
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
 
 	assert.NotNil(t, result["_id"])
