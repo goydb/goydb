@@ -53,6 +53,10 @@ func (d *Database) Stats(ctx context.Context) (stats model.DatabaseStats, err er
 	return d.db.Stats()
 }
 
+func (d *Database) Compact(ctx context.Context) error {
+	return d.db.Compact()
+}
+
 func (d *Database) Sequence(ctx context.Context) (string, error) {
 	var seq uint64
 	err := d.rawTx(func(tx *Transaction) error {
