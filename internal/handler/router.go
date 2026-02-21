@@ -73,6 +73,9 @@ func (router Router) Build(r *mux.Router) error {
 	r.Methods("GET").Path("/{db}/_security").Handler(&DBSecurityGet{Base: b})
 	r.Methods("PUT").Path("/{db}/_security").Handler(&DBSecurityPut{Base: b})
 
+	r.Methods("GET").Path("/{db}/_revs_limit").Handler(&DBRevsLimitGet{Base: b})
+	r.Methods("PUT").Path("/{db}/_revs_limit").Handler(&DBRevsLimitPut{Base: b})
+
 	r.Methods("GET").Path("/{db}/_design/{docid}/_view/{view}").Handler(&DBView{Base: b})
 	r.Methods("GET").Path("/{db}/_design/{docid}/_search/{index}").Handler(&DBSearch{Base: b})
 	r.Methods("GET").Path("/{db}/_design/{docid}/_info").Handler(&DBIndexInfo{Base: b})
