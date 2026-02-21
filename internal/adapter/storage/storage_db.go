@@ -54,6 +54,9 @@ func (d *Database) Stats(ctx context.Context) (stats model.DatabaseStats, err er
 }
 
 func (d *Database) Compact(ctx context.Context) error {
+	if err := d.compactDocuments(ctx); err != nil {
+		return err
+	}
 	return d.db.Compact()
 }
 
@@ -115,6 +118,7 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 		tx.EnsureBucket(model.DocsBucket)
 		tx.EnsureBucket(model.AttRefsBucket)
 		tx.EnsureBucket(model.DocLeavesBucket)
+		tx.EnsureBucket(model.MetaBucket)
 
 		err := database.BuildIndices(ctx, tx, false)
 		if err != nil {
