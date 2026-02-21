@@ -16,6 +16,8 @@ type DatabaseTx interface {
 	PutDocument(ctx context.Context, doc *model.Document) (string, error)
 	PutDocumentForReplication(ctx context.Context, doc *model.Document) error
 	DeleteDocument(ctx context.Context, docID, rev string) (*model.Document, error)
+	GetLeaves(ctx context.Context, docID string) ([]*model.Document, error)
+	GetLeaf(ctx context.Context, docID, rev string) (*model.Document, error)
 }
 
 // Database is the high-level interface for a single CouchDB-style database.
@@ -30,11 +32,13 @@ type Database interface {
 	PutDocument(ctx context.Context, doc *model.Document) (string, error)
 	DeleteDocument(ctx context.Context, docID, rev string) (*model.Document, error)
 	PutDocumentForReplication(ctx context.Context, doc *model.Document) error
+	GetLeaves(ctx context.Context, docID string) ([]*model.Document, error)
+	GetLeaf(ctx context.Context, docID, rev string) (*model.Document, error)
 
 	PutAttachment(ctx context.Context, docID string, att *model.Attachment) (string, error)
 	GetAttachment(ctx context.Context, docID, name string) (*model.Attachment, error)
 	DeleteAttachment(ctx context.Context, docID, name, rev string) (string, error)
-	AttachmentReader(docID, attachment string) (io.ReadCloser, error)
+	AttachmentReader(digest string) (io.ReadCloser, error)
 
 	AllDocs(ctx context.Context, q AllDocsQuery) ([]*model.Document, int, error)
 	AllDesignDocs(ctx context.Context) ([]*model.Document, int, error)
