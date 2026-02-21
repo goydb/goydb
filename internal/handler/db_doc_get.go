@@ -48,11 +48,62 @@ func (s *DBDocGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// latest := boolOption("latest", false, opts)
 	var openRevs []string
 	if v := opts.Get("open_revs"); len(v) != 0 {
-		err := json.Unmarshal([]byte(v), &openRevs)
-		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+		if v == "all" {
+			openRevs = []string{"all"}
+		} else {
+			if err := json.Unmarshal([]byte(v), &openRevs); err != nil {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+	}
+
+	// Handle open_revs — return JSON array of leaf revisions.
+	if len(openRevs) > 0 {
+		type openRevEntry struct {
+			OK      *model.Document `json:"ok,omitempty"`
+			Missing string          `json:"missing,omitempty"`
+		}
+
+		var leaves []*model.Document
+		var fetchErr error
+		if openRevs[0] == "all" {
+			leaves, fetchErr = db.GetLeaves(r.Context(), docID)
+		} else {
+			for _, rev := range openRevs {
+				leaf, e := db.GetLeaf(r.Context(), docID, rev)
+				if e == nil && leaf != nil {
+					leaves = append(leaves, leaf)
+				}
+			}
+		}
+		if fetchErr != nil {
+			WriteError(w, http.StatusInternalServerError, fetchErr.Error())
 			return
 		}
+
+		var result []openRevEntry
+		if openRevs[0] == "all" {
+			for _, l := range leaves {
+				result = append(result, openRevEntry{OK: l})
+			}
+		} else {
+			found := make(map[string]*model.Document, len(leaves))
+			for _, l := range leaves {
+				found[l.Rev] = l
+			}
+			for _, rev := range openRevs {
+				if l, ok := found[rev]; ok {
+					result = append(result, openRevEntry{OK: l})
+				} else {
+					result = append(result, openRevEntry{Missing: rev})
+				}
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(result) //nolint:errcheck
+		return
 	}
 
 	dbdoc, err := db.GetDocument(r.Context(), docID)
@@ -156,7 +207,7 @@ func (r *MultipartResponse) WriteDocument(ctx context.Context, doc *model.Docume
 			return err
 		}
 
-		r, err := r.db.AttachmentReader(doc.ID, attachement.Filename)
+		r, err := r.db.AttachmentReader(attachement.Digest)
 		if err != nil {
 			return err
 		}
