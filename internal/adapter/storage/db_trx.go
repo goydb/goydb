@@ -1,10 +1,13 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/fxamacker/cbor/v2"
@@ -59,6 +62,54 @@ func (tx *Transaction) PutRaw(ctx context.Context, key []byte, raw interface{}) 
 	return nil
 }
 
+// leafKey encodes the composite key for a doc_leaves entry.
+func leafKey(docID, rev string) []byte {
+	k := make([]byte, len(docID)+1+len(rev))
+	copy(k, docID)
+	k[len(docID)] = 0
+	copy(k[len(docID)+1:], rev)
+	return k
+}
+
+// putLeaf serialises doc into the doc_leaves bucket.
+func (tx *Transaction) putLeaf(doc *model.Document) error {
+	data, err := bson.Marshal(doc)
+	if err != nil {
+		return err
+	}
+	tx.Put(model.DocLeavesBucket, leafKey(doc.ID, doc.Rev), data)
+	return nil
+}
+
+// deleteLeaf removes a specific leaf entry (no-op if not present).
+func (tx *Transaction) deleteLeaf(docID, rev string) {
+	tx.Delete(model.DocLeavesBucket, leafKey(docID, rev))
+}
+
+// leafRevs returns all leaf revision strings for docID (prefix scan).
+func (tx *Transaction) leafRevs(docID string) []string {
+	prefix := append([]byte(docID), 0)
+	cursor := tx.Cursor(model.DocLeavesBucket)
+	var revs []string
+	for k, _ := cursor.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = cursor.Next() {
+		revs = append(revs, string(k[len(prefix):]))
+	}
+	return revs
+}
+
+// getLeaf deserialises a single leaf from the doc_leaves bucket.
+func (tx *Transaction) getLeaf(docID, rev string) (*model.Document, error) {
+	data, err := tx.Get(model.DocLeavesBucket, leafKey(docID, rev))
+	if err != nil {
+		return nil, err
+	}
+	var doc model.Document
+	if err := bson.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
+	return &doc, nil
+}
+
 func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (rev string, err error) {
 	// verify that the transaction is valid for update
 	oldDoc, err := tx.GetDocument(ctx, doc.ID)
@@ -79,6 +130,21 @@ func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (re
 	rev = strconv.Itoa(revSeq) + "-" + hex.EncodeToString(hash.Sum(nil))
 	doc.Rev = rev
 
+	// Build revision history: prepend new rev, cap at 1000.
+	oldHistory := []string{}
+	if oldDoc != nil {
+		if len(oldDoc.RevHistory) > 0 {
+			oldHistory = oldDoc.RevHistory
+		} else if oldDoc.Rev != "" {
+			// Preserve the old rev for docs stored before RevHistory was introduced.
+			oldHistory = []string{oldDoc.Rev}
+		}
+	}
+	doc.RevHistory = append([]string{rev}, oldHistory...)
+	if len(doc.RevHistory) > 1000 {
+		doc.RevHistory = doc.RevHistory[:1000]
+	}
+
 	if oldDoc != nil {
 		// maintain indices - remove old value
 		for _, index := range tx.Database.Indices() {
@@ -93,6 +159,12 @@ func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (re
 	if err != nil {
 		return
 	}
+
+	// Maintain doc_leaves: remove old winner leaf, insert new winner leaf.
+	if oldDoc != nil {
+		tx.deleteLeaf(doc.ID, oldDoc.Rev)
+	}
+	_ = tx.putLeaf(doc) // non-critical; leaf is best-effort
 
 	if doc.IsDesignDoc() {
 		err = tx.Database.BuildDesignDocIndices(ctx, tx, doc, true)
@@ -138,16 +210,43 @@ func (tx *Transaction) GetDocument(ctx context.Context, docID string) (*model.Do
 		return nil, err
 	}
 
+	// Populate _conflicts and augment RevHistory from conflict branches.
+	leafRevs := tx.leafRevs(doc.ID)
+	if slices.Contains(leafRevs, doc.Rev) && len(leafRevs) > 1 {
+		knownRevs := make(map[string]bool, len(doc.RevHistory))
+		for _, r := range doc.RevHistory {
+			knownRevs[r] = true
+		}
+
+		var conflicts []string
+		for _, leafRev := range leafRevs {
+			if leafRev == doc.Rev {
+				continue
+			}
+			conflicts = append(conflicts, leafRev)
+			if leaf, err := tx.getLeaf(doc.ID, leafRev); err == nil {
+				for _, r := range leaf.RevHistory {
+					if !knownRevs[r] {
+						knownRevs[r] = true
+						doc.RevHistory = append(doc.RevHistory, r)
+					}
+				}
+			}
+		}
+		doc.Data["_conflicts"] = conflicts
+	}
+
 	return &doc, nil
 }
 
 // PutDocumentForReplication stores a document preserving its existing revision.
 // It skips conflict checks and does not generate a new revision, which is needed
-// when replicating with new_edits=false.
+// when replicating with new_edits=false.  Concurrent leaf revisions (conflicts)
+// are tracked in the doc_leaves bucket; the CouchDB winning revision rule is
+// applied to decide which revision is stored in the authoritative docs bucket.
 func (tx *Transaction) PutDocumentForReplication(ctx context.Context, doc *model.Document) error {
 	oldDoc, err := tx.GetDocument(ctx, doc.ID)
 	if err == nil && oldDoc != nil {
-		// If the document already exists with the same or higher rev, skip
 		oldRev, _ := oldDoc.Revision()
 		newRev, _ := doc.Revision()
 		if oldRev == newRev {
@@ -155,31 +254,100 @@ func (tx *Transaction) PutDocumentForReplication(ctx context.Context, doc *model
 		}
 	}
 
+	// Build RevHistory from _revisions if the peer supplied it.
+	if revsData, ok := doc.Data["_revisions"]; ok {
+		if revsMap, ok := revsData.(map[string]interface{}); ok {
+			start, _ := revsMap["start"].(float64)
+			ids, _ := revsMap["ids"].([]interface{})
+			history := make([]string, 0, len(ids))
+			for i, id := range ids {
+				if idStr, ok := id.(string); ok {
+					seq := int64(start) - int64(i)
+					history = append(history, fmt.Sprintf("%d-%s", seq, idStr))
+				}
+			}
+			if len(history) > 1000 {
+				history = history[:1000]
+			}
+			doc.RevHistory = history
+		}
+	}
+	// Fallback: at minimum record the current rev so future PutDocument calls
+	// can chain from it.
+	if len(doc.RevHistory) == 0 && doc.Rev != "" {
+		doc.RevHistory = []string{doc.Rev}
+	}
+
+	// Build the leaf set in memory.
+	// We read the committed state from the database and apply pending changes
+	// manually, because the bbolt write transaction defers all writes to a
+	// separate commit phase — writes are NOT visible to reads within the
+	// same transaction.
+	committedRevs := tx.leafRevs(doc.ID)
+	leafSet := make(map[string]bool, len(committedRevs)+2)
+	for _, r := range committedRevs {
+		leafSet[r] = true
+	}
+
+	// If the existing doc predates doc_leaves, retroactively add it as a leaf.
+	if oldDoc != nil && !leafSet[oldDoc.Rev] {
+		leafSet[oldDoc.Rev] = true
+		_ = tx.putLeaf(oldDoc)
+	}
+
+	// Add incoming doc as a new leaf.
+	leafSet[doc.Rev] = true
+	_ = tx.putLeaf(doc)
+
+	// Remove any ancestor revisions that were previously leaves
+	// (they now have a child, so they're no longer leaves).
+	for _, ancestorRev := range doc.RevHistory[1:] {
+		if leafSet[ancestorRev] {
+			delete(leafSet, ancestorRev)
+			tx.deleteLeaf(doc.ID, ancestorRev)
+		}
+	}
+
+	// Recompute the winning revision across all known leaves (in-memory).
+	allRevs := make([]string, 0, len(leafSet))
+	for r := range leafSet {
+		allRevs = append(allRevs, r)
+	}
+	winner := model.WinnerRev(allRevs)
+
+	// Determine the full Document for the winner.
+	var winnerDoc *model.Document
+	if winner == doc.Rev {
+		winnerDoc = doc
+	} else {
+		winnerDoc, _ = tx.getLeaf(doc.ID, winner)
+	}
+
+	// Update docs bucket and indices only when the winner changes.
+	currentWinnerRev := ""
 	if oldDoc != nil {
-		for _, index := range tx.Database.Indices() {
-			err := index.DocumentDeleted(ctx, tx, oldDoc)
-			if err != nil {
+		currentWinnerRev = oldDoc.Rev
+	}
+	if winnerDoc != nil && winner != currentWinnerRev {
+		if oldDoc != nil {
+			for _, idx := range tx.Database.Indices() {
+				if err := idx.DocumentDeleted(ctx, tx, oldDoc); err != nil {
+					return err
+				}
+			}
+		}
+		if err := tx.PutRaw(ctx, []byte(doc.ID), winnerDoc); err != nil {
+			return err
+		}
+		if winnerDoc.IsDesignDoc() {
+			if err := tx.Database.BuildDesignDocIndices(ctx, tx, winnerDoc, true); err != nil {
 				return err
 			}
 		}
-	}
-
-	err = tx.PutRaw(ctx, []byte(doc.ID), doc)
-	if err != nil {
-		return err
-	}
-
-	if doc.IsDesignDoc() {
-		err = tx.Database.BuildDesignDocIndices(ctx, tx, doc, true)
-		if err != nil {
-			return err
-		}
-	}
-
-	for _, index := range tx.Database.Indices() {
-		err = index.DocumentStored(ctx, tx, doc)
-		if err != nil {
-			return err
+		for _, idx := range tx.Database.Indices() {
+			if err := idx.DocumentStored(ctx, tx, winnerDoc); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -198,4 +366,30 @@ func (tx *Transaction) DeleteDocument(ctx context.Context, docID, rev string) (*
 		return doc, err
 	}
 	return doc, err
+}
+
+// GetLeaves returns all current leaf revisions of a document
+// (the winner plus any conflicting branches).
+func (tx *Transaction) GetLeaves(ctx context.Context, docID string) ([]*model.Document, error) {
+	revs := tx.leafRevs(docID)
+	docs := make([]*model.Document, 0, len(revs))
+	for _, rev := range revs {
+		d, err := tx.getLeaf(docID, rev)
+		if err != nil {
+			return nil, err
+		}
+		docs = append(docs, d)
+	}
+	return docs, nil
+}
+
+// GetLeaf returns one specific leaf revision of a document.
+// Returns (nil, nil) when the revision is not a known leaf.
+func (tx *Transaction) GetLeaf(ctx context.Context, docID, rev string) (*model.Document, error) {
+	d, err := tx.getLeaf(docID, rev)
+	if err != nil {
+		// Not found in leaves is not an error — return nil, nil.
+		return nil, nil
+	}
+	return d, nil
 }

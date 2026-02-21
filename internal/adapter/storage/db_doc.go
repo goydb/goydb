@@ -75,3 +75,23 @@ func (d *Database) DeleteDocument(ctx context.Context, docID, rev string) (*mode
 	d.NotifyDocumentUpdate(doc)
 	return doc, nil
 }
+
+func (d *Database) GetLeaves(ctx context.Context, docID string) ([]*model.Document, error) {
+	var leaves []*model.Document
+	err := d.Transaction(ctx, func(tx port.DatabaseTx) error {
+		var err error
+		leaves, err = tx.GetLeaves(ctx, docID)
+		return err
+	})
+	return leaves, err
+}
+
+func (d *Database) GetLeaf(ctx context.Context, docID, rev string) (*model.Document, error) {
+	var leaf *model.Document
+	err := d.Transaction(ctx, func(tx port.DatabaseTx) error {
+		var err error
+		leaf, err = tx.GetLeaf(ctx, docID, rev)
+		return err
+	})
+	return leaf, err
+}
