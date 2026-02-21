@@ -4,10 +4,12 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"github.com/goydb/goydb/pkg/model"
 )
 
 type DBDocHead struct {
 	Base
+	Design bool
 }
 
 func (s *DBDocHead) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -19,6 +21,9 @@ func (s *DBDocHead) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	docID := mux.Vars(r)["docid"]
+	if s.Design {
+		docID = string(model.DesignDocPrefix) + docID
+	}
 	doc, err := db.GetDocument(r.Context(), docID)
 	if err != nil || doc == nil {
 		w.WriteHeader(http.StatusNotFound)

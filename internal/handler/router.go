@@ -79,6 +79,7 @@ func (router Router) Build(r *mux.Router) error {
 	r.Methods("GET").Path("/{db}/_design/{docid}/_view/{view}").Handler(&DBView{Base: b})
 	r.Methods("GET").Path("/{db}/_design/{docid}/_search/{index}").Handler(&DBSearch{Base: b})
 	r.Methods("GET").Path("/{db}/_design/{docid}/_info").Handler(&DBIndexInfo{Base: b})
+	r.Methods("HEAD").Path("/{db}/_design/{docid}").Handler(&DBDocHead{Base: b, Design: true})
 	r.Methods("GET").Path("/{db}/_design/{docid}").Handler(&DBDocGet{Base: b, Design: true})
 	r.Methods("PUT").Path("/{db}/_design/{docid}").Handler(&DBDocPut{Base: b})
 	r.Methods("DELETE").Path("/{db}/_design/{docid}").Handler(&DBDocDelete{Base: b, Design: true})
@@ -87,7 +88,7 @@ func (router Router) Build(r *mux.Router) error {
 	r.Methods("PUT").Path("/{db}/_design/{docid}/{attachment}").Handler(&DBDocAttachmentPut{Base: b, Design: true})
 	r.Methods("DELETE").Path("/{db}/_design/{docid}/{attachment}").Handler(&DBDocAttachmentDelete{Base: b, Design: true})
 
-	r.Methods("GET").Path("/{db}/_local_docs").Handler(&DBDocsAll{Base: b, Local: true})
+	r.Methods("GET", "POST").Path("/{db}/_local_docs").Handler(&DBDocsAll{Base: b, Local: true})
 	r.Methods("GET").Path("/{db}/_local/{docid}").Handler(&DBDocGet{Base: b, Local: true})
 	r.Methods("PUT").Path("/{db}/_local/{docid}").Handler(&DBDocPut{Base: b})
 	r.Methods("DELETE").Path("/{db}/_local/{docid}").Handler(&DBDocDelete{Base: b, Local: true})
