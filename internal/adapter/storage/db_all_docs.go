@@ -28,6 +28,9 @@ func (d *Database) AllDocs(ctx context.Context, query port.AllDocsQuery) ([]*mod
 		if query.EndKey != "" {
 			i.SetEndKey([]byte(query.EndKey))
 		}
+		if query.ExclusiveEnd {
+			i.SetExclusiveEnd(true)
+		}
 
 		for doc := i.First(); i.Continue(); doc = i.Next() {
 			// TODO: handle IncludeDocs

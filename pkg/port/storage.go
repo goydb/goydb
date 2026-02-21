@@ -8,11 +8,12 @@ import (
 )
 
 type AllDocsQuery struct {
-	Skip      int64
-	Limit     int64
-	StartKey  string
-	EndKey    string
-	SkipLocal bool
+	Skip         int64
+	Limit        int64
+	StartKey     string
+	EndKey       string
+	SkipLocal    bool
+	ExclusiveEnd bool // true when inclusive_end=false
 	// view options
 	DDFN        *model.DesignDocFn
 	IncludeDocs bool

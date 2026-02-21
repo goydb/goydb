@@ -33,6 +33,7 @@ type Iterator struct {
 	SkipDeleted   bool
 	SkipDesignDoc bool
 	SkipLocalDoc  bool
+	ExclusiveEnd  bool
 
 	key []byte
 
@@ -204,7 +205,11 @@ func (i *Iterator) Continue() bool {
 		return true
 	}
 
-	return bytes.Compare(i.key, i.EndKey) <= 0
+	cmp := bytes.Compare(i.key, i.EndKey)
+	if i.ExclusiveEnd {
+		return cmp < 0
+	}
+	return cmp <= 0
 }
 
 // Remaining returns the remaining documents starting at
@@ -258,6 +263,10 @@ func (i *Iterator) SetEndKey(v []byte) {
 		v = i.KeyFn(v)
 	}
 	i.EndKey = v
+}
+
+func (i *Iterator) SetExclusiveEnd(v bool) {
+	i.ExclusiveEnd = v
 }
 func (i *Iterator) unmarshalDoc(k, v []byte, doc *model.Document) {
 	bson.Unmarshal(v, doc) // nolint: errcheck
