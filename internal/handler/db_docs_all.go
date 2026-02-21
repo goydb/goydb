@@ -73,6 +73,13 @@ func (s *DBDocsAll) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		q.StartKey = strings.ReplaceAll(stringOption("startkey", "start_key", options), `"`, "")
 		q.EndKey = strings.ReplaceAll(stringOption("endkey", "end_key", options), `"`, "")
+		if key := strings.ReplaceAll(stringOption("key", "key", options), `"`, ""); key != "" {
+			q.StartKey = key
+			q.EndKey = key
+		}
+		if !boolOption("inclusive_end", true, options) {
+			q.ExclusiveEnd = true
+		}
 	}
 	q.IncludeDocs = includeDocs
 
