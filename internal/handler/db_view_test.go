@@ -316,6 +316,49 @@ func TestView_ReduceSum_GroupTrue(t *testing.T) {
 	assert.InDelta(t, float64(6), total, 0.001)
 }
 
+func TestView_MultiEmitPerDocument(t *testing.T) {
+	s, router, cleanup := setupViewTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	// One document that emits three rows with the same key.
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"tags": []interface{}{"a", "b", "c"}},
+	})
+	require.NoError(t, err)
+
+	putDesignDoc(t, router, "testdb", "tags", map[string]interface{}{
+		"views": map[string]interface{}{
+			"by_tag": map[string]interface{}{
+				"map": `function(doc) {
+					if (doc.tags) {
+						for (var i = 0; i < doc.tags.length; i++) {
+							emit(doc.tags[i], null);
+						}
+					}
+				}`,
+			},
+		},
+	})
+
+	result, code := queryView(t, router, "testdb", "tags", "by_tag", "reduce=false")
+	require.Equal(t, http.StatusOK, code)
+
+	// All three emitted rows must survive — previously only the last was returned.
+	assert.Equal(t, 3, result.TotalRows)
+	require.Len(t, result.Rows, 3)
+
+	keys := make([]interface{}, len(result.Rows))
+	for i, row := range result.Rows {
+		keys[i] = row.Key
+	}
+	assert.ElementsMatch(t, []interface{}{"a", "b", "c"}, keys)
+}
+
 func TestView_NonexistentView(t *testing.T) {
 	s, router, cleanup := setupViewTest(t)
 	defer cleanup()
