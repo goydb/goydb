@@ -94,7 +94,7 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 | GET | `/{db}/_shards/{docid}` | **No** | |
 | POST | `/{db}/_sync_shards` | **No** | |
 | GET/POST | `/{db}/_changes` | **Partially** | Supports feeds: `normal`, `longpoll`, `continuous`, `eventsource`; filters: `_doc_ids`, `_selector`, `_view`, design-doc filter functions; `since`, `limit`, `include_docs`, `heartbeat`, `timeout`; missing `style=all_docs`, `descending`, `seq_interval`, `att_encoding_info`, `attachments`, `conflicts` |
-| POST | `/{db}/_compact` | **Yes** | Rewrites live data into a new file via `bbolt.Compact` and atomically swaps it in |
+| POST | `/{db}/_compact` | **Yes** | Trims `RevHistory` in `docs` and `doc_leaves` buckets to `_revs_limit`, then rewrites the bbolt file via `bbolt.Compact` and atomically swaps it in |
 | POST | `/{db}/_compact/{ddoc}` | **Partially** | Routed; triggers full-db compaction (bbolt has no per-view compaction) |
 | POST | `/{db}/_ensure_full_commit` | **Yes** | No-op, returns `{"ok":true}` |
 | POST | `/{db}/_view_cleanup` | **Partially** | Routed; returns `{"ok":true}` but is a no-op (bbolt has no stale view files to remove) |
@@ -105,8 +105,8 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 | POST | `/{db}/_purge` | **No** | |
 | GET | `/{db}/_purged_infos_limit` | **No** | |
 | PUT | `/{db}/_purged_infos_limit` | **No** | |
-| GET | `/{db}/_revs_limit` | **No** | |
-| PUT | `/{db}/_revs_limit` | **No** | |
+| GET | `/{db}/_revs_limit` | **Yes** | |
+| PUT | `/{db}/_revs_limit` | **Yes** | |
 | POST | `/{db}/_missing_revs` | **Yes** | |
 | POST | `/{db}/_revs_diff` | **Yes** | |
 
@@ -198,13 +198,13 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 | Cluster Setup | 0 | 2 | 6 |
 | Node API | 5 | 0 | 8 |
 | Authentication | 1 | 2 | 0 |
-| Database | 8 | 7 | 13 |
+| Database | 10 | 7 | 11 |
 | Document | 0 | 4 | 1 |
 | Attachment | 1 | 3 | 0 |
 | Design Document | 4 | 6 | 11 |
 | Local Documents | 3 | 1 | 3 |
 | Partitioned DBs | 0 | 0 | 5 |
-| **Total** | **26** | **32** | **61** |
+| **Total** | **28** | **32** | **59** |
 
 ### Key capabilities present
 - Full document CRUD with attachment support (inline base64, multipart/related, PUT/DELETE/HEAD/GET via `/{db}/{docid}/{attname}` and `/_design/{ddoc}/{attname}`)
@@ -215,14 +215,14 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 - Changes feed: normal, longpoll, continuous, eventsource — with `_doc_ids`, `_selector`, `_view`, and design-doc filter support
 - Cookie-based session authentication with admin enforcement
 - Runtime configuration via `/_config` and `/_node/{node}/_config`
-- Real database compaction via `POST /{db}/_compact` (rewrites bbolt file, reclaims freed pages)
+- Per-database revision limit via `GET`/`PUT /{db}/_revs_limit` (stored in `meta` bucket; default 1000)
+- Document compaction via `POST /{db}/_compact`: trims `RevHistory` in `docs` and `doc_leaves` buckets to `_revs_limit`, then rewrites the bbolt file to reclaim freed pages
 - `POST /{db}/_all_docs` with `{"keys":[...]}` body
 
 ### Key gaps
 - **COPY** method not implemented anywhere
 - **Mango indexes** (`_index`, `_explain`) not implemented — `_find` works but always full-scans
 - **Purge API** not implemented
-- **Revision limit** (`_revs_limit`) not implemented
 - **Design doc functions**: show, list, update, rewrite not implemented
 - **Partitioned databases** not supported
 - **Range requests** on attachments not supported
