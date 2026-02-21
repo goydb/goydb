@@ -18,7 +18,7 @@ import (
 )
 
 var ErrNotFound = errors.New("resource not found")
-var ErrConflict = errors.New("rev doesn't match for update")
+var ErrConflict = fmt.Errorf("rev doesn't match for update: %w", port.ErrConflict)
 var ErrUnknownDatabase = errors.New("unknown database")
 
 type Transaction struct {
