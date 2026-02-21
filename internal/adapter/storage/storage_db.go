@@ -166,6 +166,10 @@ func (s *Storage) DeleteDatabase(ctx context.Context, name string) error {
 		return err
 	}
 
+	if err := os.RemoveAll(db.databaseDir); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
 	delete(s.dbs, name)
 
 	return nil
