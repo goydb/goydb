@@ -221,11 +221,12 @@ type Function struct {
 	Name string
 	Type FnType
 
-	MapFn    string
-	ReduceFn string
-	SearchFn string
-	Analyzer string
-	FilterFn string
+	MapFn       string
+	ReduceFn    string
+	SearchFn    string
+	Analyzer    string
+	FilterFn    string
+	MangoFields []string
 }
 
 func (f *Function) DesignDocFn() *DesignDocFn {
@@ -283,6 +284,30 @@ func (doc *Document) Functions() []*Function {
 		}
 	}
 
+	// mango indexes
+	mangoIndexes, ok := doc.Data["mango_indexes"].(map[string]interface{})
+	if ok {
+		for name, defI := range mangoIndexes {
+			def, ok := defI.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			rawFields, _ := def["fields"].([]interface{})
+			var fields []string
+			for _, f := range rawFields {
+				if s, ok := f.(string); ok {
+					fields = append(fields, s)
+				}
+			}
+			functions = append(functions, &Function{
+				doc:         doc,
+				Name:        name,
+				Type:        MangoFn,
+				MangoFields: fields,
+			})
+		}
+	}
+
 	return functions
 }
 
@@ -310,6 +335,62 @@ func (doc *Document) View(name string) (view *View, ok bool) {
 		MapFn:    mapFn,
 		ReduceFn: reduceFn,
 	}, true
+}
+
+// MangoIndex returns the named Mango index from this design document, if it exists.
+func (doc *Document) MangoIndex(name string) (*MangoIndex, bool) {
+	indexes, ok := doc.Data["mango_indexes"].(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	defI, ok := indexes[name]
+	if !ok {
+		return nil, false
+	}
+	def, ok := defI.(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	rawFields, _ := def["fields"].([]interface{})
+	var fields []string
+	for _, f := range rawFields {
+		if s, ok := f.(string); ok {
+			fields = append(fields, s)
+		}
+	}
+	return &MangoIndex{
+		Name:   name,
+		Ddoc:   doc.ID,
+		Fields: fields,
+	}, true
+}
+
+// MangoIndexes returns all Mango indexes defined in this design document.
+func (doc *Document) MangoIndexes() []*MangoIndex {
+	indexes, ok := doc.Data["mango_indexes"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	var result []*MangoIndex
+	for name, defI := range indexes {
+		def, ok := defI.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		rawFields, _ := def["fields"].([]interface{})
+		var fields []string
+		for _, f := range rawFields {
+			if s, ok := f.(string); ok {
+				fields = append(fields, s)
+			}
+		}
+		result = append(result, &MangoIndex{
+			Name:   name,
+			Ddoc:   doc.ID,
+			Fields: fields,
+		})
+	}
+	return result
 }
 
 // Filters returns all filter functions defined in this design doc

@@ -57,6 +57,23 @@ type FindQuery struct {
 	ExecutionStats bool `json:"execution_stats"`
 }
 
+// EqConditions returns a map of fieldName → value for all top-level $eq
+// (or implicit equality) conditions in the selector.
+// Used by FindDocs to select a suitable MangoIndex.
+func (fq FindQuery) EqConditions() map[string]interface{} {
+	result := make(map[string]interface{})
+	for _, m := range fq.Selector.Members {
+		fs, ok := m.(*FieldSelector)
+		if !ok {
+			continue
+		}
+		if fs.Operation == SelectorOpEq {
+			result[fs.Field] = fs.Value
+		}
+	}
+	return result
+}
+
 func (fq FindQuery) Match(doc *Document) (bool, error) {
 	return fq.Selector.Match(doc)
 }

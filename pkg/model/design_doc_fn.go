@@ -11,6 +11,7 @@ const (
 	ViewFn   FnType = "views"
 	SearchFn FnType = "indexes"
 	FilterFn FnType = "filters"
+	MangoFn  FnType = "mango_indexes"
 )
 
 type DesignDocFn struct {
@@ -31,6 +32,14 @@ func (ddfn DesignDocFn) Bucket() []byte {
 func NewSearchFn(designDocID, fnName string) DesignDocFn {
 	return DesignDocFn{
 		Type:        SearchFn,
+		DesignDocID: designDocID,
+		FnName:      fnName,
+	}
+}
+
+func NewMangoFn(designDocID, fnName string) DesignDocFn {
+	return DesignDocFn{
+		Type:        MangoFn,
 		DesignDocID: designDocID,
 		FnName:      fnName,
 	}
