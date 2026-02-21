@@ -64,9 +64,9 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 
 | Method | Endpoint | Status | Notes |
 |--------|----------|--------|-------|
-| GET | `/_session` | **Partially** | Returns current session; supports cookie and basic auth only |
-| POST | `/_session` | **Partially** | Cookie login with `name`/`password`; missing JWT, proxy auth, 2FA (`token` param) |
-| DELETE | `/_session` | **Yes** | Clears session cookie |
+| GET | `/_session` | **Yes** | Returns current session; supports cookie and basic auth; anonymous returns `name: null` |
+| POST | `/_session` | **Yes** | Cookie login with `name`/`password`; accepts form-encoded and JSON bodies; JWT and proxy auth are unsupported extensions |
+| DELETE | `/_session` | **Yes** | Clears session cookie; always returns `{"ok":true}` |
 
 ---
 
@@ -196,7 +196,7 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 | Server | 4 | 7 | 14 |
 | Cluster Setup | 0 | 2 | 6 |
 | Node API | 5 | 0 | 8 |
-| Authentication | 1 | 2 | 0 |
+| Authentication | 3 | 0 | 0 |
 | Database | 10 | 7 | 11 |
 | Document | 0 | 4 | 1 |
 | Attachment | 1 | 3 | 0 |
