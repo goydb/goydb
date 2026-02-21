@@ -85,7 +85,7 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 | POST | `/{db}/_design_docs/queries` | **No** | |
 | POST | `/{db}/_bulk_get` | **Yes** | Bulk document retrieval by ID/rev |
 | PUT/POST | `/{db}/_bulk_docs` | **Partially** | Supports `docs`, `new_edits`; `new_edits=false` creates proper conflict leaves in `doc_leaves` bucket with CouchDB-compatible winner selection (highest generation, then lexicographic hash); per-document `error`/`reason` fields returned on conflict or not-found; missing `all_or_nothing` (deprecated) |
-| POST | `/{db}/_find` | **Partially** | Supports `selector`, `limit`, `bookmark`, `execution_stats`; equality conditions use Mango index when available; missing `fields` projection, `sort`, `use_index`, `r`/`q` quorum params, `conflicts`, `stable`, `update` |
+| POST | `/{db}/_find` | **Yes** | Supports `selector`, `limit`, `skip`, `bookmark`, `execution_stats`, `fields` projection, `sort` (asc/desc), `use_index` hint; equality conditions use Mango index when available; `r`, `q`, `conflicts`, `stable`, `update` accepted as single-node no-ops |
 | POST | `/{db}/_index` | **Yes** | Creates Mango (json) index in a design document; returns `result=created` or `result=exists` |
 | GET | `/{db}/_index` | **Yes** | Lists all Mango indexes plus built-in `_all_docs` special index |
 | DELETE | `/{db}/_index/{ddoc}/json/{name}` | **Yes** | Deletes a named Mango index from the design document |
@@ -197,13 +197,13 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 | Cluster Setup | 0 | 2 | 6 |
 | Node API | 5 | 0 | 8 |
 | Authentication | 3 | 0 | 0 |
-| Database | 10 | 7 | 11 |
+| Database | 11 | 6 | 11 |
 | Document | 0 | 4 | 1 |
 | Attachment | 1 | 3 | 0 |
 | Design Document | 5 | 6 | 10 |
 | Local Documents | 3 | 1 | 2 |
 | Partitioned DBs | 0 | 0 | 5 |
-| **Total** | **29** | **32** | **57** |
+| **Total** | **30** | **31** | **57** |
 
 ### Key capabilities present
 - Full document CRUD with attachment support (inline base64, multipart/related, PUT/DELETE/HEAD/GET via `/{db}/{docid}/{attname}` and `/_design/{ddoc}/{attname}`)
@@ -221,7 +221,7 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 ### Key gaps
 - **COPY** method not implemented anywhere
 - **Mango `_explain`** not implemented
-- **Mango `_find`** index optimisation only covers top-level equality conditions; range queries, sort, and `use_index` still full-scan
+- **Mango `_find`** index optimisation covers top-level equality conditions; range queries without an equality index still require a full-scan
 - **Purge API** not implemented
 - **Design doc functions**: show, list, update, rewrite not implemented
 - **Partitioned databases** not supported
