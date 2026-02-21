@@ -86,9 +86,10 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	q.ViewGroup = stringOption("group", "", options)
 
 	var total int
-	var docs map[interface{}]interface{}
 	var err error
+
 	if boolOption("reduce", true, options) {
+		var docs map[interface{}]interface{}
 		err = db.Transaction(r.Context(), func(tx port.DatabaseTx) error {
 			designDoc, err := tx.GetDocument(r.Context(), docID)
 			if err != nil {
@@ -106,8 +107,31 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 			return err
 		})
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		response := AllDocsResponse{
+			TotalRows: total,
+			Rows:      make([]Rows, len(docs)),
+		}
+		i := 0
+		for key, value := range docs {
+			if doc, ok := value.(*model.Document); ok {
+				response.Rows[i].ID = doc.ID
+				response.Rows[i].Key = doc.Key
+				response.Rows[i].Value = doc.Value
+			} else {
+				response.Rows[i].Key = key
+				response.Rows[i].Value = value
+			}
+			i++
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response) // nolint: errcheck
 	} else {
-		docs = make(map[interface{}]interface{})
 		var docList []*model.Document
 		err = db.Transaction(r.Context(), func(tx port.DatabaseTx) error {
 			iter, err := db.IndexIterator(r.Context(), tx, idx)
@@ -118,10 +142,9 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			iter.SetSkip(int(q.Skip))
 			iter.SetLimit(int(q.Limit))
 			for doc := iter.First(); iter.Continue(); doc = iter.Next() {
-				docs[doc.ID] = doc
 				docList = append(docList, doc)
 			}
-			total = iter.Remaining() + len(docs)
+			total = iter.Remaining() + len(docList)
 
 			return err
 		})
@@ -130,21 +153,16 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err == nil && q.IncludeDocs && len(docList) > 0 {
 			err = db.EnrichDocuments(r.Context(), docList)
 		}
-	}
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	response := AllDocsResponse{
-		TotalRows: total,
-		Rows:      make([]Rows, len(docs)),
-	}
-
-	i := 0
-	for key, value := range docs {
-		if doc, ok := value.(*model.Document); ok {
+		response := AllDocsResponse{
+			TotalRows: total,
+			Rows:      make([]Rows, len(docList)),
+		}
+		for i, doc := range docList {
 			response.Rows[i].ID = doc.ID
 			response.Rows[i].Key = doc.Key
 			response.Rows[i].Value = doc.Value
@@ -156,13 +174,9 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					response.Rows[i].Doc["_deleted"] = doc.Deleted
 				}
 			}
-		} else {
-			response.Rows[i].Key = key
-			response.Rows[i].Value = value
 		}
-		i++
-	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response) // nolint: errcheck
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response) // nolint: errcheck
+	}
 }
