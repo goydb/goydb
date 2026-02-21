@@ -39,7 +39,7 @@ func (s *DBMissingRevs) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		var missing []string
 		for _, rev := range revs {
-			if rev != doc.Rev {
+			if !doc.HasRevision(rev) {
 				missing = append(missing, rev)
 			}
 		}

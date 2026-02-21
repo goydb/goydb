@@ -43,9 +43,8 @@ func (s *DBRevsDiff) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var missing []string
-		currentRev := doc.Rev
 		for _, rev := range revs {
-			if rev != currentRev {
+			if !doc.HasRevision(rev) {
 				missing = append(missing, rev)
 			}
 		}

@@ -160,7 +160,7 @@ func (l *LocalDB) RevsDiff(ctx context.Context, revs map[string][]string) (map[s
 
 		var missing []string
 		for _, rev := range docRevs {
-			if rev != doc.Rev {
+			if !doc.HasRevision(rev) {
 				missing = append(missing, rev)
 			}
 		}
