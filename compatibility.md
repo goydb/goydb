@@ -85,10 +85,10 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 | POST | `/{db}/_design_docs/queries` | **No** | |
 | POST | `/{db}/_bulk_get` | **Yes** | Bulk document retrieval by ID/rev |
 | PUT/POST | `/{db}/_bulk_docs` | **Partially** | Supports `docs`, `new_edits`; `new_edits=false` creates proper conflict leaves in `doc_leaves` bucket with CouchDB-compatible winner selection (highest generation, then lexicographic hash); per-document `error`/`reason` fields returned on conflict or not-found; missing `all_or_nothing` (deprecated) |
-| POST | `/{db}/_find` | **Partially** | Supports `selector`, `limit`, `bookmark`, `execution_stats`; missing `fields` projection, `sort`, `use_index`, `r`/`q` quorum params, `conflicts`, `stable`, `update` |
-| POST | `/{db}/_index` | **No** | Mango index creation not implemented |
-| GET | `/{db}/_index` | **No** | |
-| DELETE | `/{db}/_index/{ddoc}/json/{name}` | **No** | |
+| POST | `/{db}/_find` | **Partially** | Supports `selector`, `limit`, `bookmark`, `execution_stats`; equality conditions use Mango index when available; missing `fields` projection, `sort`, `use_index`, `r`/`q` quorum params, `conflicts`, `stable`, `update` |
+| POST | `/{db}/_index` | **Yes** | Creates Mango (json) index in a design document; returns `result=created` or `result=exists` |
+| GET | `/{db}/_index` | **Yes** | Lists all Mango indexes plus built-in `_all_docs` special index |
+| DELETE | `/{db}/_index/{ddoc}/json/{name}` | **Yes** | Deletes a named Mango index from the design document |
 | POST | `/{db}/_explain` | **No** | Query plan explanation not implemented |
 | GET | `/{db}/_shards` | **No** | |
 | GET | `/{db}/_shards/{docid}` | **No** | |
@@ -210,7 +210,7 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 - Replication protocol: `_changes`, `_revs_diff`, `_missing_revs`, `_bulk_docs` (with `new_edits:false`), `_local` checkpoint docs
 - **Multi-revision conflict support**: `_bulk_docs` with `new_edits:false` stores concurrent leaf revisions in a `doc_leaves` bucket; winner chosen by CouchDB rule (highest generation, then lexicographic hash); `GET /{db}/{docid}` returns `_conflicts` field; `open_revs=all` / `open_revs=[...]` returns all leaf bodies; `_revs_diff` and `_missing_revs` recognise all conflict leaves as known
 - Map/reduce views with reduce and grouping
-- Mango `_find` with selector queries
+- Mango `_find` with selector queries; `_index` CRUD (POST/GET/DELETE); equality conditions automatically use a matching Mango index when one exists
 - Changes feed: normal, longpoll, continuous, eventsource — with `_doc_ids`, `_selector`, `_view`, and design-doc filter support
 - Cookie-based session authentication with admin enforcement
 - Runtime configuration via `/_config` and `/_node/{node}/_config`
@@ -220,7 +220,8 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 
 ### Key gaps
 - **COPY** method not implemented anywhere
-- **Mango indexes** (`_index`, `_explain`) not implemented — `_find` works but always full-scans
+- **Mango `_explain`** not implemented
+- **Mango `_find`** index optimisation only covers top-level equality conditions; range queries, sort, and `use_index` still full-scan
 - **Purge API** not implemented
 - **Design doc functions**: show, list, update, rewrite not implemented
 - **Partitioned databases** not supported
