@@ -316,6 +316,95 @@ func TestView_ReduceSum_GroupTrue(t *testing.T) {
 	assert.InDelta(t, float64(6), total, 0.001)
 }
 
+func TestView_ArrayKeyStartEndKey(t *testing.T) {
+	s, router, cleanup := setupViewTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	// Mirrors the real-world query:
+	//   startkey=["freebsd","apps"]  endkey=["freebsd","apps",{}]
+	// The map emits [os, category, host] triples.
+	docs := []struct {
+		id   string
+		os   string
+		cat  string
+		host string
+	}{
+		{"h1", "freebsd", "apps", "alpha"},
+		{"h2", "freebsd", "apps", "beta"},
+		{"h3", "freebsd", "db", "gamma"},   // different category — must be excluded
+		{"h4", "linux", "apps", "delta"},   // different os — must be excluded
+		{"h5", "freebsd", "apps", "zeta"},
+	}
+	for _, d := range docs {
+		_, err = db.PutDocument(ctx, &model.Document{
+			ID:   d.id,
+			Data: map[string]interface{}{"os": d.os, "category": d.cat, "host": d.host},
+		})
+		require.NoError(t, err)
+	}
+
+	putDesignDoc(t, router, "testdb", "cfg", map[string]interface{}{
+		"views": map[string]interface{}{
+			"host_config": map[string]interface{}{
+				"map": `function(doc) { emit([doc.os, doc.category, doc.host], null); }`,
+			},
+		},
+	})
+
+	// URL-encode: startkey=["freebsd","apps"]  endkey=["freebsd","apps",{}]
+	result, code := queryView(t, router, "testdb", "cfg", "host_config",
+		`reduce=false&startkey=%5B%22freebsd%22%2C%22apps%22%5D&endkey=%5B%22freebsd%22%2C%22apps%22%2C%7B%7D%5D`)
+	require.Equal(t, http.StatusOK, code)
+
+	// Only the 3 freebsd/apps hosts should be returned.
+	require.Len(t, result.Rows, 3, "expected only freebsd/apps rows")
+	for _, row := range result.Rows {
+		arr, ok := row.Key.([]interface{})
+		require.True(t, ok, "key should be an array")
+		assert.Equal(t, "freebsd", arr[0])
+		assert.Equal(t, "apps", arr[1])
+	}
+}
+
+func TestView_ArrayKeyExactKey(t *testing.T) {
+	s, router, cleanup := setupViewTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	for _, host := range []string{"alpha", "beta"} {
+		_, err = db.PutDocument(ctx, &model.Document{
+			ID:   host,
+			Data: map[string]interface{}{"os": "freebsd", "host": host},
+		})
+		require.NoError(t, err)
+	}
+
+	putDesignDoc(t, router, "testdb", "cfg", map[string]interface{}{
+		"views": map[string]interface{}{
+			"by_os": map[string]interface{}{
+				"map": `function(doc) { emit([doc.os, doc.host], null); }`,
+			},
+		},
+	})
+
+	// key=["freebsd","alpha"] should return exactly one row.
+	result, code := queryView(t, router, "testdb", "cfg", "by_os",
+		`reduce=false&key=%5B%22freebsd%22%2C%22alpha%22%5D`)
+	require.Equal(t, http.StatusOK, code)
+	require.Len(t, result.Rows, 1)
+	arr, ok := result.Rows[0].Key.([]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "freebsd", arr[0])
+	assert.Equal(t, "alpha", arr[1])
+}
+
 func TestView_MultiEmitPerDocument(t *testing.T) {
 	s, router, cleanup := setupViewTest(t)
 	defer cleanup()
