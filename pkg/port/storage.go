@@ -15,9 +15,18 @@ type AllDocsQuery struct {
 	SkipLocal    bool
 	ExclusiveEnd bool // true when inclusive_end=false
 	// view options
-	DDFN        *model.DesignDocFn
-	IncludeDocs bool
-	ViewGroup   string
+	DDFN            *model.DesignDocFn
+	IncludeDocs     bool
+	ViewGroup       string
+	// ViewStartKey and ViewEndKey are CBOR-encoded key bounds for view queries.
+	// The endkey is already padded for inclusive comparison when set.
+	ViewStartKey    []byte
+	ViewEndKey      []byte
+	ViewExclusiveEnd bool
+	// ViewDecodedStartKey and ViewDecodedEndKey hold the decoded (Go interface{})
+	// versions of the same bounds for semantic post-filtering using ViewKeyCmp.
+	ViewDecodedStartKey interface{}
+	ViewDecodedEndKey   interface{}
 }
 
 type Observer interface {

@@ -1,16 +1,78 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/fxamacker/cbor/v2"
 	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/internal/controller"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 )
+
+// viewKeyRange parses startkey / endkey / key / inclusive_end from URL query
+// params and returns CBOR-encoded byte slices ready for SetStartKey /
+// SetEndKey on a view iterator.
+//
+// View bucket keys have the format: CBOR(emittedKey) + seq(8 B) + keyLen(2 B).
+// For an inclusive end-key, we append 10 × 0xFF so that any real seq/keyLen
+// bytes still compare ≤ the padded sentinel.  For an exclusive end-key the
+// bare CBOR bytes are sufficient: the extra seq+keyLen bytes always push the
+// real bucket key past the bare CBOR prefix, so Continue(cmp < 0) correctly
+// stops before rows whose emitted key equals the endkey.
+func viewKeyRange(options interface{ Get(string) string }) (startKey, endKey []byte, decodedStart, decodedEnd interface{}, exclusiveEnd bool) {
+	jsonToViewKey := func(raw string) ([]byte, interface{}) {
+		if raw == "" {
+			return nil, nil
+		}
+		var v interface{}
+		if err := json.Unmarshal([]byte(raw), &v); err != nil {
+			return nil, nil
+		}
+		b, err := cbor.Marshal(v)
+		if err != nil {
+			return nil, nil
+		}
+		return b, v
+	}
+
+	var dsk, dek interface{}
+	sk, dsk := jsonToViewKey(options.Get("startkey"))
+	if sk == nil {
+		sk, dsk = jsonToViewKey(options.Get("start_key"))
+	}
+
+	ek, dek := jsonToViewKey(options.Get("endkey"))
+	if ek == nil {
+		ek, dek = jsonToViewKey(options.Get("end_key"))
+	}
+
+	// key=X is shorthand for startkey=X&endkey=X (inclusive)
+	if k, dk := jsonToViewKey(options.Get("key")); k != nil {
+		sk = k
+		ek = k
+		dsk = dk
+		dek = dk
+	}
+
+	inclusive := true
+	if ie := options.Get("inclusive_end"); ie == "false" {
+		inclusive = false
+		exclusiveEnd = true
+	}
+
+	// Pad inclusive end-key with 10 × 0xFF to cover the seq+keyLen suffix of
+	// any real bucket key whose emitted-key CBOR bytes equal the endkey CBOR.
+	if ek != nil && inclusive {
+		ek = append(ek, bytes.Repeat([]byte{0xFF}, 10)...)
+	}
+
+	return sk, ek, dsk, dek, exclusiveEnd
+}
 
 type DBView struct {
 	Base
@@ -84,6 +146,7 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	q.IncludeDocs = boolOption("include_docs", false, options)
 	q.ViewGroup = stringOption("group", "", options)
+	q.ViewStartKey, q.ViewEndKey, q.ViewDecodedStartKey, q.ViewDecodedEndKey, q.ViewExclusiveEnd = viewKeyRange(options)
 
 	var total int
 	var err error
@@ -141,7 +204,28 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 			iter.SetSkip(int(q.Skip))
 			iter.SetLimit(int(q.Limit))
+			if q.ViewStartKey != nil {
+				iter.SetStartKey(q.ViewStartKey)
+			}
+			if q.ViewEndKey != nil {
+				iter.SetEndKey(q.ViewEndKey)
+				iter.SetExclusiveEnd(q.ViewExclusiveEnd)
+			}
 			for doc := iter.First(); iter.Continue(); doc = iter.Next() {
+				// Semantic post-filter: CBOR byte ordering doesn't match CouchDB
+				// collation order (length-prefixed strings sort by length first).
+				// Use ViewKeyCmp to correctly include/exclude rows.
+				if q.ViewDecodedStartKey != nil && model.ViewKeyCmp(doc.Key, q.ViewDecodedStartKey) < 0 {
+					continue
+				}
+				if q.ViewDecodedEndKey != nil {
+					cmp := model.ViewKeyCmp(doc.Key, q.ViewDecodedEndKey)
+					if q.ViewExclusiveEnd && cmp >= 0 {
+						continue
+					} else if !q.ViewExclusiveEnd && cmp > 0 {
+						continue
+					}
+				}
 				docList = append(docList, doc)
 			}
 			total = iter.Remaining() + len(docList)
