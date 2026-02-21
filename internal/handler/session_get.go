@@ -3,8 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-
-	"github.com/goydb/goydb/pkg/model"
 )
 
 const sessionName = "AuthSession"
@@ -17,20 +15,22 @@ func (s *SessionGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close() //nolint:errcheck
 
 	session, via := Authenticator{Base: s.Base}.Auth(r)
-	if session == nil {
-		WriteError(w, http.StatusBadRequest, "session is invalid")
-		return
-	}
 
 	resp := &SessionResponse{
 		Ok: true,
 		SessionInfo: SessionInfo{
 			AuthenticationHandlers: []string{"cookie", "default"},
+			AuthenticationDB:       "_users",
+		},
+		SessionUserCtx: SessionUserCtx{
+			Roles: []string{},
 		},
 	}
 
-	if session.Authenticated() {
-		resp.SessionUserCtx = *session
+	if session != nil && session.Authenticated() {
+		name := session.Name
+		resp.SessionUserCtx.Name = &name
+		resp.SessionUserCtx.Roles = session.Roles
 		resp.SessionInfo.Authenticated = via
 	}
 
@@ -38,13 +38,19 @@ func (s *SessionGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp) // nolint: errcheck
 }
 
+type SessionUserCtx struct {
+	Name  *string  `json:"name"`
+	Roles []string `json:"roles"`
+}
+
 type SessionResponse struct {
-	Ok             bool          `json:"ok"`
-	SessionUserCtx model.Session `json:"userCtx"`
-	SessionInfo    SessionInfo   `json:"info"`
+	Ok             bool           `json:"ok"`
+	SessionUserCtx SessionUserCtx `json:"userCtx"`
+	SessionInfo    SessionInfo    `json:"info"`
 }
 
 type SessionInfo struct {
 	AuthenticationHandlers []string `json:"authentication_handlers"`
+	AuthenticationDB       string   `json:"authentication_db"`
 	Authenticated          string   `json:"authenticated,omitempty"`
 }
