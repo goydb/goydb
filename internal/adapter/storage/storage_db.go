@@ -113,6 +113,8 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 	database.logger.Debugf(ctx, "building indices")
 	err = database.rawTx(func(tx *Transaction) error {
 		tx.EnsureBucket(model.DocsBucket)
+		tx.EnsureBucket(model.AttRefsBucket)
+		tx.EnsureBucket(model.DocLeavesBucket)
 
 		err := database.BuildIndices(ctx, tx, false)
 		if err != nil {
@@ -129,6 +131,12 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 		return nil
 	})
 	if err != nil {
+		return nil, err
+	}
+
+	// Migrate attachment storage from per-document paths to content-addressed
+	// paths.  No-op for new databases or already-migrated ones.
+	if err := database.migrateAttachments(ctx); err != nil {
 		return nil, err
 	}
 
