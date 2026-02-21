@@ -79,12 +79,12 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 | PUT | `/{db}` | **Partially** | Creates database; missing `q` (shards), `n` (replicas), `partitioned` query params |
 | DELETE | `/{db}` | **Yes** | |
 | POST | `/{db}` | **Yes** | Creates document with auto-generated UUID |
-| GET/POST | `/{db}/_all_docs` | **Partially** | Supports `skip`, `limit`, `startkey`/`start_key`, `endkey`/`end_key`, `include_docs`, `keys` (POST body); missing `key`, `descending`, `inclusive_end`, `conflicts`, `update_seq`, `attachments`, `att_encoding_info` |
+| GET/POST | `/{db}/_all_docs` | **Partially** | Supports `skip`, `limit`, `startkey`/`start_key`, `endkey`/`end_key`, `key`, `inclusive_end`, `include_docs`, `keys` (POST body); missing `descending`, `conflicts`, `update_seq`, `attachments`, `att_encoding_info` |
 | GET/POST | `/{db}/_design_docs` | **Partially** | Basic design-doc listing; POST routed but keys body not handled; does not accept the same query params as `_all_docs` |
 | POST | `/{db}/_all_docs/queries` | **No** | Multi-query not implemented |
 | POST | `/{db}/_design_docs/queries` | **No** | |
 | POST | `/{db}/_bulk_get` | **Yes** | Bulk document retrieval by ID/rev |
-| PUT/POST | `/{db}/_bulk_docs` | **Partially** | Supports `docs`, `new_edits`; `new_edits=false` creates proper conflict leaves in `doc_leaves` bucket with CouchDB-compatible winner selection (highest generation, then lexicographic hash); missing `all_or_nothing` (deprecated), per-document error detail in response body (`error`/`reason` fields missing when write fails) |
+| PUT/POST | `/{db}/_bulk_docs` | **Partially** | Supports `docs`, `new_edits`; `new_edits=false` creates proper conflict leaves in `doc_leaves` bucket with CouchDB-compatible winner selection (highest generation, then lexicographic hash); per-document `error`/`reason` fields returned on conflict or not-found; missing `all_or_nothing` (deprecated) |
 | POST | `/{db}/_find` | **Partially** | Supports `selector`, `limit`, `bookmark`, `execution_stats`; missing `fields` projection, `sort`, `use_index`, `r`/`q` quorum params, `conflicts`, `stable`, `update` |
 | POST | `/{db}/_index` | **No** | Mango index creation not implemented |
 | GET | `/{db}/_index` | **No** | |
@@ -137,7 +137,7 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 
 | Method | Endpoint | Status | Notes |
 |--------|----------|--------|-------|
-| HEAD | `/{db}/_design/{ddoc}` | **No** | No HEAD handler for design documents |
+| HEAD | `/{db}/_design/{ddoc}` | **Yes** | |
 | GET | `/{db}/_design/{ddoc}` | **Yes** | |
 | PUT | `/{db}/_design/{ddoc}` | **Yes** | |
 | DELETE | `/{db}/_design/{ddoc}` | **Yes** | |
@@ -168,8 +168,7 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 
 | Method | Endpoint | Status | Notes |
 |--------|----------|--------|-------|
-| GET | `/{db}/_local_docs` | **Partially** | GET only; missing POST method; missing `keys`, `descending`, `conflicts`, `update_seq` params |
-| POST | `/{db}/_local_docs` | **No** | POST variant not routed |
+| GET/POST | `/{db}/_local_docs` | **Partially** | Supports GET and POST (`{"keys":[...]}` body); missing `descending`, `conflicts`, `update_seq` params |
 | POST | `/{db}/_local_docs/queries` | **No** | |
 | GET | `/{db}/_local/{docid}` | **Yes** | |
 | PUT | `/{db}/_local/{docid}` | **Yes** | |
@@ -201,10 +200,10 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 | Database | 10 | 7 | 11 |
 | Document | 0 | 4 | 1 |
 | Attachment | 1 | 3 | 0 |
-| Design Document | 4 | 6 | 11 |
-| Local Documents | 3 | 1 | 3 |
+| Design Document | 5 | 6 | 10 |
+| Local Documents | 3 | 1 | 2 |
 | Partitioned DBs | 0 | 0 | 5 |
-| **Total** | **28** | **32** | **59** |
+| **Total** | **29** | **32** | **57** |
 
 ### Key capabilities present
 - Full document CRUD with attachment support (inline base64, multipart/related, PUT/DELETE/HEAD/GET via `/{db}/{docid}/{attname}` and `/_design/{ddoc}/{attname}`)
