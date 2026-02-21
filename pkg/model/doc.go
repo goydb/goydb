@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -24,6 +25,10 @@ type Document struct {
 	// Data
 	Attachments map[string]*Attachment `json:"_attachments,omitempty"`
 	Data        map[string]interface{} `json:"data,omitempty"`
+
+	// Full revision chain, newest-first (e.g. ["3-abc","2-def","1-ghi"]).
+	// Not exposed in JSON; serialised to BSON storage only.
+	RevHistory []string `bson:"rev_history,omitempty" json:"-"`
 
 	// View results (goydb-specific, not unmarshaled from JSON)
 	Key   interface{} `json:"-"`
@@ -123,12 +128,48 @@ func (doc Document) Revision() (string, bool) {
 	return rev, ok
 }
 
+// HasRevision reports whether rev is the current revision or any ancestor
+// recorded in RevHistory.
+func (doc Document) HasRevision(rev string) bool {
+	if doc.Rev == rev {
+		return true
+	}
+	return slices.Contains(doc.RevHistory, rev)
+}
+
+// compareRevs returns negative/0/positive per CouchDB's rev ordering rule:
+// higher generation number wins; ties broken lexicographically by hash.
+func compareRevs(a, b string) int {
+	aGen, aHash, _ := strings.Cut(a, "-")
+	bGen, bHash, _ := strings.Cut(b, "-")
+	aN, _ := strconv.Atoi(aGen)
+	bN, _ := strconv.Atoi(bGen)
+	if aN != bN {
+		return aN - bN
+	}
+	return strings.Compare(aHash, bHash)
+}
+
+// WinnerRev returns the winning revision among the supplied rev strings.
+func WinnerRev(revs []string) string {
+	return slices.MaxFunc(revs, compareRevs)
+}
+
 type Revisions struct {
 	IDs   []string `json:"ids"`
 	Start int64    `json:"start"`
 }
 
 func (doc Document) Revisions() Revisions {
+	if len(doc.RevHistory) > 0 {
+		hashes := make([]string, len(doc.RevHistory))
+		for i, r := range doc.RevHistory {
+			hashes[i] = strings.SplitN(r, "-", 2)[1]
+		}
+		start, _ := strconv.ParseInt(strings.SplitN(doc.RevHistory[0], "-", 2)[0], 10, 64)
+		return Revisions{IDs: hashes, Start: start}
+	}
+	// Fallback for documents stored before revision history was introduced.
 	rev, ok := doc.Revision()
 	if !ok {
 		panic("no revision")
@@ -139,9 +180,7 @@ func (doc Document) Revisions() Revisions {
 		panic("invalid revision")
 	}
 	return Revisions{
-		IDs: []string{
-			parts[1],
-		},
+		IDs:   []string{parts[1]},
 		Start: i,
 	}
 }
