@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-
-	"github.com/goydb/goydb/pkg/model"
 )
 
 type SessionPost struct {
@@ -15,14 +13,32 @@ type SessionPost struct {
 func (s *SessionPost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close() //nolint:errcheck
 
-	err := r.ParseForm()
-	if err != nil {
-		WriteError(w, http.StatusBadRequest, err.Error())
-		return
+	var username, password string
+
+	ct := r.Header.Get("Content-Type")
+	if idx := strings.Index(ct, ";"); idx != -1 {
+		ct = strings.TrimSpace(ct[:idx])
 	}
 
-	username := strings.Join(r.Form["name"], "")
-	password := strings.Join(r.Form["password"], "")
+	if ct == "application/json" {
+		var body struct {
+			Name     string `json:"name"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		username = body.Name
+		password = body.Password
+	} else {
+		if err := r.ParseForm(); err != nil {
+			WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		username = strings.Join(r.Form["name"], "")
+		password = strings.Join(r.Form["password"], "")
+	}
 
 	sb := Authenticator{Base: s.Base}.Authenticate(r.Context(), username, password)
 
@@ -40,9 +56,14 @@ func (s *SessionPost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	roles := adminSession.Roles
+	if roles == nil {
+		roles = []string{}
+	}
 	resp := &SessionPostResponse{
-		Ok:      true,
-		Session: adminSession,
+		Ok:    true,
+		Name:  adminSession.Name,
+		Roles: roles,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -55,6 +76,7 @@ func (s *SessionPost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type SessionPostResponse struct {
-	Ok             bool `json:"ok"`
-	*model.Session `json:"userCtx,omitempty"`
+	Ok    bool     `json:"ok"`
+	Name  string   `json:"name"`
+	Roles []string `json:"roles"`
 }
