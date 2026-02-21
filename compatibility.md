@@ -84,7 +84,7 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 | POST | `/{db}/_all_docs/queries` | **No** | Multi-query not implemented |
 | POST | `/{db}/_design_docs/queries` | **No** | |
 | POST | `/{db}/_bulk_get` | **Yes** | Bulk document retrieval by ID/rev |
-| PUT/POST | `/{db}/_bulk_docs` | **Partially** | Supports `docs`, `new_edits`; missing `all_or_nothing` (deprecated), per-document error detail in response body (`error`/`reason` fields missing when write fails) |
+| PUT/POST | `/{db}/_bulk_docs` | **Partially** | Supports `docs`, `new_edits`; `new_edits=false` creates proper conflict leaves in `doc_leaves` bucket with CouchDB-compatible winner selection (highest generation, then lexicographic hash); missing `all_or_nothing` (deprecated), per-document error detail in response body (`error`/`reason` fields missing when write fails) |
 | POST | `/{db}/_find` | **Partially** | Supports `selector`, `limit`, `bookmark`, `execution_stats`; missing `fields` projection, `sort`, `use_index`, `r`/`q` quorum params, `conflicts`, `stable`, `update` |
 | POST | `/{db}/_index` | **No** | Mango index creation not implemented |
 | GET | `/{db}/_index` | **No** | |
@@ -117,7 +117,7 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 | Method | Endpoint | Status | Notes |
 |--------|----------|--------|-------|
 | HEAD | `/{db}/{docid}` | **Partially** | Returns ETag; missing `rev` query param support, `X-Couch-Full-Commit` header |
-| GET | `/{db}/{docid}` | **Partially** | Supports `revs`, `local_seq`, `open_revs`, `multipart/mixed` accept header; missing `rev` (fetch specific revision), `atts_since`, `att_encoding_info`, `attachments` (inline), `conflicts`, `deleted_conflicts`, `meta`, `latest` |
+| GET | `/{db}/{docid}` | **Partially** | Supports `revs`, `local_seq`, `multipart/mixed` accept header; `open_revs=all` and `open_revs=[...]` return all leaf revisions; `_conflicts` field auto-populated when conflict branches exist; missing `rev` (fetch specific revision), `atts_since`, `att_encoding_info`, `attachments` (inline), `conflicts` query param (CouchDB gates `_conflicts` on this; goydb always includes it), `deleted_conflicts`, `meta`, `latest` |
 | PUT | `/{db}/{docid}` | **Partially** | Supports JSON and `multipart/related`; inline base64 attachments; `_deleted` accepts boolean or string; missing `batch=ok`, `new_edits` query param, `X-Couch-Full-Commit` header |
 | DELETE | `/{db}/{docid}` | **Partially** | Supports `rev` query param; missing `batch=ok` |
 | COPY | `/{db}/{docid}` | **No** | `COPY` HTTP method not routed |
@@ -209,6 +209,7 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 ### Key capabilities present
 - Full document CRUD with attachment support (inline base64, multipart/related, PUT/DELETE/HEAD/GET via `/{db}/{docid}/{attname}` and `/_design/{ddoc}/{attname}`)
 - Replication protocol: `_changes`, `_revs_diff`, `_missing_revs`, `_bulk_docs` (with `new_edits:false`), `_local` checkpoint docs
+- **Multi-revision conflict support**: `_bulk_docs` with `new_edits:false` stores concurrent leaf revisions in a `doc_leaves` bucket; winner chosen by CouchDB rule (highest generation, then lexicographic hash); `GET /{db}/{docid}` returns `_conflicts` field; `open_revs=all` / `open_revs=[...]` returns all leaf bodies; `_revs_diff` and `_missing_revs` recognise all conflict leaves as known
 - Map/reduce views with reduce and grouping
 - Mango `_find` with selector queries
 - Changes feed: normal, longpoll, continuous, eventsource — with `_doc_ids`, `_selector`, `_view`, and design-doc filter support
@@ -225,7 +226,8 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 - **Design doc functions**: show, list, update, rewrite not implemented
 - **Partitioned databases** not supported
 - **Range requests** on attachments not supported
-- **`rev` query param** on GET `/{db}/{docid}` (fetching old revisions) not implemented — only current revision is accessible
+- **`rev` query param** on GET `/{db}/{docid}` (fetching a specific old revision) not implemented — use `open_revs=[...]` to retrieve specific leaf revisions; non-leaf ancestors are not retrievable
+- **`conflicts` query param** on GET `/{db}/{docid}` not gated — goydb always includes `_conflicts` when conflict branches exist, rather than requiring the param
 - **Nouveau search** engine not implemented
 - Node stats/system/prometheus endpoints not exposed
 - `_dbs_info`, `_db_updates` endpoints missing
