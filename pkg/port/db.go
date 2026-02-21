@@ -47,6 +47,9 @@ type Database interface {
 
 	GetSecurity(ctx context.Context) (*model.Security, error)
 	PutSecurity(ctx context.Context, sec *model.Security) error
+
+	GetRevsLimit(ctx context.Context) (int, error)
+	SetRevsLimit(ctx context.Context, limit int) error
 	AddListener(ctx context.Context, l ChangeListener) error
 
 	GetTasks(ctx context.Context, count int) ([]*model.Task, error)
