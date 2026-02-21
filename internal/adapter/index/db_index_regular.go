@@ -26,7 +26,7 @@ type RegularIndex struct {
 	ddfn     *model.DesignDocFn
 	idxFn    RegularIndexFunc
 	mu       sync.RWMutex
-	cleanKey func([]byte) string
+	cleanKey func([]byte) interface{}
 
 	bucketName, indexInvalidationBucket []byte
 }
@@ -159,12 +159,12 @@ func (i *RegularIndex) IteratorOptions(ctx context.Context) (*model.IteratorOpti
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 
-	var ck func([]byte) string
+	var ck func([]byte) interface{}
 	// if no func is defined
 	if i.cleanKey == nil {
-		ck = simpleCleanKey
+		ck = func(b []byte) interface{} { return simpleCleanKey(b) }
 	} else {
-		ck = func(b []byte) string {
+		ck = func(b []byte) interface{} {
 			return i.cleanKey([]byte(simpleCleanKey(b)))
 		}
 	}

@@ -37,7 +37,7 @@ type Iterator struct {
 
 	key []byte
 
-	CleanKey func([]byte) string
+	CleanKey func([]byte) interface{}
 	KeyFn    func([]byte) []byte
 
 	bucket []byte

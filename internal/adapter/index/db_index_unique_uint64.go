@@ -54,7 +54,7 @@ func byteToUint64Key(v []byte) []byte {
 	return uint64ToKey(ui)
 }
 
-func cleanUint64Key(b []byte) string {
+func cleanUint64Key(b []byte) interface{} {
 	ui := binary.BigEndian.Uint64(b)
 	return strconv.FormatUint(ui, 10)
 }
