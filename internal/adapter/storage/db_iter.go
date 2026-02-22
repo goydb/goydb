@@ -33,10 +33,12 @@ type Iterator struct {
 	SkipDeleted   bool
 	SkipDesignDoc bool
 	SkipLocalDoc  bool
+	ExclusiveEnd  bool
+	Descending    bool
 
 	key []byte
 
-	CleanKey func([]byte) string
+	CleanKey func([]byte) interface{}
 	KeyFn    func([]byte) []byte
 
 	bucket []byte
@@ -114,15 +116,34 @@ func (i *Iterator) First() *model.Document {
 	i.cursor = i.tx.Cursor(i.bucket)
 
 	var v []byte
-	if i.StartKey != nil {
-		i.key, v = i.cursor.Seek(i.StartKey)
-	} else {
-		i.key, v = i.cursor.First()
-	}
-
-	if i.Skip != 0 && i.Continue() {
+	if i.Descending {
+		if i.StartKey != nil {
+			// Seek to just past the start key so we can step back to the first
+			// key that is <= StartKey.  We pad with 10×0xFF to ensure any real
+			// suffix (seq+keyLen) still compares below the padded sentinel.
+			padded := append(append([]byte{}, i.StartKey...), bytes.Repeat([]byte{0xFF}, 10)...)
+			i.key, v = i.cursor.Seek(padded)
+			if i.key == nil {
+				i.key, v = i.cursor.Last()
+			} else {
+				i.key, v = i.cursor.Prev()
+			}
+		} else {
+			i.key, v = i.cursor.Last()
+		}
 		for j := 0; j < i.Skip && i.key != nil; j++ {
-			i.key, v = i.cursor.Next()
+			i.key, v = i.cursor.Prev()
+		}
+	} else {
+		if i.StartKey != nil {
+			i.key, v = i.cursor.Seek(i.StartKey)
+		} else {
+			i.key, v = i.cursor.First()
+		}
+		if i.Skip != 0 && i.Continue() {
+			for j := 0; j < i.Skip && i.key != nil; j++ {
+				i.key, v = i.cursor.Next()
+			}
 		}
 	}
 
@@ -136,13 +157,21 @@ func (i *Iterator) First() *model.Document {
 
 			// skip over all deleted documents
 			if doc.Deleted {
-				i.key, v = i.cursor.Next()
+				if i.Descending {
+					i.key, v = i.cursor.Prev()
+				} else {
+					i.key, v = i.cursor.Next()
+				}
 				continue
 			}
 
 			// skip local docs if requested (same behaviour as Next())
 			if i.SkipLocalDoc && doc.IsLocalDoc() {
-				i.key, v = i.cursor.Next()
+				if i.Descending {
+					i.key, v = i.cursor.Prev()
+				} else {
+					i.key, v = i.cursor.Next()
+				}
 				continue
 			}
 
@@ -158,7 +187,14 @@ func (i *Iterator) Next() *model.Document {
 	var doc model.Document
 	found := false
 
-	for i.key, v = i.cursor.Next(); i.Continue(); i.key, v = i.cursor.Next() {
+	advance := func() ([]byte, []byte) {
+		if i.Descending {
+			return i.cursor.Prev()
+		}
+		return i.cursor.Next()
+	}
+
+	for i.key, v = advance(); i.Continue(); i.key, v = advance() {
 		i.unmarshalDoc(i.key, v, &doc)
 
 		// skip deleted
@@ -204,7 +240,19 @@ func (i *Iterator) Continue() bool {
 		return true
 	}
 
-	return bytes.Compare(i.key, i.EndKey) <= 0
+	cmp := bytes.Compare(i.key, i.EndKey)
+	if i.Descending {
+		// In descending mode EndKey is the lower bound.
+		// ExclusiveEnd: stop before keys equal to EndKey (strict >).
+		if i.ExclusiveEnd {
+			return cmp > 0
+		}
+		return cmp >= 0
+	}
+	if i.ExclusiveEnd {
+		return cmp < 0
+	}
+	return cmp <= 0
 }
 
 // Remaining returns the remaining documents starting at
@@ -258,6 +306,14 @@ func (i *Iterator) SetEndKey(v []byte) {
 		v = i.KeyFn(v)
 	}
 	i.EndKey = v
+}
+
+func (i *Iterator) SetExclusiveEnd(v bool) {
+	i.ExclusiveEnd = v
+}
+
+func (i *Iterator) SetDescending(v bool) {
+	i.Descending = v
 }
 func (i *Iterator) unmarshalDoc(k, v []byte, doc *model.Document) {
 	bson.Unmarshal(v, doc) // nolint: errcheck

@@ -13,7 +13,9 @@ type Iterator interface {
 	SetLimit(int)
 	SetStartKey([]byte)
 	SetEndKey([]byte)
+	SetExclusiveEnd(bool)
 	SetSkip(int)
 	SetSkipLocalDoc(bool)
 	SetSkipDesignDoc(bool)
+	SetDescending(bool)
 }

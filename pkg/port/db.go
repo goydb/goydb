@@ -16,6 +16,8 @@ type DatabaseTx interface {
 	PutDocument(ctx context.Context, doc *model.Document) (string, error)
 	PutDocumentForReplication(ctx context.Context, doc *model.Document) error
 	DeleteDocument(ctx context.Context, docID, rev string) (*model.Document, error)
+	GetLeaves(ctx context.Context, docID string) ([]*model.Document, error)
+	GetLeaf(ctx context.Context, docID, rev string) (*model.Document, error)
 }
 
 // Database is the high-level interface for a single CouchDB-style database.
@@ -23,17 +25,20 @@ type DatabaseTx interface {
 type Database interface {
 	Name() string
 	Stats(ctx context.Context) (model.DatabaseStats, error)
+	Compact(ctx context.Context) error
 	Sequence(ctx context.Context) (string, error)
 
 	GetDocument(ctx context.Context, docID string) (*model.Document, error)
 	PutDocument(ctx context.Context, doc *model.Document) (string, error)
 	DeleteDocument(ctx context.Context, docID, rev string) (*model.Document, error)
 	PutDocumentForReplication(ctx context.Context, doc *model.Document) error
+	GetLeaves(ctx context.Context, docID string) ([]*model.Document, error)
+	GetLeaf(ctx context.Context, docID, rev string) (*model.Document, error)
 
 	PutAttachment(ctx context.Context, docID string, att *model.Attachment) (string, error)
 	GetAttachment(ctx context.Context, docID, name string) (*model.Attachment, error)
-	DeleteAttachment(ctx context.Context, docID, name string) (string, error)
-	AttachmentReader(docID, attachment string) (io.ReadCloser, error)
+	DeleteAttachment(ctx context.Context, docID, name, rev string) (string, error)
+	AttachmentReader(digest string) (io.ReadCloser, error)
 
 	AllDocs(ctx context.Context, q AllDocsQuery) ([]*model.Document, int, error)
 	AllDesignDocs(ctx context.Context) ([]*model.Document, int, error)
@@ -42,6 +47,9 @@ type Database interface {
 
 	GetSecurity(ctx context.Context) (*model.Security, error)
 	PutSecurity(ctx context.Context, sec *model.Security) error
+
+	GetRevsLimit(ctx context.Context) (int, error)
+	SetRevsLimit(ctx context.Context, limit int) error
 	AddListener(ctx context.Context, l ChangeListener) error
 
 	GetTasks(ctx context.Context, count int) ([]*model.Task, error)

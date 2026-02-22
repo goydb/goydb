@@ -32,13 +32,20 @@ func (d *Database) PutDocument(ctx context.Context, doc *model.Document) (string
 		rev, err = tx.PutDocument(ctx, doc)
 		return err
 	})
+	if err == nil {
+		d.NotifyDocumentUpdate(doc)
+	}
 	return rev, err
 }
 
 func (d *Database) PutDocumentForReplication(ctx context.Context, doc *model.Document) error {
-	return d.Transaction(ctx, func(tx port.DatabaseTx) error {
+	err := d.Transaction(ctx, func(tx port.DatabaseTx) error {
 		return tx.PutDocumentForReplication(ctx, doc)
 	})
+	if err == nil {
+		d.NotifyDocumentUpdate(doc)
+	}
+	return err
 }
 
 func (d *Database) GetDocument(ctx context.Context, docID string) (*model.Document, error) {
@@ -65,6 +72,26 @@ func (d *Database) DeleteDocument(ctx context.Context, docID, rev string) (*mode
 	if err != nil {
 		return nil, err
 	}
-
+	d.NotifyDocumentUpdate(doc)
 	return doc, nil
+}
+
+func (d *Database) GetLeaves(ctx context.Context, docID string) ([]*model.Document, error) {
+	var leaves []*model.Document
+	err := d.Transaction(ctx, func(tx port.DatabaseTx) error {
+		var err error
+		leaves, err = tx.GetLeaves(ctx, docID)
+		return err
+	})
+	return leaves, err
+}
+
+func (d *Database) GetLeaf(ctx context.Context, docID, rev string) (*model.Document, error) {
+	var leaf *model.Document
+	err := d.Transaction(ctx, func(tx port.DatabaseTx) error {
+		var err error
+		leaf, err = tx.GetLeaf(ctx, docID, rev)
+		return err
+	})
+	return leaf, err
 }

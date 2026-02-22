@@ -1,0 +1,364 @@
+package storage
+
+import (
+	"context"
+	"os"
+	"testing"
+
+	"github.com/goydb/goydb/internal/adapter/logger"
+	"github.com/goydb/goydb/pkg/model"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func openStorage(t *testing.T) (*Storage, func()) {
+	t.Helper()
+	dir, err := os.MkdirTemp(os.TempDir(), "goydb-trx-test-*")
+	require.NoError(t, err)
+
+	s, err := Open(dir, WithLogger(logger.NewNoLog()))
+	require.NoError(t, err)
+
+	return s, func() {
+		_ = s.Close()
+		_ = os.RemoveAll(dir)
+	}
+}
+
+func TestPutDocument_StartsRevHistory(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	rev, err := db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"x": 1},
+	})
+	require.NoError(t, err)
+
+	doc, err := db.GetDocument(ctx, "doc1")
+	require.NoError(t, err)
+	require.NotNil(t, doc)
+	assert.Equal(t, []string{rev}, doc.RevHistory)
+}
+
+func TestPutDocument_BuildsRevHistory(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	rev1, err := db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"x": 1},
+	})
+	require.NoError(t, err)
+
+	rev2, err := db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Rev:  rev1,
+		Data: map[string]interface{}{"x": 2},
+	})
+	require.NoError(t, err)
+
+	doc, err := db.GetDocument(ctx, "doc1")
+	require.NoError(t, err)
+	require.NotNil(t, doc)
+	require.Len(t, doc.RevHistory, 2)
+	assert.Equal(t, rev2, doc.RevHistory[0])
+	assert.Equal(t, rev1, doc.RevHistory[1])
+}
+
+func TestPutDocument_HistoryCappedAt1000(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	rev, err := db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"x": 0},
+	})
+	require.NoError(t, err)
+
+	// 1000 more updates → 1001 total writes, history capped at 1000.
+	for i := 1; i <= 1000; i++ {
+		rev, err = db.PutDocument(ctx, &model.Document{
+			ID:   "doc1",
+			Rev:  rev,
+			Data: map[string]interface{}{"x": i},
+		})
+		require.NoError(t, err)
+	}
+
+	doc, err := db.GetDocument(ctx, "doc1")
+	require.NoError(t, err)
+	require.NotNil(t, doc)
+	assert.Len(t, doc.RevHistory, 1000)
+}
+
+func TestPutDocumentForReplication_ParsesRevisions(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	doc := &model.Document{
+		ID:  "doc1",
+		Rev: "3-a",
+		Data: map[string]interface{}{
+			"_revisions": map[string]interface{}{
+				"start": float64(3),
+				"ids":   []interface{}{"a", "b", "c"},
+			},
+		},
+	}
+	err = db.PutDocumentForReplication(ctx, doc)
+	require.NoError(t, err)
+
+	got, err := db.GetDocument(ctx, "doc1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, []string{"3-a", "2-b", "1-c"}, got.RevHistory)
+}
+
+func TestPutDocumentForReplication_FallbackNoRevisions(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	doc := &model.Document{
+		ID:   "doc1",
+		Rev:  "1-abc",
+		Data: map[string]interface{}{},
+	}
+	err = db.PutDocumentForReplication(ctx, doc)
+	require.NoError(t, err)
+
+	got, err := db.GetDocument(ctx, "doc1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, []string{"1-abc"}, got.RevHistory)
+}
+
+func TestPutDocument_WritesLeaf(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	rev, err := db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"x": 1},
+	})
+	require.NoError(t, err)
+
+	leaves, err := db.GetLeaves(ctx, "doc1")
+	require.NoError(t, err)
+	require.Len(t, leaves, 1)
+	assert.Equal(t, rev, leaves[0].Rev)
+}
+
+func TestPutDocument_UpdateRemovesOldLeaf(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	rev1, err := db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"x": 1},
+	})
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Rev:  rev1,
+		Data: map[string]interface{}{"x": 2},
+	})
+	require.NoError(t, err)
+
+	// Only one leaf should remain (the new winner).
+	leaves, err := db.GetLeaves(ctx, "doc1")
+	require.NoError(t, err)
+	assert.Len(t, leaves, 1)
+}
+
+func TestPutDocumentForReplication_CreatesConflict(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	// Insert two same-generation docs with different hashes — classic conflict.
+	err = db.PutDocumentForReplication(ctx, &model.Document{
+		ID:  "doc1",
+		Rev: "1-aaa",
+		Data: map[string]interface{}{
+			"_id": "doc1", "_rev": "1-aaa", "v": 1,
+		},
+	})
+	require.NoError(t, err)
+
+	err = db.PutDocumentForReplication(ctx, &model.Document{
+		ID:  "doc1",
+		Rev: "1-zzz",
+		Data: map[string]interface{}{
+			"_id": "doc1", "_rev": "1-zzz", "v": 2,
+		},
+	})
+	require.NoError(t, err)
+
+	leaves, err := db.GetLeaves(ctx, "doc1")
+	require.NoError(t, err)
+	assert.Len(t, leaves, 2)
+}
+
+func TestPutDocumentForReplication_HigherGenWins(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	err = db.PutDocumentForReplication(ctx, &model.Document{
+		ID:  "doc1",
+		Rev: "1-old",
+		Data: map[string]interface{}{"_id": "doc1", "_rev": "1-old"},
+	})
+	require.NoError(t, err)
+
+	err = db.PutDocumentForReplication(ctx, &model.Document{
+		ID:  "doc1",
+		Rev: "3-abc",
+		Data: map[string]interface{}{
+			"_id": "doc1", "_rev": "3-abc",
+			"_revisions": map[string]interface{}{
+				"start": float64(3),
+				"ids":   []interface{}{"abc", "b", "old"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	doc, err := db.GetDocument(ctx, "doc1")
+	require.NoError(t, err)
+	require.NotNil(t, doc)
+	assert.Equal(t, "3-abc", doc.Rev)
+}
+
+func TestPutDocumentForReplication_AncestorPruned(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	// Simulate a prior leaf at "1-a".
+	err = db.PutDocumentForReplication(ctx, &model.Document{
+		ID:  "doc1",
+		Rev: "1-a",
+		Data: map[string]interface{}{"_id": "doc1", "_rev": "1-a"},
+	})
+	require.NoError(t, err)
+
+	// Now replicate "2-b" which has "1-a" as an ancestor.
+	err = db.PutDocumentForReplication(ctx, &model.Document{
+		ID:  "doc1",
+		Rev: "2-b",
+		Data: map[string]interface{}{
+			"_id": "doc1", "_rev": "2-b",
+			"_revisions": map[string]interface{}{
+				"start": float64(2),
+				"ids":   []interface{}{"b", "a"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	// "1-a" should have been pruned from leaves; only "2-b" remains.
+	leaves, err := db.GetLeaves(ctx, "doc1")
+	require.NoError(t, err)
+	require.Len(t, leaves, 1)
+	assert.Equal(t, "2-b", leaves[0].Rev)
+}
+
+func TestGetDocument_PopulatesConflicts(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	err = db.PutDocumentForReplication(ctx, &model.Document{
+		ID:   "doc1",
+		Rev:  "1-aaa",
+		Data: map[string]interface{}{"_id": "doc1", "_rev": "1-aaa"},
+	})
+	require.NoError(t, err)
+
+	err = db.PutDocumentForReplication(ctx, &model.Document{
+		ID:   "doc1",
+		Rev:  "1-zzz",
+		Data: map[string]interface{}{"_id": "doc1", "_rev": "1-zzz"},
+	})
+	require.NoError(t, err)
+
+	doc, err := db.GetDocument(ctx, "doc1")
+	require.NoError(t, err)
+	require.NotNil(t, doc)
+	conflicts, ok := doc.Data["_conflicts"].([]string)
+	require.True(t, ok, "_conflicts should be []string")
+	assert.Len(t, conflicts, 1)
+}
+
+func TestGetDocument_HasRevisionCoversAllBranches(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	err = db.PutDocumentForReplication(ctx, &model.Document{
+		ID:   "doc1",
+		Rev:  "1-aaa",
+		Data: map[string]interface{}{"_id": "doc1", "_rev": "1-aaa"},
+	})
+	require.NoError(t, err)
+
+	err = db.PutDocumentForReplication(ctx, &model.Document{
+		ID:   "doc1",
+		Rev:  "1-zzz",
+		Data: map[string]interface{}{"_id": "doc1", "_rev": "1-zzz"},
+	})
+	require.NoError(t, err)
+
+	doc, err := db.GetDocument(ctx, "doc1")
+	require.NoError(t, err)
+	require.NotNil(t, doc)
+	// The losing leaf rev should be reachable via HasRevision.
+	assert.True(t, doc.HasRevision("1-aaa"))
+	assert.True(t, doc.HasRevision("1-zzz"))
+}

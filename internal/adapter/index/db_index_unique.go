@@ -21,7 +21,7 @@ type UniqueIndex struct {
 	bucketName  []byte
 	key, value  IndexFunc
 	iterKeyFunc IterKeyFunc
-	cleanKey    func([]byte) string
+	cleanKey    func([]byte) interface{}
 	mu          sync.RWMutex
 }
 

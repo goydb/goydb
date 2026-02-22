@@ -31,13 +31,12 @@ func NewViewIndex(ddfn *model.DesignDocFn, engines port.ViewEngines, logger port
 	}
 
 	vi.RegularIndex = NewRegularIndex(ddfn, vi.indexSingleDocument)
-	vi.cleanKey = func(b []byte) string {
-		var i interface{}
-		err := cbor.Unmarshal(b, &i)
-		if err != nil {
+	vi.cleanKey = func(b []byte) interface{} {
+		var v interface{}
+		if err := cbor.Unmarshal(b, &v); err != nil {
 			return err.Error()
 		}
-		return fmt.Sprintf("%v", i)
+		return v
 	}
 
 	return vi

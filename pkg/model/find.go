@@ -55,6 +55,36 @@ type FindQuery struct {
 	Bookmark string `json:"bookmark"`
 	// Include execution statistics in the query response.
 	ExecutionStats bool `json:"execution_stats"`
+	// UseIndex instructs the query planner to use a specific index.
+	// Accepts a string (ddoc name) or a two-element array [ddoc, index-name].
+	UseIndex interface{} `json:"use_index,omitempty"`
+	// Conflicts — single-node no-op; accepted for CouchDB compatibility.
+	Conflicts bool `json:"conflicts"`
+	// Stable — single-node no-op; accepted for CouchDB compatibility.
+	Stable bool `json:"stable"`
+	// Update — single-node no-op; accepted for CouchDB compatibility.
+	Update string `json:"update"`
+	// R — quorum parameter; single-node no-op.
+	R int `json:"r"`
+	// Q — shard parameter; single-node no-op.
+	Q int `json:"q"`
+}
+
+// EqConditions returns a map of fieldName → value for all top-level $eq
+// (or implicit equality) conditions in the selector.
+// Used by FindDocs to select a suitable MangoIndex.
+func (fq FindQuery) EqConditions() map[string]interface{} {
+	result := make(map[string]interface{})
+	for _, m := range fq.Selector.Members {
+		fs, ok := m.(*FieldSelector)
+		if !ok {
+			continue
+		}
+		if fs.Operation == SelectorOpEq {
+			result[fs.Field] = fs.Value
+		}
+	}
+	return result
 }
 
 func (fq FindQuery) Match(doc *Document) (bool, error) {
@@ -102,8 +132,28 @@ type ExecutionStats struct {
 
 type SortList []Sort
 
-func (sl *SortList) UnmarshalJSON([]byte) error {
-	// TODO implement sort unmarshal
+func (sl *SortList) UnmarshalJSON(data []byte) error {
+	var raw []json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	for _, elem := range raw {
+		var s Sort
+		var field string
+		if err := json.Unmarshal(elem, &field); err == nil {
+			s = Sort{Field: field, Order: SortOrderAsc}
+		} else {
+			var obj map[string]string
+			if err := json.Unmarshal(elem, &obj); err != nil {
+				return err
+			}
+			for k, v := range obj {
+				s.Field = k
+				s.Order = v == "desc"
+			}
+		}
+		*sl = append(*sl, s)
+	}
 	return nil
 }
 
@@ -126,8 +176,13 @@ type Sort struct {
 }
 
 func (s Sort) Less(l, r *Document) bool {
-	// TODO: implement
-	return false
+	var lv, rv SelectorValue
+	lv.Set(l.Field(s.Field))
+	rv.Set(r.Field(s.Field))
+	if s.Order == SortOrderDesc {
+		return rv.LessThen(&lv)
+	}
+	return lv.LessThen(&rv)
 }
 
 type SelectorGroupOp string

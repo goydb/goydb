@@ -24,6 +24,10 @@ func (s Session) Store(values map[interface{}]interface{}) {
 }
 
 func (s *Session) Restore(values map[interface{}]interface{}) {
-	s.Name = values["name"].(string)
-	s.Roles = values["roles"].([]string)
+	if name, ok := values["name"].(string); ok {
+		s.Name = name
+	}
+	if roles, ok := values["roles"].([]string); ok {
+		s.Roles = roles
+	}
 }

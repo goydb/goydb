@@ -58,7 +58,9 @@ func (s *DBDocDelete) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type SimpleDocResponse struct {
-	ID  string `json:"id"`
-	Ok  bool   `json:"ok"`
-	Rev string `json:"rev"`
+	ID     string `json:"id"`
+	Ok     bool   `json:"ok"`
+	Rev    string `json:"rev,omitempty"`
+	Error  string `json:"error,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }

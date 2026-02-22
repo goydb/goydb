@@ -53,6 +53,13 @@ func (d *Database) Stats(ctx context.Context) (stats model.DatabaseStats, err er
 	return d.db.Stats()
 }
 
+func (d *Database) Compact(ctx context.Context) error {
+	if err := d.compactDocuments(ctx); err != nil {
+		return err
+	}
+	return d.db.Compact()
+}
+
 func (d *Database) Sequence(ctx context.Context) (string, error) {
 	var seq uint64
 	err := d.rawTx(func(tx *Transaction) error {
@@ -109,6 +116,9 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 	database.logger.Debugf(ctx, "building indices")
 	err = database.rawTx(func(tx *Transaction) error {
 		tx.EnsureBucket(model.DocsBucket)
+		tx.EnsureBucket(model.AttRefsBucket)
+		tx.EnsureBucket(model.DocLeavesBucket)
+		tx.EnsureBucket(model.MetaBucket)
 
 		err := database.BuildIndices(ctx, tx, false)
 		if err != nil {
@@ -125,6 +135,12 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 		return nil
 	})
 	if err != nil {
+		return nil, err
+	}
+
+	// Migrate attachment storage from per-document paths to content-addressed
+	// paths.  No-op for new databases or already-migrated ones.
+	if err := database.migrateAttachments(ctx); err != nil {
 		return nil, err
 	}
 
@@ -147,6 +163,10 @@ func (s *Storage) DeleteDatabase(ctx context.Context, name string) error {
 
 	err = os.Remove(path.Join(s.path, name))
 	if err != nil {
+		return err
+	}
+
+	if err := os.RemoveAll(db.databaseDir); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 

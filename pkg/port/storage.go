@@ -8,15 +8,36 @@ import (
 )
 
 type AllDocsQuery struct {
-	Skip      int64
-	Limit     int64
-	StartKey  string
-	EndKey    string
-	SkipLocal bool
+	Skip         int64
+	Limit        int64
+	StartKey     string
+	EndKey       string
+	SkipLocal    bool
+	ExclusiveEnd bool // true when inclusive_end=false
 	// view options
-	DDFN        *model.DesignDocFn
-	IncludeDocs bool
-	ViewGroup   string
+	DDFN            *model.DesignDocFn
+	IncludeDocs     bool
+	ViewGroup       string
+	ViewGroupLevel  int // 0 = not set; 1-N = group by first N array elements
+	// ViewStartKey and ViewEndKey are CBOR-encoded key bounds for view queries.
+	// The endkey is already padded for inclusive comparison when set.
+	ViewStartKey    []byte
+	ViewEndKey      []byte
+	ViewExclusiveEnd bool
+	// ViewDecodedStartKey and ViewDecodedEndKey hold the decoded (Go interface{})
+	// versions of the same bounds for semantic post-filtering using ViewKeyCmp.
+	ViewDecodedStartKey interface{}
+	ViewDecodedEndKey   interface{}
+	// ViewDescending reverses iteration order when true.
+	ViewDescending bool
+	// ViewKeys is an explicit list of keys for multi-key lookup.
+	// nil = not set (use range-based iteration).
+	ViewKeys []interface{}
+	// ViewUpdateSeq includes update_seq in the view response when true.
+	ViewUpdateSeq bool
+	// ViewOmitSortedInfo when true omits total_rows and offset from the response.
+	// Corresponds to the CouchDB sorted=false query parameter.
+	ViewOmitSortedInfo bool
 }
 
 type Observer interface {

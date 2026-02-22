@@ -27,6 +27,42 @@ func (s *DBDocsAll) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	options := r.URL.Query()
+	includeDocs := boolOption("include_docs", false, options)
+
+	// On POST, parse {"keys": [...]} from body and fetch those docs individually.
+	if r.Method == "POST" {
+		var body struct {
+			Keys []string `json:"keys"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil && len(body.Keys) > 0 {
+			response := AllDocsResponse{
+				TotalRows: len(body.Keys),
+				Rows:      make([]Rows, len(body.Keys)),
+			}
+			for i, key := range body.Keys {
+				doc, err := db.GetDocument(r.Context(), key)
+				if err != nil || doc == nil {
+					response.Rows[i] = Rows{Key: key, Error: "not_found"}
+					continue
+				}
+				response.Rows[i].ID = doc.ID
+				response.Rows[i].Key = doc.ID
+				response.Rows[i].Value = Value{Rev: doc.Rev}
+				if includeDocs {
+					response.Rows[i].Doc = doc.Data
+					if response.Rows[i].Doc == nil {
+						response.Rows[i].Doc = make(map[string]interface{})
+					}
+					response.Rows[i].Doc["_id"] = doc.ID
+					response.Rows[i].Doc["_rev"] = doc.Rev
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(response) // nolint: errcheck
+			return
+		}
+	}
+
 	var q port.AllDocsQuery
 	q.Skip = intOption("skip", 0, options)
 	q.Limit = intOption("limit", 0, options)
@@ -37,8 +73,15 @@ func (s *DBDocsAll) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		q.StartKey = strings.ReplaceAll(stringOption("startkey", "start_key", options), `"`, "")
 		q.EndKey = strings.ReplaceAll(stringOption("endkey", "end_key", options), `"`, "")
+		if key := strings.ReplaceAll(stringOption("key", "key", options), `"`, ""); key != "" {
+			q.StartKey = key
+			q.EndKey = key
+		}
+		if !boolOption("inclusive_end", true, options) {
+			q.ExclusiveEnd = true
+		}
 	}
-	q.IncludeDocs = boolOption("include_docs", false, options)
+	q.IncludeDocs = includeDocs
 
 	docs, total, err := db.AllDocs(r.Context(), q)
 	if err != nil {
@@ -80,4 +123,5 @@ type Rows struct {
 	Key   interface{}            `json:"key,omitempty"`
 	Value interface{}            `json:"value,omitempty"`
 	Doc   map[string]interface{} `json:"doc,omitempty"`
+	Error string                 `json:"error,omitempty"`
 }

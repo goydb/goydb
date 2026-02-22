@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/goydb/goydb/pkg/model"
@@ -53,6 +54,14 @@ func (s *DBDocsBulk) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			resp[i].ID = doc.ID
 			if err != nil {
 				resp[i].Ok = false
+				switch {
+				case errors.Is(err, port.ErrConflict):
+					resp[i].Error, resp[i].Reason = "conflict", "Document update conflict."
+				case errors.Is(err, port.ErrNotFound):
+					resp[i].Error, resp[i].Reason = "not_found", "missing"
+				default:
+					resp[i].Error, resp[i].Reason = "internal_server_error", err.Error()
+				}
 				s.Logger.Warnf(r.Context(), "failed to put document in bulk", "docID", doc.ID, "error", err)
 			} else {
 				resp[i].Ok = true

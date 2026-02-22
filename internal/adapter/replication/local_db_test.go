@@ -246,6 +246,35 @@ func TestLocalDB_LocalDocRoundtrip(t *testing.T) {
 	assert.Equal(t, "42", got.Data["seq"])
 }
 
+func TestLocalDB_RevsDiff_AncestorRecognized(t *testing.T) {
+	s, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	rev1, err := db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"foo": "bar"},
+	})
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Rev:  rev1,
+		Data: map[string]interface{}{"foo": "baz"},
+	})
+	require.NoError(t, err)
+
+	l := &LocalDB{Storage: s, DBName: "testdb"}
+	result, err := l.RevsDiff(ctx, map[string][]string{
+		"doc1": {rev1},
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, result, "doc1", "ancestor rev1 should not appear as missing")
+}
+
 func TestLocalDB_CreateDB(t *testing.T) {
 	s, cleanup := setupTestStorage(t)
 	defer cleanup()
@@ -256,4 +285,58 @@ func TestLocalDB_CreateDB(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NoError(t, l.Head(ctx))
+}
+
+func TestLocalDB_RevsDiff_ConflictLeafRecognized(t *testing.T) {
+	s, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	// Store two conflicting same-gen revisions via BulkDocs.
+	l := &LocalDB{Storage: s, DBName: "testdb"}
+	docs := []*model.Document{
+		{ID: "doc1", Rev: "1-aaa", Data: map[string]interface{}{"_id": "doc1", "_rev": "1-aaa"}},
+	}
+	require.NoError(t, l.BulkDocs(ctx, docs, false))
+
+	docs2 := []*model.Document{
+		{ID: "doc1", Rev: "1-zzz", Data: map[string]interface{}{"_id": "doc1", "_rev": "1-zzz"}},
+	}
+	require.NoError(t, l.BulkDocs(ctx, docs2, false))
+
+	// Both conflict leaves should be known — neither should appear in RevsDiff.
+	result, err := l.RevsDiff(ctx, map[string][]string{
+		"doc1": {"1-aaa", "1-zzz"},
+	})
+	require.NoError(t, err)
+	_ = db // silence unused warning
+	assert.NotContains(t, result, "doc1", "conflict revs should not appear as missing")
+}
+
+func TestLocalDB_BulkDocs_CreatesConflict(t *testing.T) {
+	s, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	l := &LocalDB{Storage: s, DBName: "testdb"}
+
+	err = l.BulkDocs(ctx, []*model.Document{
+		{ID: "doc1", Rev: "1-aaa", Data: map[string]interface{}{"_id": "doc1", "_rev": "1-aaa"}},
+	}, false)
+	require.NoError(t, err)
+
+	err = l.BulkDocs(ctx, []*model.Document{
+		{ID: "doc1", Rev: "1-zzz", Data: map[string]interface{}{"_id": "doc1", "_rev": "1-zzz"}},
+	}, false)
+	require.NoError(t, err)
+
+	leaves, err := db.GetLeaves(ctx, "doc1")
+	require.NoError(t, err)
+	assert.Len(t, leaves, 2)
 }

@@ -98,20 +98,46 @@ func (v DesignDoc) ReduceDocs(ctx context.Context, tx port.EngineReadTransaction
 		return nil, 0, err
 	}
 	i := storage.NewIterator(tx, storage.WithOptions(io))
+	if opts.ViewStartKey != nil {
+		i.SetStartKey(opts.ViewStartKey)
+	}
+	if opts.ViewEndKey != nil {
+		i.SetEndKey(opts.ViewEndKey)
+		i.SetExclusiveEnd(opts.ViewExclusiveEnd)
+	}
 	total = i.Total()
 	if total == 0 {
 		return nil, 0, nil
 	}
 	for doc := i.First(); i.Continue(); doc = i.Next() {
-		// Without explicit group=true, collapse all keys to nil so the reducer
-		// produces a single aggregated row (CouchDB default behaviour).
-		// Map-only views (no ReduceFn) skip this: they preserve keys like reduce=false.
-		if view.ReduceFn != "" && opts.ViewGroup != "true" {
-			doc.Key = nil
+		// Semantic post-filter using CouchDB collation (CBOR byte order diverges
+		// from CouchDB collation order for strings of different lengths).
+		if opts.ViewDecodedStartKey != nil && model.ViewKeyCmp(doc.Key, opts.ViewDecodedStartKey) < 0 {
+			continue
+		}
+		if opts.ViewDecodedEndKey != nil {
+			cmp := model.ViewKeyCmp(doc.Key, opts.ViewDecodedEndKey)
+			if opts.ViewExclusiveEnd && cmp >= 0 {
+				continue
+			} else if !opts.ViewExclusiveEnd && cmp > 0 {
+				continue
+			}
 		}
 
-		// TODO: implement other group levels using 1-10 if key is
-		// an array
+		// Apply group / group_level key reduction before passing to the reducer.
+		// Map-only views (no ReduceFn) skip this: they preserve keys like reduce=false.
+		if view.ReduceFn != "" {
+			if opts.ViewGroupLevel > 0 {
+				if arr, ok := doc.Key.([]interface{}); ok && opts.ViewGroupLevel < len(arr) {
+					doc.Key = arr[:opts.ViewGroupLevel]
+				}
+				// non-array key or key shorter/equal to group_level: keep as-is
+			} else if opts.ViewGroup != "true" {
+				// default: collapse all keys to nil → single aggregated row
+				doc.Key = nil
+			}
+			// group=true: keep full key unchanged
+		}
 
 		r.Reduce(doc)
 	}

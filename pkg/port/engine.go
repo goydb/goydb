@@ -13,6 +13,7 @@ type DatabaseEngine interface {
 	Stats() (stats model.DatabaseStats, err error)
 	ReadTransaction(fn func(tx EngineReadTransaction) error) error
 	WriteTransaction(logger Logger, fn func(tx EngineWriteTransaction) error) error
+	Compact() error
 	Close() error
 }
 

@@ -10,7 +10,7 @@ type IteratorOptions struct {
 	SkipDesignDoc bool
 	SkipLocalDoc  bool
 
-	CleanKey func([]byte) string
+	CleanKey func([]byte) interface{}
 	KeyFunc  func(k []byte) []byte
 
 	BucketName []byte

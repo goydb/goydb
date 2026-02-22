@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/goydb/goydb/pkg/model"
 )
@@ -66,6 +67,12 @@ func (s *DBDocsFind) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		response.Docs[i]["_rev"] = doc.Rev
 	}
 
+	if len(find.Fields) > 0 {
+		for i, d := range response.Docs {
+			response.Docs[i] = projectFields(d, find.Fields)
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response) // nolint: errcheck
 }
@@ -75,4 +82,39 @@ type FindResponse struct {
 	Bookmark       string                   `json:"bookmark,omitempty"`
 	ExecutionStats *model.ExecutionStats    `json:"execution_stats"`
 	Warning        string                   `json:"warning,omitempty"`
+}
+
+// projectFields returns a new map containing only the requested fields.
+// _id and _rev are always included. Nested fields (e.g. "author.name") are
+// resolved one level deep and merged into a sub-map.
+func projectFields(doc map[string]interface{}, fields []string) map[string]interface{} {
+	out := map[string]interface{}{
+		"_id":  doc["_id"],
+		"_rev": doc["_rev"],
+	}
+	for _, f := range fields {
+		if f == "_id" || f == "_rev" {
+			continue
+		}
+		parts := strings.SplitN(f, ".", 2)
+		if len(parts) == 1 {
+			if v, ok := doc[f]; ok {
+				out[f] = v
+			}
+		} else {
+			if sub, ok := doc[parts[0]].(map[string]interface{}); ok {
+				nested := projectFields(sub, []string{parts[1]})
+				delete(nested, "_id")
+				delete(nested, "_rev")
+				if existing, ok := out[parts[0]].(map[string]interface{}); ok {
+					for k, v := range nested {
+						existing[k] = v
+					}
+				} else {
+					out[parts[0]] = nested
+				}
+			}
+		}
+	}
+	return out
 }
