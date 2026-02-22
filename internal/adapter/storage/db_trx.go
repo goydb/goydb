@@ -143,6 +143,52 @@ func (tx *Transaction) GetDocument(ctx context.Context, docID string) (*model.Do
 	return &doc, nil
 }
 
+// PutDocumentForReplication stores a document preserving its existing revision.
+// It skips conflict checks and does not generate a new revision, which is needed
+// when replicating with new_edits=false.
+func (tx *Transaction) PutDocumentForReplication(ctx context.Context, doc *model.Document) error {
+	oldDoc, err := tx.GetDocument(ctx, doc.ID)
+	if err == nil && oldDoc != nil {
+		// If the document already exists with the same or higher rev, skip
+		oldRev, _ := oldDoc.Revision()
+		newRev, _ := doc.Revision()
+		if oldRev == newRev {
+			return nil // already have this revision
+		}
+	}
+
+	if oldDoc != nil {
+		for _, index := range tx.Database.Indices() {
+			err := index.DocumentDeleted(ctx, tx, oldDoc)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	err = tx.PutRaw(ctx, []byte(doc.ID), doc)
+	if err != nil {
+		return err
+	}
+
+	if doc.IsDesignDoc() {
+		err = tx.Database.BuildDesignDocIndices(ctx, tx, doc, true)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, index := range tx.Database.Indices() {
+		err = index.DocumentStored(ctx, tx, doc)
+		if err != nil {
+			return err
+		}
+	}
+
+	tx.Database.NotifyDocumentUpdate(doc)
+	return nil
+}
+
 func (tx *Transaction) DeleteDocument(ctx context.Context, docID, rev string) (*model.Document, error) {
 	doc := &model.Document{
 		ID:      docID,

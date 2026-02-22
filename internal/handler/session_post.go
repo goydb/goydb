@@ -13,7 +13,7 @@ type SessionPost struct {
 }
 
 func (s *SessionPost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 
 	err := r.ParseForm()
 	if err != nil {

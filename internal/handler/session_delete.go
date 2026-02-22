@@ -9,7 +9,7 @@ type SessionDelete struct {
 }
 
 func (s *SessionDelete) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 
 	session, err := s.SessionStore.New(r, sessionName)
 	if err != nil {

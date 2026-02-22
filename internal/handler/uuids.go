@@ -11,7 +11,7 @@ import (
 type UUIDs struct{}
 
 func (s *UUIDs) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 
 	count, err := strconv.ParseInt(r.URL.Query().Get("count"), 10, 64)
 	if err != nil {

@@ -12,8 +12,8 @@ import (
 	"strconv"
 
 	"github.com/gorilla/mux"
-	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/port"
 )
 
 type DBDocGet struct {
@@ -23,7 +23,7 @@ type DBDocGet struct {
 }
 
 func (s *DBDocGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 
 	db := Database{Base: s.Base}.Do(w, r)
 	if db == nil {
@@ -60,34 +60,54 @@ func (s *DBDocGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusNotFound, err.Error())
 		return
 	}
+	if dbdoc == nil {
+		WriteError(w, http.StatusNotFound, "document not found")
+		return
+	}
+
+	// Always create a clean response map without modifying dbdoc.Data
+	// This prevents fields like _revisions from persisting in the document
+	responseData := make(map[string]interface{}, len(dbdoc.Data)+3)
+	for k, v := range dbdoc.Data {
+		// Filter out internal fields that should only be added conditionally
+		if k == "_revisions" || k == "_local_seq" {
+			continue
+		}
+		responseData[k] = v
+	}
+
+	// Add conditional fields
 	if localSeq {
-		dbdoc.Data["_local_seq"] = dbdoc.LocalSeq
+		responseData["_local_seq"] = dbdoc.LocalSeq
 	}
 	if revs {
-		dbdoc.Data["_revisions"] = dbdoc.Revisions()
+		responseData["_revisions"] = dbdoc.Revisions()
 	}
 
 	switch r.Header.Get("Accept") {
 	case "multipart/mixed":
+		// For multipart, use a temporary document with clean data
+		tempDoc := *dbdoc
+		tempDoc.Data = responseData
 		mw := NewMultipartResponse(db, w)
 		defer mw.Close()
-		err = mw.WriteDocument(r.Context(), dbdoc)
+		err = mw.WriteDocument(r.Context(), &tempDoc)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 	default:
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(dbdoc.Data) // nolint: errcheck
+		json.NewEncoder(w).Encode(responseData) // nolint: errcheck
 	}
 }
 
 type MultipartResponse struct {
-	db *storage.Database
+	db port.Database
 	mw *multipart.Writer
 }
 
-func NewMultipartResponse(db *storage.Database, w http.ResponseWriter) *MultipartResponse {
+func NewMultipartResponse(db port.Database, w http.ResponseWriter) *MultipartResponse {
 	// root writer
 	mw := multipart.NewWriter(w)
 	w.Header().Set("Content-Type", fmt.Sprintf(`multipart/mixed; boundary="%s"`, mw.Boundary()))
@@ -166,5 +186,5 @@ func (r *MultipartResponse) WriteDocument(ctx context.Context, doc *model.Docume
 }
 
 func (r *MultipartResponse) Close() {
-	r.mw.Close()
+	_ = r.mw.Close()
 }

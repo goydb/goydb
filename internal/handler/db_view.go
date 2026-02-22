@@ -3,12 +3,10 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/internal/controller"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
@@ -19,7 +17,7 @@ type DBView struct {
 }
 
 func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 
 	db := Database{Base: s.Base}.Do(w, r)
 	if db == nil {
@@ -56,7 +54,7 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for {
 			n, err := db.TaskCount(r.Context())
 			if err != nil {
-				log.Println(err)
+				s.Logger.Errorf(r.Context(), "failed to get task count", "error", err)
 				WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
@@ -91,7 +89,7 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var docs map[interface{}]interface{}
 	var err error
 	if boolOption("reduce", true, options) {
-		err = db.Transaction(r.Context(), func(tx *storage.Transaction) error {
+		err = db.Transaction(r.Context(), func(tx port.DatabaseTx) error {
 			designDoc, err := tx.GetDocument(r.Context(), docID)
 			if err != nil {
 				return err
@@ -110,7 +108,8 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 	} else {
 		docs = make(map[interface{}]interface{})
-		err = db.Transaction(r.Context(), func(tx *storage.Transaction) error {
+		var docList []*model.Document
+		err = db.Transaction(r.Context(), func(tx port.DatabaseTx) error {
 			iter, err := db.IndexIterator(r.Context(), tx, idx)
 			if err != nil {
 				return err
@@ -120,11 +119,17 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			iter.SetLimit(int(q.Limit))
 			for doc := iter.First(); iter.Continue(); doc = iter.Next() {
 				docs[doc.ID] = doc
+				docList = append(docList, doc)
 			}
 			total = iter.Remaining() + len(docs)
 
 			return err
 		})
+
+		// Enrich documents with full data if include_docs=true
+		if err == nil && q.IncludeDocs && len(docList) > 0 {
+			err = db.EnrichDocuments(r.Context(), docList)
+		}
 	}
 
 	if err != nil {

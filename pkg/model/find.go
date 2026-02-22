@@ -339,9 +339,8 @@ func (sg SelectorGroup) Match(df DocumentField) (bool, error) {
 			}
 		}
 		return true, nil // no match
-	default:
-		panic(fmt.Errorf("undefined operation: %q", sg.Operation))
 	}
+	panic(fmt.Errorf("undefined operation: %q", sg.Operation))
 }
 
 type SelectorOp string
@@ -494,7 +493,7 @@ func (fs FieldSelector) Match(df DocumentField) (bool, error) {
 		if svValue.o == nil {
 			re, err := regexp.Compile(svValue.s)
 			if err != nil {
-				return false, fmt.Errorf("Failed to compile regex: %v", err)
+				return false, fmt.Errorf("failed to compile regex: %v", err)
 			}
 			svValue.o = re
 		}

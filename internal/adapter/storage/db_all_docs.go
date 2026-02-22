@@ -65,8 +65,7 @@ func (d *Database) AllDesignDocs(ctx context.Context) ([]*model.Document, int, e
 }
 
 func (d *Database) EnrichDocuments(ctx context.Context, docs []*model.Document) error {
-	err := d.Transaction(ctx, func(tx *Transaction) error {
-		var err error
+	return d.rawTx(func(tx *Transaction) error {
 		tx.SetBucketName(model.DocsBucket)
 
 		for _, doc := range docs {
@@ -80,7 +79,6 @@ func (d *Database) EnrichDocuments(ctx context.Context, docs []*model.Document) 
 			doc.Attachments = dbdoc.Attachments
 		}
 
-		return err
+		return nil
 	})
-	return err
 }

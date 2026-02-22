@@ -14,7 +14,7 @@ type SessionGet struct {
 }
 
 func (s *SessionGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 
 	session, via := Authenticator{Base: s.Base}.Auth(r)
 	if session == nil {

@@ -10,6 +10,7 @@ type FnType string
 const (
 	ViewFn   FnType = "views"
 	SearchFn FnType = "indexes"
+	FilterFn FnType = "filters"
 )
 
 type DesignDocFn struct {

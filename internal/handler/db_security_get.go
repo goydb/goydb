@@ -10,7 +10,7 @@ type DBSecurityGet struct {
 }
 
 func (s *DBSecurityGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 
 	db := Database{Base: s.Base}.Do(w, r)
 	if db == nil {

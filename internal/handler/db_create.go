@@ -12,7 +12,7 @@ type DBCreate struct {
 }
 
 func (s *DBCreate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 
 	if _, ok := (Authenticator{Base: s.Base, RequiresAdmin: true}.Do(w, r)); !ok {
 		return
@@ -31,21 +31,7 @@ func (s *DBCreate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := DBResponse{
-		DbName:            mux.Vars(r)["db"],
-		PurgeSeq:          "0",
-		UpdateSeq:         "0",
-		DiskFormatVersion: 8,
-		InstanceStartTime: "0",
-		DocCount:          0,
-		DocDelCount:       0,
-		CompactRunning:    false,
-		Sizes: Sizes{
-			File:     20840,
-			External: 5578,
-			Active:   2736,
-		},
-	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response) // nolint: errcheck
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true}) // nolint: errcheck
 }

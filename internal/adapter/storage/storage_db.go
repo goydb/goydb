@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path"
 	"strconv"
@@ -24,7 +23,9 @@ type Database struct {
 
 	indices        map[string]port.DocumentIndex
 	viewEngines    map[string]port.ViewServerBuilder
+	filterEngines  map[string]port.FilterServerBuilder
 	reducerEngines map[string]port.ReducerServerBuilder
+	logger         port.Logger
 }
 
 func (d *Database) ChangesIndex() port.DocumentIndex {
@@ -54,7 +55,7 @@ func (d *Database) Stats(ctx context.Context) (stats model.DatabaseStats, err er
 
 func (d *Database) Sequence(ctx context.Context) (string, error) {
 	var seq uint64
-	err := d.Transaction(ctx, func(tx *Transaction) error {
+	err := d.rawTx(func(tx *Transaction) error {
 		seq = tx.Sequence(model.DocsBucket)
 		return nil
 	})
@@ -68,22 +69,26 @@ func (d *Database) ViewEngine(name string) port.ViewServerBuilder {
 	return d.viewEngines[name]
 }
 
+func (d *Database) FilterEngine(name string) port.FilterServerBuilder {
+	return d.filterEngines[name]
+}
+
 func (d *Database) ReducerEngine(name string) port.ReducerServerBuilder {
 	return d.reducerEngines[name]
 }
 
-func (s *Storage) CreateDatabase(ctx context.Context, name string) (*Database, error) {
+func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Database, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	databaseDir := path.Join(s.path, name+".d")
 
-	log.Println("Open..")
+	s.logger.Debugf(ctx, "opening database")
 	db, err := bbolt_engine.Open(path.Join(s.path, name))
 	if err != nil {
 		return nil, err
 	}
-	log.Println("Done..")
+	s.logger.Debugf(ctx, "database opened")
 
 	database := &Database{
 		name:        name,
@@ -94,13 +99,15 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (*Database, e
 			index.DeletedIndexName: index.NewDeletedIndex(),
 		},
 		viewEngines:    s.viewEngines,
+		filterEngines:  s.filterEngines,
 		reducerEngines: s.reducerEngines,
+		logger:         s.logger.With("database", name),
 	}
 	s.dbs[name] = database
 
 	// create all required database Indices
-	log.Println("BuildIndices")
-	err = database.Transaction(ctx, func(tx *Transaction) error {
+	database.logger.Debugf(ctx, "building indices")
+	err = database.rawTx(func(tx *Transaction) error {
 		tx.EnsureBucket(model.DocsBucket)
 
 		err := database.BuildIndices(ctx, tx, false)
@@ -109,7 +116,7 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (*Database, e
 		}
 
 		for _, index := range database.Indices() {
-			log.Printf("ENSURE INDEX %s", index)
+			database.logger.Debugf(ctx, "ensuring index", "index", fmt.Sprintf("%v", index))
 			err := index.Ensure(ctx, tx)
 			if err != nil {
 				return err
@@ -162,7 +169,7 @@ func (s *Storage) Databases(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
-func (s *Storage) Database(ctx context.Context, name string) (*Database, error) {
+func (s *Storage) Database(ctx context.Context, name string) (port.Database, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

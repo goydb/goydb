@@ -8,7 +8,7 @@ import (
 type Index struct{}
 
 func (s *Index) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 
 	response := &Info{
 		Couchdb: "Welcome",

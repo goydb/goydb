@@ -1,6 +1,7 @@
 package reducer
 
 import (
+	adapterlogger "github.com/goydb/goydb/internal/adapter/logger"
 	"github.com/goydb/goydb/internal/adapter/view/gojaview"
 	"github.com/goydb/goydb/pkg/port"
 )
@@ -34,7 +35,8 @@ function(keys, values, rereduce) {
 }`
 
 func NewStats() port.Reducer {
-	r, err := gojaview.NewReducer(jsStats)
+	// Use NoLog logger for built-in reducers since they shouldn't need logging
+	r, err := gojaview.NewReducer(jsStats, adapterlogger.NewNoLog())
 	if err != nil {
 		panic(err)
 	}

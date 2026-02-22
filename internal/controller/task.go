@@ -3,25 +3,31 @@ package controller
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 
-	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/port"
 )
 
 const taskProcessCount = 10
 
 type Task struct {
-	Storage *storage.Storage
+	Storage port.Storage
+	Logger  port.Logger
 }
 
 func (c Task) Run(ctx context.Context) {
 	t := time.NewTicker(time.Millisecond * 500)
-	for range t.C {
-		err := c.ProcessAllTasks(ctx)
-		if err != nil {
-			log.Printf("Failed processing of all tasks: %v", err)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			err := c.ProcessAllTasks(ctx)
+			if err != nil {
+				c.Logger.Warnf(ctx, "failed processing tasks", "error", err)
+			}
 		}
 	}
 }
@@ -47,7 +53,7 @@ func (c Task) ProcessAllTasks(ctx context.Context) error {
 	return nil
 }
 
-func (c Task) ProcessTasksForDatabase(ctx context.Context, db *storage.Database) error {
+func (c Task) ProcessTasksForDatabase(ctx context.Context, db port.Database) error {
 	for {
 		// check if context should be canceled
 		select {
@@ -63,7 +69,7 @@ func (c Task) ProcessTasksForDatabase(ctx context.Context, db *storage.Database)
 		for _, task := range tasks {
 			err := c.ProcessTask(ctx, task)
 			if err != nil {
-				log.Printf("Failed to process %s due to: %v", task, err)
+				c.Logger.Warnf(ctx, "failed to process task", "task", task, "error", err)
 			}
 		}
 		err = db.CompleteTasks(ctx, tasks)

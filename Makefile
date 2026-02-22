@@ -4,7 +4,7 @@ test:
 	go test -race -v ./...
 
 lint:
-	go run github.com/golangci/golangci-lint/cmd/golangci-lint run
+	golangci-lint run
 
 build:
 	docker build -t goydb/goydb:latest .

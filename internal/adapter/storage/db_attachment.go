@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/port"
 )
 
 const AttachmentDir = "attachments"
@@ -26,10 +27,10 @@ func (d *Database) AttachmentReader(docID, attachment string) (io.ReadCloser, er
 }
 
 func (d *Database) PutAttachment(ctx context.Context, docID string, att *model.Attachment) (string, error) {
-	defer att.Reader.Close()
+	defer func() { _ = att.Reader.Close() }()
 
 	var rev string
-	err := d.Transaction(ctx, func(tx *Transaction) error {
+	err := d.Transaction(ctx, func(tx port.DatabaseTx) error {
 		doc, err := tx.GetDocument(ctx, docID)
 		if err != nil {
 			return err
@@ -44,7 +45,7 @@ func (d *Database) PutAttachment(ctx context.Context, docID string, att *model.A
 		filePath := filepath.Join(docDir, att.Filename)
 		f, err := os.Create(filePath)
 		if err != nil {
-			defer os.Remove(filePath) // don't leaf broken files
+			defer func() { _ = os.Remove(filePath) }() // don't leaf broken files
 			return err
 		}
 
@@ -52,7 +53,7 @@ func (d *Database) PutAttachment(ctx context.Context, docID string, att *model.A
 
 		n, err := io.Copy(f, io.TeeReader(att.Reader, sum))
 		if err != nil {
-			defer os.Remove(filePath) // don't leaf broken files
+			defer func() { _ = os.Remove(filePath) }() // don't leaf broken files
 			return err
 		}
 
@@ -73,7 +74,7 @@ func (d *Database) PutAttachment(ctx context.Context, docID string, att *model.A
 
 func (d *Database) DeleteAttachment(ctx context.Context, docID, name string) (string, error) {
 	var rev string
-	err := d.Transaction(ctx, func(tx *Transaction) error {
+	err := d.Transaction(ctx, func(tx port.DatabaseTx) error {
 		doc, err := tx.GetDocument(ctx, docID)
 		if err != nil {
 			return err
@@ -101,7 +102,7 @@ func (d *Database) DeleteAttachment(ctx context.Context, docID, name string) (st
 
 func (d *Database) GetAttachment(ctx context.Context, docID, name string) (*model.Attachment, error) {
 	var attachment *model.Attachment
-	err := d.Transaction(ctx, func(tx *Transaction) error {
+	err := d.Transaction(ctx, func(tx port.DatabaseTx) error {
 		var err error
 		doc, err := tx.GetDocument(ctx, docID)
 		if err != nil {

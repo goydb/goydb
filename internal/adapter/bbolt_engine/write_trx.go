@@ -1,9 +1,8 @@
 package bbolt_engine
 
 import (
+	"context"
 	"fmt"
-
-	"log"
 
 	"github.com/goydb/goydb/pkg/port"
 	"go.etcd.io/bbolt"
@@ -33,16 +32,18 @@ type op struct {
 // The aim is to unblock write transactions to the database
 // by packing the transactions into a log.
 type WriteTransaction struct {
-	seq uint64
+	seq    uint64
 	ReadTransaction
-	opLog []op
+	opLog  []op
+	logger port.Logger
 }
 
-func NewWriteTransaction(readTx *bbolt.Tx) *WriteTransaction {
+func NewWriteTransaction(readTx *bbolt.Tx, logger port.Logger) *WriteTransaction {
 	return &WriteTransaction{
 		ReadTransaction: ReadTransaction{
 			tx: readTx,
 		},
+		logger: logger,
 	}
 }
 
@@ -102,13 +103,13 @@ func (t *WriteTransaction) Commit(tx *bbolt.Tx) error {
 		var err error
 		switch op.code {
 		case opEnsureBucket:
-			log.Printf("OP ensure bucket %q", op.arg1)
+			t.logger.Debugf(context.Background(), "bbolt operation", "op", "ensure_bucket", "bucket", string(op.arg1))
 			_, err = tx.CreateBucketIfNotExists(op.arg1)
 		case opDeleteBucket:
-			log.Printf("OP delete bucket %q", op.arg1)
+			t.logger.Debugf(context.Background(), "bbolt operation", "op", "delete_bucket", "bucket", string(op.arg1))
 			err = tx.DeleteBucket(op.arg1)
 		case opPut:
-			log.Printf("OP put %q (%d) to %q", op.arg2, len(op.arg3), op.arg1)
+			t.logger.Debugf(context.Background(), "bbolt operation", "op", "put", "key", string(op.arg2), "size", len(op.arg3), "bucket", string(op.arg1))
 			b := tx.Bucket(op.arg1)
 			if b == nil {
 				return fmt.Errorf("failed to put %q to bucket %q: no bucket", string(op.arg2), string(op.arg1))
@@ -130,13 +131,13 @@ func (t *WriteTransaction) Commit(tx *bbolt.Tx) error {
 				if nv == nil { // value not changed
 					nv = op.arg3
 				}
-				log.Printf("OP put with seq %q (%d) to %q", nk, len(nv), op.arg1)
+				t.logger.Debugf(context.Background(), "bbolt operation", "op", "put_with_seq", "key", string(nk), "size", len(nv), "bucket", string(op.arg1))
 				err = b.Put(nk, nv)
 			}
 		case opDelete:
 			b := tx.Bucket(op.arg1)
 			if b != nil {
-				log.Printf("OP delete %q from %q", op.arg2, op.arg1)
+				t.logger.Debugf(context.Background(), "bbolt operation", "op", "delete", "key", string(op.arg2), "bucket", string(op.arg1))
 				err = b.Delete(op.arg2)
 			}
 		default:

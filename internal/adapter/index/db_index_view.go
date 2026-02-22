@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"sync"
 
 	"github.com/fxamacker/cbor/v2"
@@ -22,15 +21,17 @@ type ViewIndex struct {
 	engines port.ViewEngines
 	server  port.ViewServer
 	mu      sync.RWMutex
+	logger  port.Logger
 }
 
-func NewViewIndex(ddfn *model.DesignDocFn, engines port.ViewEngines) *ViewIndex {
+func NewViewIndex(ddfn *model.DesignDocFn, engines port.ViewEngines, logger port.Logger) *ViewIndex {
 	vi := &ViewIndex{
 		engines: engines,
+		logger:  logger,
 	}
 
 	vi.RegularIndex = NewRegularIndex(ddfn, vi.indexSingleDocument)
-	vi.RegularIndex.cleanKey = func(b []byte) string {
+	vi.cleanKey = func(b []byte) string {
 		var i interface{}
 		err := cbor.Unmarshal(b, &i)
 		if err != nil {
@@ -43,7 +44,7 @@ func NewViewIndex(ddfn *model.DesignDocFn, engines port.ViewEngines) *ViewIndex 
 }
 
 func (i *ViewIndex) String() string {
-	return fmt.Sprintf("<ViewIndex name=%q>", i.RegularIndex.ddfn)
+	return fmt.Sprintf("<ViewIndex name=%q>", i.ddfn)
 }
 
 func (i *ViewIndex) indexSingleDocument(ctx context.Context, doc *model.Document) ([][]byte, [][]byte) {
@@ -60,7 +61,7 @@ func (i *ViewIndex) indexSingleDocument(ctx context.Context, doc *model.Document
 	// execute document against view server
 	docs, err := vs.ExecuteView(ctx, []*model.Document{doc})
 	if err != nil {
-		log.Printf("Failed to execute view: %v", err)
+		i.logger.Errorf(ctx, "view execution failed", "error", err)
 		return nil, nil
 	}
 
@@ -70,7 +71,7 @@ func (i *ViewIndex) indexSingleDocument(ctx context.Context, doc *model.Document
 	for _, doc := range docs {
 		key, err := cbor.Marshal(doc.Key)
 		if err != nil {
-			log.Printf("Failed to marshal key: %v", err)
+			i.logger.Errorf(ctx, "key marshal failed", "error", err)
 			return nil, nil
 		}
 		keys = append(keys, key)

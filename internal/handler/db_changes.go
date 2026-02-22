@@ -1,15 +1,16 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/port"
 )
 
 type DBChanges struct {
@@ -18,9 +19,10 @@ type DBChanges struct {
 
 // FIXME: make config
 const maxTimeout = time.Second * 60
+const maxHeartbeat = time.Minute * 5
 
 func (s *DBChanges) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 
 	if _, ok := (Authenticator{Base: s.Base, RequiresAdmin: true}.Do(w, r)); !ok {
 		return
@@ -34,21 +36,22 @@ func (s *DBChanges) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	includeDocs := boolOption("include_docs", false, query)
 	options := model.ChangesOptions{
-		Since:   strings.ReplaceAll(query.Get("since"), `"`, ""),
-		Limit:   int(intOption("limit", 1000, query)),
-		Timeout: durationOption("timeout", time.Millisecond, maxTimeout, query),
+		Since:     strings.ReplaceAll(query.Get("since"), `"`, ""),
+		Limit:     int(intOption("limit", 1000, query)),
+		Timeout:   durationOption("timeout", time.Millisecond, maxTimeout, query),
+		Heartbeat: durationOption("heartbeat", time.Millisecond, maxHeartbeat, query),
+		Filter:    query.Get("filter"),
+		View:      query.Get("view"),
 	}
 
-	changes, pending, err := db.Changes(r.Context(), &options)
-	if err != nil {
-		WriteError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if includeDocs {
-		err := db.EnrichDocuments(r.Context(), changes)
-		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
-			return
+	if r.Method == "POST" {
+		var body struct {
+			DocIDs   []string               `json:"doc_ids"`
+			Selector map[string]interface{} `json:"selector"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+			options.DocIDs = body.DocIDs
+			options.Selector = body.Selector
 		}
 	}
 
@@ -57,17 +60,75 @@ func (s *DBChanges) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		feed = "normal"
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	// Route to appropriate handler based on feed type
+	switch feed {
+	case "normal", "longpoll":
+		s.handleNormalFeed(w, r, db, &options, includeDocs)
+	case "continuous":
+		s.handleContinuousFeed(w, r, db, &options, includeDocs)
+	case "eventsource":
+		s.handleEventSourceFeed(w, r, db, &options, includeDocs)
+	default:
+		WriteError(w, http.StatusBadRequest, "invalid feed type")
+	}
+}
 
-	if feed == "normal" {
-		fmt.Fprintln(w, `{"results":[`)
-	} else if feed == "continuous" {
-		w.Header().Set("Transfer-Encoding", "chunked")
+func (s *DBChanges) handleNormalFeed(w http.ResponseWriter, r *http.Request, db port.Database, options *model.ChangesOptions, includeDocs bool) {
+	// Setup heartbeat ticker if specified
+	var heartbeatTicker *time.Ticker
+	var heartbeatDone chan struct{}
+	if options.Heartbeat > 0 {
+		// We'll start heartbeat after headers are sent
+		heartbeatTicker = time.NewTicker(options.Heartbeat)
+		heartbeatDone = make(chan struct{})
+		defer func() {
+			heartbeatTicker.Stop()
+			close(heartbeatDone)
+		}()
+	}
+
+	changes, pending, err := db.Changes(r.Context(), options)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Apply all filters
+	changes = s.applyFilters(r.Context(), db, changes, options, r)
+
+	if includeDocs {
+		err := db.EnrichDocuments(r.Context(), changes)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = fmt.Fprintln(w, `{"results":[`)
+
+	// Start heartbeat goroutine if configured
+	if heartbeatTicker != nil {
+		if flusher, ok := w.(http.Flusher); ok {
+			go func() {
+				for {
+					select {
+					case <-heartbeatTicker.C:
+						_, _ = fmt.Fprint(w, "\n")
+						flusher.Flush()
+					case <-heartbeatDone:
+						return
+					case <-r.Context().Done():
+						return
+					}
+				}
+			}()
+		}
 	}
 
 	// print an empty line like couchdb
 	if options.Limit == 0 {
-		fmt.Fprintln(w, "")
+		_, _ = fmt.Fprintln(w, "")
 	}
 
 	var lastSeq uint64
@@ -88,13 +149,11 @@ func (s *DBChanges) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		err := json.NewEncoder(w).Encode(cd)
 		if err != nil {
-			log.Println(err)
+			s.Logger.Warnf(r.Context(), "failed to encode change", "error", err)
 			break
 		}
-		if feed == "normal" {
-			if i < len(changes)-1 {
-				fmt.Fprint(w, `,`)
-			}
+		if i < len(changes)-1 {
+			_, _ = fmt.Fprint(w, `,`)
 		}
 	}
 
@@ -102,10 +161,512 @@ func (s *DBChanges) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		lastSeq, _ = strconv.ParseUint(options.Since, 10, 64)
 	}
 
-	if feed == "normal" {
-		fmt.Fprintln(w, `],`)
-		fmt.Fprintf(w, `"last_seq":"%d","pending":"%d"}`, lastSeq, pending)
+	_, _ = fmt.Fprintln(w, `],`)
+	_, _ = fmt.Fprintf(w, `"last_seq":"%d","pending":"%d"}`, lastSeq, pending)
+}
+
+func (s *DBChanges) handleContinuousFeed(w http.ResponseWriter, r *http.Request, db port.Database, options *model.ChangesOptions, includeDocs bool) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Transfer-Encoding", "chunked")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		WriteError(w, http.StatusInternalServerError, "streaming not supported")
+		return
 	}
+
+	ctx := r.Context()
+
+	// Setup heartbeat if specified
+	var heartbeatTicker *time.Ticker
+	var heartbeatDone chan struct{}
+	if options.Heartbeat > 0 {
+		heartbeatTicker = time.NewTicker(options.Heartbeat)
+		heartbeatDone = make(chan struct{})
+		defer func() {
+			heartbeatTicker.Stop()
+			close(heartbeatDone)
+		}()
+
+		go func() {
+			for {
+				select {
+				case <-heartbeatTicker.C:
+					_, _ = fmt.Fprint(w, "\n")
+					flusher.Flush()
+				case <-heartbeatDone:
+					return
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+
+	// Register persistent change listener
+	changeChan := make(chan *model.Document, 10) // Buffered to avoid blocking
+	listenerCtx, cancelListener := context.WithCancel(ctx)
+	defer cancelListener()
+
+	err := db.AddListener(listenerCtx, port.ChangeListenerFunc(func(ctx context.Context, doc *model.Document) error {
+		select {
+		case changeChan <- doc:
+		case <-ctx.Done():
+			return context.Canceled
+		default:
+			// Skip if buffer full (backpressure)
+		}
+		return nil
+	}))
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Get initial batch of changes
+	changes, _, err := db.Changes(ctx, options)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Apply all filters
+	changes = s.applyFilters(ctx, db, changes, options, r)
+
+	if includeDocs {
+		if err := db.EnrichDocuments(ctx, changes); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+
+	// Stream initial changes
+	for _, doc := range changes {
+		if err := s.writeChangeDoc(w, doc, includeDocs); err != nil {
+			s.Logger.Warnf(ctx, "failed to write change", "error", err)
+			return
+		}
+		flusher.Flush()
+		options.Since = strconv.FormatUint(doc.LocalSeq, 10)
+	}
+
+	// Setup timeout if specified and no heartbeat
+	var timeoutTimer *time.Timer
+	var timeoutChan <-chan time.Time
+	if options.Timeout > 0 && options.Heartbeat == 0 {
+		timeoutTimer = time.NewTimer(options.Timeout)
+		defer timeoutTimer.Stop()
+		timeoutChan = timeoutTimer.C
+	}
+
+	// Continuously stream changes
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case doc := <-changeChan:
+			// Skip if before our since marker
+			if options.Since != "" && options.Since != "now" {
+				since, _ := strconv.ParseUint(options.Since, 10, 64)
+				if doc.LocalSeq <= since {
+					continue
+				}
+			}
+
+			// Enrich if needed
+			if includeDocs {
+				docs := []*model.Document{doc}
+				if err := db.EnrichDocuments(ctx, docs); err != nil {
+					s.Logger.Warnf(ctx, "failed to enrich document", "error", err)
+					continue
+				}
+			}
+
+			// Apply filters
+			filtered := s.applyFilters(ctx, db, []*model.Document{doc}, options, r)
+			if len(filtered) == 0 {
+				continue // Document was filtered out
+			}
+
+			// Stream the change
+			if err := s.writeChangeDoc(w, doc, includeDocs); err != nil {
+				s.Logger.Warnf(ctx, "failed to write change", "error", err)
+				return
+			}
+			flusher.Flush()
+			options.Since = strconv.FormatUint(doc.LocalSeq, 10)
+
+			// Reset timeout if active
+			if timeoutTimer != nil {
+				timeoutTimer.Reset(options.Timeout)
+			}
+
+		case <-timeoutChan:
+			// Timeout expired, close connection
+			return
+		}
+	}
+}
+
+func (s *DBChanges) handleEventSourceFeed(w http.ResponseWriter, r *http.Request, db port.Database, options *model.ChangesOptions, includeDocs bool) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		WriteError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	ctx := r.Context()
+
+	// Setup heartbeat if specified
+	var heartbeatTicker *time.Ticker
+	var heartbeatDone chan struct{}
+	if options.Heartbeat > 0 {
+		heartbeatTicker = time.NewTicker(options.Heartbeat)
+		heartbeatDone = make(chan struct{})
+		defer func() {
+			heartbeatTicker.Stop()
+			close(heartbeatDone)
+		}()
+
+		go func() {
+			for {
+				select {
+				case <-heartbeatTicker.C:
+					_, _ = fmt.Fprint(w, ": heartbeat\n\n")
+					flusher.Flush()
+				case <-heartbeatDone:
+					return
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+
+	// Register persistent change listener
+	changeChan := make(chan *model.Document, 10)
+	listenerCtx, cancelListener := context.WithCancel(ctx)
+	defer cancelListener()
+
+	err := db.AddListener(listenerCtx, port.ChangeListenerFunc(func(ctx context.Context, doc *model.Document) error {
+		select {
+		case changeChan <- doc:
+		case <-ctx.Done():
+			return context.Canceled
+		default:
+			// Skip if buffer full
+		}
+		return nil
+	}))
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Get initial batch of changes
+	changes, _, err := db.Changes(ctx, options)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Apply all filters
+	changes = s.applyFilters(ctx, db, changes, options, r)
+
+	if includeDocs {
+		if err := db.EnrichDocuments(ctx, changes); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+
+	// Stream initial changes
+	for _, doc := range changes {
+		if err := s.writeEventSourceChange(w, doc, includeDocs); err != nil {
+			s.Logger.Warnf(ctx, "failed to write change", "error", err)
+			return
+		}
+		flusher.Flush()
+		options.Since = strconv.FormatUint(doc.LocalSeq, 10)
+	}
+
+	// Setup timeout if specified and no heartbeat
+	var timeoutTimer *time.Timer
+	var timeoutChan <-chan time.Time
+	if options.Timeout > 0 && options.Heartbeat == 0 {
+		timeoutTimer = time.NewTimer(options.Timeout)
+		defer timeoutTimer.Stop()
+		timeoutChan = timeoutTimer.C
+	}
+
+	// Continuously stream changes
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case doc := <-changeChan:
+			// Skip if before our since marker
+			if options.Since != "" && options.Since != "now" {
+				since, _ := strconv.ParseUint(options.Since, 10, 64)
+				if doc.LocalSeq <= since {
+					continue
+				}
+			}
+
+			// Enrich if needed
+			if includeDocs {
+				docs := []*model.Document{doc}
+				if err := db.EnrichDocuments(ctx, docs); err != nil {
+					s.Logger.Warnf(ctx, "failed to enrich document", "error", err)
+					continue
+				}
+			}
+
+			// Apply filters
+			filtered := s.applyFilters(ctx, db, []*model.Document{doc}, options, r)
+			if len(filtered) == 0 {
+				continue
+			}
+
+			// Stream the change
+			if err := s.writeEventSourceChange(w, doc, includeDocs); err != nil {
+				s.Logger.Warnf(ctx, "failed to write change", "error", err)
+				return
+			}
+			flusher.Flush()
+			options.Since = strconv.FormatUint(doc.LocalSeq, 10)
+
+			// Reset timeout if active
+			if timeoutTimer != nil {
+				timeoutTimer.Reset(options.Timeout)
+			}
+
+		case <-timeoutChan:
+			return
+		}
+	}
+}
+
+// Helper to write a single change document in EventSource format
+func (s *DBChanges) writeEventSourceChange(w http.ResponseWriter, doc *model.Document, includeDocs bool) error {
+	cd := &ChangeDoc{
+		Seq:     strconv.FormatUint(doc.LocalSeq, 10),
+		ID:      doc.ID,
+		Deleted: doc.Deleted,
+		Changes: []Revisions{
+			{Rev: doc.Rev},
+		},
+	}
+	if includeDocs {
+		cd.Doc = doc.Data
+	}
+
+	data, err := json.Marshal(cd)
+	if err != nil {
+		return err
+	}
+
+	_, err = fmt.Fprintf(w, "data: %s\n\n", data)
+	return err
+}
+
+// Helper to write a single change document
+func (s *DBChanges) writeChangeDoc(w http.ResponseWriter, doc *model.Document, includeDocs bool) error {
+	cd := &ChangeDoc{
+		Seq:     strconv.FormatUint(doc.LocalSeq, 10),
+		ID:      doc.ID,
+		Deleted: doc.Deleted,
+		Changes: []Revisions{
+			{Rev: doc.Rev},
+		},
+	}
+	if includeDocs {
+		cd.Doc = doc.Data
+	}
+	return json.NewEncoder(w).Encode(cd)
+}
+
+// applyFilters applies all configured filters to a slice of documents
+func (s *DBChanges) applyFilters(ctx context.Context, db port.Database, changes []*model.Document, options *model.ChangesOptions, r *http.Request) []*model.Document {
+	// 1. Apply doc_ids filter
+	if len(options.DocIDs) > 0 {
+		changes = s.filterByDocIDs(changes, options.DocIDs)
+	}
+
+	// 2. Apply selector filter
+	if options.Filter == "_selector" && options.Selector != nil {
+		changes = s.filterBySelector(ctx, changes, options.Selector)
+	}
+
+	// 3. Apply view filter
+	if options.Filter == "_view" && options.View != "" {
+		changes = s.filterByView(ctx, db, changes, options.View)
+	}
+
+	// 4. Apply custom filter
+	if strings.HasPrefix(options.Filter, "_design/") {
+		changes = s.filterByCustomFilter(ctx, db, changes, options.Filter, r)
+	}
+
+	return changes
+}
+
+func (s *DBChanges) filterByDocIDs(changes []*model.Document, docIDs []string) []*model.Document {
+	allowed := make(map[string]bool, len(docIDs))
+	for _, id := range docIDs {
+		allowed[id] = true
+	}
+	filtered := changes[:0]
+	for _, doc := range changes {
+		if allowed[doc.ID] {
+			filtered = append(filtered, doc)
+		}
+	}
+	return filtered
+}
+
+func (s *DBChanges) filterBySelector(ctx context.Context, changes []*model.Document, selectorMap map[string]interface{}) []*model.Document {
+	// Parse selector using existing FindQuery infrastructure
+	fq := model.FindQuery{}
+	selectorJSON, _ := json.Marshal(map[string]interface{}{"selector": selectorMap})
+	if err := json.Unmarshal(selectorJSON, &fq); err != nil {
+		s.Logger.Warnf(ctx, "invalid selector", "error", err)
+		return changes
+	}
+
+	// Filter documents using SelectorQuery.Match()
+	filtered := make([]*model.Document, 0, len(changes))
+	for _, doc := range changes {
+		if matches, err := fq.Selector.Match(doc); err == nil && matches {
+			filtered = append(filtered, doc)
+		}
+	}
+
+	return filtered
+}
+
+func (s *DBChanges) filterByView(ctx context.Context, db port.Database, changes []*model.Document, viewPath string) []*model.Document {
+	// Parse view path: "_design/ddoc/viewname"
+	parts := strings.Split(strings.TrimPrefix(viewPath, "_design/"), "/")
+	if len(parts) < 2 {
+		s.Logger.Warnf(ctx, "invalid view path", "path", viewPath)
+		return changes
+	}
+	designDocID := "_design/" + parts[0]
+	viewName := parts[1]
+
+	// Load design doc
+	ddoc, err := db.GetDocument(ctx, designDocID)
+	if err != nil {
+		s.Logger.Warnf(ctx, "design doc not found", "id", designDocID)
+		return changes
+	}
+
+	// Get view definition
+	view, ok := ddoc.View(viewName)
+	if !ok {
+		s.Logger.Warnf(ctx, "view not found", "name", viewName)
+		return changes
+	}
+
+	// Get view server builder
+	builder := db.ViewEngine(ddoc.Language())
+	if builder == nil {
+		s.Logger.Warnf(ctx, "view engine not found", "language", ddoc.Language())
+		return changes
+	}
+
+	viewServer, err := builder(view.MapFn)
+	if err != nil {
+		s.Logger.Warnf(ctx, "failed to compile view", "error", err)
+		return changes
+	}
+
+	// Execute view for each document and include if it emits
+	filtered := make([]*model.Document, 0, len(changes))
+	for _, doc := range changes {
+		results, err := viewServer.ExecuteView(ctx, []*model.Document{doc})
+		if err == nil && len(results) > 0 {
+			// Document emitted something, include it
+			filtered = append(filtered, doc)
+		}
+	}
+
+	return filtered
+}
+
+func (s *DBChanges) filterByCustomFilter(ctx context.Context, db port.Database, changes []*model.Document, filterPath string, r *http.Request) []*model.Document {
+	// Parse filter path: "_design/ddoc/filtername"
+	parts := strings.Split(strings.TrimPrefix(filterPath, "_design/"), "/")
+	if len(parts) < 2 {
+		s.Logger.Warnf(ctx, "invalid filter path", "path", filterPath)
+		return changes
+	}
+	designDocID := "_design/" + parts[0]
+	filterName := parts[1]
+
+	// Load design doc
+	ddoc, err := db.GetDocument(ctx, designDocID)
+	if err != nil {
+		s.Logger.Warnf(ctx, "design doc not found", "id", designDocID)
+		return changes
+	}
+
+	// Get filter function
+	filter, ok := ddoc.Filter(filterName)
+	if !ok {
+		s.Logger.Warnf(ctx, "filter not found", "name", filterName)
+		return changes
+	}
+
+	// Get filter server builder
+	builder := db.FilterEngine(ddoc.Language())
+	if builder == nil {
+		s.Logger.Warnf(ctx, "filter engine not found", "language", ddoc.Language())
+		return changes
+	}
+
+	// Compile filter
+	filterServer, err := builder(filter.FilterFn)
+	if err != nil {
+		s.Logger.Warnf(ctx, "failed to compile filter", "error", err)
+		return changes
+	}
+
+	// Prepare request context
+	req := map[string]interface{}{
+		"query": make(map[string]interface{}),
+		"userCtx": map[string]interface{}{
+			"name":  nil,
+			"roles": []string{},
+		},
+	}
+
+	// Add all query parameters to req.query
+	for key, values := range r.URL.Query() {
+		if len(values) > 0 {
+			req["query"].(map[string]interface{})[key] = values[0]
+		}
+	}
+
+	// Execute filter for each document
+	filtered := make([]*model.Document, 0, len(changes))
+	for _, doc := range changes {
+		passed, err := filterServer.ExecuteFilter(ctx, doc, req)
+		if err != nil {
+			s.Logger.Warnf(ctx, "filter execution error", "error", err)
+			continue
+		}
+		if passed {
+			filtered = append(filtered, doc)
+		}
+	}
+
+	return filtered
 }
 
 type ChangeDoc struct {

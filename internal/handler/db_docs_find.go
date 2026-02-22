@@ -2,7 +2,6 @@ package handler
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 
 	"github.com/goydb/goydb/pkg/model"
@@ -13,7 +12,7 @@ type DBDocsFind struct {
 }
 
 func (s *DBDocsFind) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 
 	db := Database{Base: s.Base}.Do(w, r)
 	if db == nil {
@@ -38,7 +37,7 @@ func (s *DBDocsFind) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	docs, stats, err := db.FindDocs(r.Context(), find)
 	if err != nil {
-		log.Println(err)
+		s.Logger.Warnf(r.Context(), "failed to find docs", "error", err)
 		WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}

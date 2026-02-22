@@ -5,11 +5,8 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"io/ioutil"
+	"io/fs"
 	"net/http"
-
-	"golang.org/x/tools/godoc/vfs/httpfs"
-	"golang.org/x/tools/godoc/vfs/mapfs"
 )
 
 func BuildFileSystem(ctx context.Context, zipFile io.Reader) (http.FileSystem, error) {
@@ -24,25 +21,15 @@ func BuildFileSystem(ctx context.Context, zipFile io.Reader) (http.FileSystem, e
 	if err != nil {
 		return nil, err
 	}
-	vfs := make(map[string]string)
 
-	for _, f := range r.File {
-		r, err := f.Open()
-		if err != nil {
-			return nil, err
-		}
+	return http.FS(zipReaderFS{r}), nil
+}
 
-		if f.FileHeader.FileInfo().IsDir() {
-			continue
-		}
+// zipReaderFS wraps a zip.Reader to implement fs.FS
+type zipReaderFS struct {
+	r *zip.Reader
+}
 
-		data, err := ioutil.ReadAll(r)
-		if err != nil {
-			return nil, err
-		}
-
-		vfs[f.FileHeader.Name] = string(data)
-	}
-
-	return httpfs.New(mapfs.New(vfs)), nil
+func (z zipReaderFS) Open(name string) (fs.File, error) {
+	return z.r.Open(name)
 }

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"reflect"
 	"strconv"
 	"strings"
@@ -24,13 +25,81 @@ type Document struct {
 	Attachments map[string]*Attachment `json:"_attachments,omitempty"`
 	Data        map[string]interface{} `json:"data,omitempty"`
 
-	// View
-	Key   interface{} `json:"key,omitempty"`
-	Value interface{} `json:"value,omitempty"`
+	// View results (goydb-specific, not unmarshaled from JSON)
+	Key   interface{} `json:"-"`
+	Value interface{} `json:"-"`
 
-	// Search
-	Fields  map[string]interface{}       `json:"fields,omitempty"`
-	Options map[string]SearchIndexOption `json:"options,omitempty"`
+	// Search results (goydb-specific, not unmarshaled from JSON)
+	Fields  map[string]interface{}       `json:"-"`
+	Options map[string]SearchIndexOption `json:"-"`
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling for Document.
+// It unmarshals known fields into their struct fields and captures all other
+// fields into the Data map.
+func (doc *Document) UnmarshalJSON(data []byte) error {
+	// First unmarshal into a raw map to get all fields
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	// Initialize Data if needed
+	if doc.Data == nil {
+		doc.Data = make(map[string]interface{})
+	}
+
+	// Extract known fields and populate Data with everything
+	for key, value := range raw {
+		switch key {
+		case "_id":
+			if id, ok := value.(string); ok {
+				doc.ID = id
+			}
+		case "_rev":
+			if rev, ok := value.(string); ok {
+				doc.Rev = rev
+			}
+		case "_deleted":
+			if deleted, ok := value.(bool); ok {
+				doc.Deleted = deleted
+			}
+		case "_local_seq":
+			if seq, ok := value.(float64); ok {
+				doc.LocalSeq = uint64(seq)
+			}
+		case "_attachments":
+			// Handle attachments separately
+			if attachments, ok := value.(map[string]interface{}); ok {
+				doc.Attachments = make(map[string]*Attachment)
+				for name, attData := range attachments {
+					if attMap, ok := attData.(map[string]interface{}); ok {
+						att := &Attachment{}
+						if contentType, ok := attMap["content_type"].(string); ok {
+							att.ContentType = contentType
+						}
+						if length, ok := attMap["length"].(float64); ok {
+							att.Length = int64(length)
+						}
+						if stub, ok := attMap["stub"].(bool); ok {
+							att.Stub = stub
+						}
+						if digest, ok := attMap["digest"].(string); ok {
+							att.Digest = digest
+						}
+						if revpos, ok := attMap["revpos"].(float64); ok {
+							att.Revpos = int(revpos)
+						}
+						doc.Attachments[name] = att
+					}
+				}
+			}
+		}
+		// Always store in Data for consistent document representation
+		doc.Data[key] = value
+	}
+
+	return nil
 }
 
 func (doc Document) ValidUpdateRevision(newDoc *Document) bool {
@@ -117,6 +186,7 @@ type Function struct {
 	ReduceFn string
 	SearchFn string
 	Analyzer string
+	FilterFn string
 }
 
 func (f *Function) DesignDocFn() *DesignDocFn {
@@ -200,6 +270,60 @@ func (doc *Document) View(name string) (view *View, ok bool) {
 		Language: doc.Language(),
 		MapFn:    mapFn,
 		ReduceFn: reduceFn,
+	}, true
+}
+
+// Filters returns all filter functions defined in this design doc
+func (doc *Document) Filters() []*Function {
+	if !doc.IsDesignDoc() {
+		return nil
+	}
+
+	filters, ok := doc.Data["filters"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	var fns []*Function
+	for name, fnCode := range filters {
+		if code, ok := fnCode.(string); ok {
+			fns = append(fns, &Function{
+				doc:      doc,
+				Name:     name,
+				Type:     FilterFn,
+				FilterFn: code,
+			})
+		}
+	}
+	return fns
+}
+
+// Filter returns a specific filter function by name
+func (doc *Document) Filter(name string) (*Function, bool) {
+	if !doc.IsDesignDoc() {
+		return nil, false
+	}
+
+	filters, ok := doc.Data["filters"].(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+
+	fnCode, ok := filters[name]
+	if !ok {
+		return nil, false
+	}
+
+	code, ok := fnCode.(string)
+	if !ok {
+		return nil, false
+	}
+
+	return &Function{
+		doc:      doc,
+		Name:     name,
+		Type:     FilterFn,
+		FilterFn: code,
 	}, true
 }
 

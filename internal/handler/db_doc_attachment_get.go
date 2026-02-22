@@ -12,7 +12,7 @@ type DBDocAttachmentGet struct {
 }
 
 func (s *DBDocAttachmentGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 
 	db := Database{Base: s.Base}.Do(w, r)
 	if db == nil {
@@ -31,7 +31,7 @@ func (s *DBDocAttachmentGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	defer a.Reader.Close()
+	defer func() { _ = a.Reader.Close() }()
 
 	w.Header().Set("Content-Type", a.ContentType)
 	io.Copy(w, a.Reader) // nolint: errcheck

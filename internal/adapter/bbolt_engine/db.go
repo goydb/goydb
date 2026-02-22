@@ -42,10 +42,10 @@ func (db *DB) ReadTransaction(fn func(tx port.EngineReadTransaction) error) erro
 // This method is designed to allow more concurrent write transactions due
 // to less time spend waiting between the different write operations.
 // If no writes are made, the update transaction is omitted.
-func (db *DB) WriteTransaction(fn func(tx port.EngineWriteTransaction) error) error {
+func (db *DB) WriteTransaction(logger port.Logger, fn func(tx port.EngineWriteTransaction) error) error {
 	var wtx *WriteTransaction
 	err := db.db.View(func(btx *bbolt.Tx) error {
-		wtx = NewWriteTransaction(btx)
+		wtx = NewWriteTransaction(btx, logger)
 		return fn(wtx)
 	})
 	if err != nil {
@@ -87,5 +87,25 @@ func (db *DB) Stats() (stats model.DatabaseStats, err error) {
 			return nil
 		})
 	})
+
+	// Subtract _local/* docs — CouchDB never counts them in doc_count.
+	// Must be done in a separate View since tx.ForEach cannot open cursors.
+	err2 := db.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(model.DocsBucket)
+		if b == nil {
+			return nil
+		}
+		prefix := []byte(model.LocalDocPrefix)
+		cursor := b.Cursor()
+		for k, _ := cursor.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = cursor.Next() {
+			if stats.DocCount > 0 {
+				stats.DocCount--
+			}
+		}
+		return nil
+	})
+	if err == nil {
+		err = err2
+	}
 	return
 }

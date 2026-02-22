@@ -2,11 +2,10 @@ package handler
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 
-	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/port"
 )
 
 type DBDocsBulk struct {
@@ -15,7 +14,7 @@ type DBDocsBulk struct {
 }
 
 func (s *DBDocsBulk) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close() //nolint:errcheck
 
 	db := Database{Base: s.Base}.Do(w, r)
 	if db == nil {
@@ -33,13 +32,18 @@ func (s *DBDocsBulk) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	newEdits := req.NewEdits == nil || *req.NewEdits
+
 	resp := make([]SimpleDocResponse, len(req.Docs))
-	err = db.Transaction(r.Context(), func(tx *storage.Transaction) error {
+	err = db.Transaction(r.Context(), func(tx port.DatabaseTx) error {
 		for i, doc := range req.Docs {
 			var rev string
 			var err error
 
-			if doc.Deleted {
+			if !newEdits {
+				err = tx.PutDocumentForReplication(r.Context(), doc)
+				rev = doc.Rev
+			} else if doc.Deleted {
 				doc, err2 := tx.DeleteDocument(r.Context(), doc.ID, doc.Rev)
 				rev, err = doc.Rev, err2
 			} else {
@@ -49,7 +53,7 @@ func (s *DBDocsBulk) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			resp[i].ID = doc.ID
 			if err != nil {
 				resp[i].Ok = false
-				log.Println(err)
+				s.Logger.Warnf(r.Context(), "failed to put document in bulk", "docID", doc.ID, "error", err)
 			} else {
 				resp[i].Ok = true
 				resp[i].Rev = rev
@@ -58,7 +62,7 @@ func (s *DBDocsBulk) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		log.Println(err)
+		s.Logger.Errorf(r.Context(), "bulk docs transaction failed", "error", err)
 		WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -68,5 +72,6 @@ func (s *DBDocsBulk) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type BulkDocRequest struct {
-	Docs []*model.Document `json:"docs"`
+	Docs     []*model.Document `json:"docs"`
+	NewEdits *bool             `json:"new_edits,omitempty"`
 }

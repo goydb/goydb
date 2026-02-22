@@ -15,7 +15,7 @@ const (
 	indexExt  = ".bleve"
 )
 
-func (d *Database) IndexIterator(ctx context.Context, tx *Transaction, idx port.DocumentIndex) (*Iterator, error) {
+func (d *Database) IndexIterator(ctx context.Context, tx port.EngineReadTransaction, idx port.DocumentIndex) (port.Iterator, error) {
 	opts, err := idx.IteratorOptions(ctx)
 	if err != nil {
 		return nil, err
@@ -88,9 +88,9 @@ func (d *Database) BuildFnIndices(ctx context.Context, tx port.EngineWriteTransa
 	var disu port.DocumentIndexSourceUpdate
 	switch vf.Type {
 	case model.ViewFn:
-		disu = index.NewViewIndex(ddfn, d.viewEngines)
+		disu = index.NewViewIndex(ddfn, d.viewEngines, d.logger.With("index", ddfn.String()))
 	case model.SearchFn:
-		disu = index.NewExternalSearchIndex(ddfn, d.viewEngines, d.searchIndexPath(ddfn.String()))
+		disu = index.NewExternalSearchIndex(ddfn, d.viewEngines, d.searchIndexPath(ddfn.String()), d.logger.With("index", ddfn.String()))
 	// TODO: mango index
 	default:
 		return fmt.Errorf("invalid view function type %q for function %q", vf.Type, ddfn.String())

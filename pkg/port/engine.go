@@ -12,7 +12,7 @@ var ErrConflict = errors.New("rev doesn't match for update")
 type DatabaseEngine interface {
 	Stats() (stats model.DatabaseStats, err error)
 	ReadTransaction(fn func(tx EngineReadTransaction) error) error
-	WriteTransaction(fn func(tx EngineWriteTransaction) error) error
+	WriteTransaction(logger Logger, fn func(tx EngineWriteTransaction) error) error
 	Close() error
 }
 

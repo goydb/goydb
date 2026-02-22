@@ -5,14 +5,14 @@ import (
 	"testing"
 
 	"github.com/goydb/goydb/internal/adapter/index"
-	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/port"
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/mgo.v2/bson"
 )
 
 func TestRegularIndex(t *testing.T) {
-	WithTestDatabase(t, func(ctx context.Context, db *storage.Database) {
+	WithTestDatabase(t, func(ctx context.Context, db port.Database) {
 		ri := index.NewRegularIndex(
 			&model.DesignDocFn{
 				Type:        model.ViewFn,
@@ -38,7 +38,7 @@ func TestRegularIndex(t *testing.T) {
 				return keys, values
 			},
 		)
-		err := db.Transaction(ctx, func(tx *storage.Transaction) error {
+		err := db.Transaction(ctx, func(tx port.DatabaseTx) error {
 			err := ri.Ensure(ctx, tx)
 			assert.NoError(t, err)
 
@@ -92,7 +92,7 @@ func TestRegularIndex(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		err = db.Transaction(ctx, func(tx *storage.Transaction) error {
+		err = db.Transaction(ctx, func(tx port.DatabaseTx) error {
 			t.Run("iterator", func(t *testing.T) {
 				// FIXME: fix test
 				t.SkipNow()
