@@ -147,8 +147,8 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 | PUT | `/{db}/_design/{ddoc}/{attname}` | **Partially** | Uploads attachment; enforces `rev`/`If-Match` conflict detection; returns full `id`/`rev` response |
 | DELETE | `/{db}/_design/{ddoc}/{attname}` | **Partially** | Deletes attachment; enforces `rev`/`If-Match` conflict detection; returns full `id`/`rev` response |
 | GET | `/{db}/_design/{ddoc}/_info` | **Partially** | Returns index info; may lack `view_index.updater_running`, `waiting_clients`, `compact_running` fields |
-| GET | `/{db}/_design/{ddoc}/_view/{view}` | **Partially** | Supports `skip`, `limit`, `include_docs`, `reduce`, `group`, `update`; missing POST method, `startkey`/`endkey`, `key`, `keys`, `descending`, `inclusive_end`, `conflicts`, `stable`, `update_seq`, `group_level`, `att_encoding_info`, `sorted` |
-| POST | `/{db}/_design/{ddoc}/_view/{view}` | **No** | POST variant not routed |
+| GET | `/{db}/_design/{ddoc}/_view/{view}` | **Partially** | Supports `skip`, `limit`, `include_docs`, `reduce`, `group`, `group_level`, `update`, `startkey`/`endkey`/`key`/`keys`, `inclusive_end`, `descending`, `stale`, `stable`, `sorted`, `update_seq`; missing `startkey_docid`/`endkey_docid` (requires index key schema change), `attachments`, `att_encoding_info` |
+| POST | `/{db}/_design/{ddoc}/_view/{view}` | **Yes** | Same as GET; accepts all query params as JSON body fields; `keys` array for multi-key lookup |
 | POST | `/{db}/_design/{ddoc}/_view/{view}/queries` | **No** | Multi-query not implemented |
 | GET | `/{db}/_design/{ddoc}/_search/{index}` | **Partially** | Basic search with `q`, `limit`; missing `bookmark`, `counts`, `drilldown`, `group_field`, `group_limit`, `group_sort`, `highlight_fields`, `highlight_pre_tag`, `highlight_post_tag`, `highlight_number`, `highlight_size`, `include_docs`, `include_fields`, `ranges`, `sort`, `stale` |
 | GET | `/{db}/_design/{ddoc}/_search_info/{index}` | **No** | |
