@@ -1,6 +1,22 @@
 package model
 
-import "strings"
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+// ViewKeyString returns a canonical JSON string for key k, usable as a Go map key.
+func ViewKeyString(k interface{}) string {
+	if k == nil {
+		return "null"
+	}
+	b, err := json.Marshal(k)
+	if err != nil {
+		return fmt.Sprintf("%v", k)
+	}
+	return string(b)
+}
 
 // ViewKeyCmp compares two CouchDB view-key values using CouchDB's collation order:
 //
