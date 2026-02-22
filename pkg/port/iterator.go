@@ -17,4 +17,5 @@ type Iterator interface {
 	SetSkip(int)
 	SetSkipLocalDoc(bool)
 	SetSkipDesignDoc(bool)
+	SetDescending(bool)
 }
