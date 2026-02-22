@@ -124,15 +124,20 @@ func (v DesignDoc) ReduceDocs(ctx context.Context, tx port.EngineReadTransaction
 			}
 		}
 
-		// Without explicit group=true, collapse all keys to nil so the reducer
-		// produces a single aggregated row (CouchDB default behaviour).
+		// Apply group / group_level key reduction before passing to the reducer.
 		// Map-only views (no ReduceFn) skip this: they preserve keys like reduce=false.
-		if view.ReduceFn != "" && opts.ViewGroup != "true" {
-			doc.Key = nil
+		if view.ReduceFn != "" {
+			if opts.ViewGroupLevel > 0 {
+				if arr, ok := doc.Key.([]interface{}); ok && opts.ViewGroupLevel < len(arr) {
+					doc.Key = arr[:opts.ViewGroupLevel]
+				}
+				// non-array key or key shorter/equal to group_level: keep as-is
+			} else if opts.ViewGroup != "true" {
+				// default: collapse all keys to nil → single aggregated row
+				doc.Key = nil
+			}
+			// group=true: keep full key unchanged
 		}
-
-		// TODO: implement other group levels using 1-10 if key is
-		// an array
 
 		r.Reduce(doc)
 	}
