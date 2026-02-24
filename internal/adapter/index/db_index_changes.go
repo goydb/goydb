@@ -94,13 +94,20 @@ func (i *ChangesIndex) DocumentDeleted(ctx context.Context, tx port.EngineWriteT
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	realKey, err := tx.Get([]byte(ChangesIndexInvalidationName), []byte(doc.ID))
+	localSeqKey, err := tx.Get([]byte(ChangesIndexInvalidationName), []byte(doc.ID))
 	if err == port.ErrNotFound {
 		return nil // already deleted
 	}
 
+	// The invalidation index stores LocalSeq = seq-1 (0-based), but the
+	// _changes key is seq (1-based).  Reconstruct the correct _changes key
+	// by adding 1 back.
+	localSeq := binary.BigEndian.Uint64(localSeqKey)
+	changesKey := make([]byte, 8)
+	binary.BigEndian.PutUint64(changesKey, localSeq+1)
+
 	tx.Delete([]byte(ChangesIndexInvalidationName), []byte(doc.ID))
-	tx.Delete([]byte(ChangesIndexName), realKey)
+	tx.Delete([]byte(ChangesIndexName), changesKey)
 	return nil
 }
 
