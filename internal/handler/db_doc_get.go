@@ -44,8 +44,10 @@ func (s *DBDocGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// options
 	opts := r.URL.Query()
 	revs := boolOption("revs", false, opts)
+	conflicts := boolOption("conflicts", false, opts)
 	localSeq := boolOption("local_seq", false, opts)
 	// latest := boolOption("latest", false, opts)
+	revParam := opts.Get("rev")
 	var openRevs []string
 	if v := opts.Get("open_revs"); len(v) != 0 {
 		if v == "all" {
@@ -116,12 +118,31 @@ func (s *DBDocGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If a specific revision was requested and it differs from the winner,
+	// try to fetch it from the leaf store (conflict branches).
+	if revParam != "" && dbdoc.Rev != revParam {
+		leaf, leafErr := db.GetLeaf(r.Context(), docID, revParam)
+		if leafErr != nil || leaf == nil {
+			WriteError(w, http.StatusNotFound, "missing")
+			return
+		}
+		dbdoc = leaf
+		if dbdoc.Data == nil {
+			dbdoc.Data = make(map[string]interface{})
+		}
+		dbdoc.Data["_id"] = dbdoc.ID
+		dbdoc.Data["_rev"] = dbdoc.Rev
+	}
+
 	// Always create a clean response map without modifying dbdoc.Data
 	// This prevents fields like _revisions from persisting in the document
 	responseData := make(map[string]interface{}, len(dbdoc.Data)+3)
 	for k, v := range dbdoc.Data {
 		// Filter out internal fields that should only be added conditionally
 		if k == "_revisions" || k == "_local_seq" {
+			continue
+		}
+		if k == "_conflicts" && !conflicts {
 			continue
 		}
 		responseData[k] = v
