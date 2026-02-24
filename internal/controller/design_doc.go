@@ -98,13 +98,9 @@ func (v DesignDoc) ReduceDocs(ctx context.Context, tx port.EngineReadTransaction
 		return nil, 0, err
 	}
 	i := storage.NewIterator(tx, storage.WithOptions(io))
-	if opts.ViewStartKey != nil {
-		i.SetStartKey(opts.ViewStartKey)
-	}
-	if opts.ViewEndKey != nil {
-		i.SetEndKey(opts.ViewEndKey)
-		i.SetExclusiveEnd(opts.ViewExclusiveEnd)
-	}
+	// Do NOT set iterator bounds (SetStartKey/SetEndKey) — CBOR byte ordering
+	// diverges from CouchDB collation for strings of different lengths.
+	// Instead, iterate the full index and rely on the semantic post-filter below.
 	total = i.Total()
 	if total == 0 {
 		return nil, 0, nil
@@ -112,15 +108,31 @@ func (v DesignDoc) ReduceDocs(ctx context.Context, tx port.EngineReadTransaction
 	for doc := i.First(); i.Continue(); doc = i.Next() {
 		// Semantic post-filter using CouchDB collation (CBOR byte order diverges
 		// from CouchDB collation order for strings of different lengths).
-		if opts.ViewDecodedStartKey != nil && model.ViewKeyCmp(doc.Key, opts.ViewDecodedStartKey) < 0 {
-			continue
-		}
-		if opts.ViewDecodedEndKey != nil {
-			cmp := model.ViewKeyCmp(doc.Key, opts.ViewDecodedEndKey)
-			if opts.ViewExclusiveEnd && cmp >= 0 {
+		if opts.ViewDescending {
+			// Descending: startkey is upper bound, endkey is lower bound.
+			if opts.ViewDecodedStartKey != nil && model.ViewKeyCmp(doc.Key, opts.ViewDecodedStartKey) > 0 {
 				continue
-			} else if !opts.ViewExclusiveEnd && cmp > 0 {
+			}
+			if opts.ViewDecodedEndKey != nil {
+				cmp := model.ViewKeyCmp(doc.Key, opts.ViewDecodedEndKey)
+				if opts.ViewExclusiveEnd && cmp <= 0 {
+					continue
+				} else if !opts.ViewExclusiveEnd && cmp < 0 {
+					continue
+				}
+			}
+		} else {
+			// Ascending: startkey is lower bound, endkey is upper bound.
+			if opts.ViewDecodedStartKey != nil && model.ViewKeyCmp(doc.Key, opts.ViewDecodedStartKey) < 0 {
 				continue
+			}
+			if opts.ViewDecodedEndKey != nil {
+				cmp := model.ViewKeyCmp(doc.Key, opts.ViewDecodedEndKey)
+				if opts.ViewExclusiveEnd && cmp >= 0 {
+					continue
+				} else if !opts.ViewExclusiveEnd && cmp > 0 {
+					continue
+				}
 			}
 		}
 
