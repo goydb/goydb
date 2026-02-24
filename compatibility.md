@@ -150,7 +150,7 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 | GET | `/{db}/_design/{ddoc}/_view/{view}` | **Partially** | Supports `skip`, `limit`, `include_docs`, `reduce`, `group`, `group_level`, `update`, `startkey`/`endkey`/`key`/`keys`, `inclusive_end`, `descending`, `stale`, `stable`, `sorted`, `update_seq`; missing `startkey_docid`/`endkey_docid` (requires index key schema change), `attachments`, `att_encoding_info` |
 | POST | `/{db}/_design/{ddoc}/_view/{view}` | **Yes** | Same as GET; accepts all query params as JSON body fields; `keys` array for multi-key lookup |
 | POST | `/{db}/_design/{ddoc}/_view/{view}/queries` | **No** | Multi-query not implemented |
-| GET | `/{db}/_design/{ddoc}/_search/{index}` | **Partially** | Basic search with `q`, `limit`; missing `bookmark`, `counts`, `drilldown`, `group_field`, `group_limit`, `group_sort`, `highlight_fields`, `highlight_pre_tag`, `highlight_post_tag`, `highlight_number`, `highlight_size`, `include_docs`, `include_fields`, `ranges`, `sort`, `stale` |
+| GET/POST | `/{db}/_design/{ddoc}/_search/{index}` | **Yes** | Full CouchDB search API: `q` (Lucene query syntax: `AND`, `OR`, `NOT`, parentheses, `field:value`, `field:"phrase"`, wildcards, `*:*`), `limit`, `bookmark`, `sort`, `include_docs`, `include_fields`, `stale`, `counts` (term facets), `ranges` (numeric range facets), `drilldown`, `highlight_fields`/`highlight_pre_tag`/`highlight_post_tag`/`highlight_number`/`highlight_size`, `group_field`/`group_limit`/`group_sort`; POST accepts JSON body; backed by Bleve v2 full-text engine; grouping is post-processed (capped at 10k results); geo sort syntax not supported |
 | GET | `/{db}/_design/{ddoc}/_search_info/{index}` | **No** | |
 | GET | `/{db}/_design/{ddoc}/_nouveau/{index}` | **No** | Nouveau (Lucene-based) search not implemented |
 | GET | `/{db}/_design/{ddoc}/_nouveau_info/{index}` | **No** | |
@@ -200,15 +200,16 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 | Database | 11 | 6 | 11 |
 | Document | 0 | 4 | 1 |
 | Attachment | 1 | 3 | 0 |
-| Design Document | 5 | 6 | 10 |
+| Design Document | 6 | 5 | 10 |
 | Local Documents | 3 | 1 | 2 |
 | Partitioned DBs | 0 | 0 | 5 |
-| **Total** | **30** | **31** | **57** |
+| **Total** | **31** | **30** | **57** |
 
 ### Key capabilities present
 - Full document CRUD with attachment support (inline base64, multipart/related, PUT/DELETE/HEAD/GET via `/{db}/{docid}/{attname}` and `/_design/{ddoc}/{attname}`)
 - Replication protocol: `_changes`, `_revs_diff`, `_missing_revs`, `_bulk_docs` (with `new_edits:false`), `_local` checkpoint docs
 - **Multi-revision conflict support**: `_bulk_docs` with `new_edits:false` stores concurrent leaf revisions in a `doc_leaves` bucket; winner chosen by CouchDB rule (highest generation, then lexicographic hash); `GET /{db}/{docid}` returns `_conflicts` field; `open_revs=all` / `open_revs=[...]` returns all leaf bodies; `_revs_diff` and `_missing_revs` recognise all conflict leaves as known
+- Full-text search via `_search` endpoint: JavaScript and Tengo `index()` functions execute against a Bleve v2 backend; full CouchDB search API with Lucene syntax (`AND`, `OR`, `NOT`, parentheses, `field:value`, quoted phrases, wildcards), `bookmark` pagination, `sort`, `include_docs`, `counts`/`ranges` facets, `drilldown` filters, highlighting, `group_field` grouping, and POST body support
 - Map/reduce views with reduce and grouping
 - Mango `_find` with selector queries; `_index` CRUD (POST/GET/DELETE); equality conditions automatically use a matching Mango index when one exists
 - Changes feed: normal, longpoll, continuous, eventsource — with `_doc_ids`, `_selector`, `_view`, and design-doc filter support
