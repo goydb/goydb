@@ -355,17 +355,129 @@ func (tx *Transaction) PutDocumentForReplication(ctx context.Context, doc *model
 }
 
 func (tx *Transaction) DeleteDocument(ctx context.Context, docID, rev string) (*model.Document, error) {
-	doc := &model.Document{
+	// Get current winner from the docs bucket.
+	oldDoc, err := tx.GetDocument(ctx, docID)
+	if err != nil {
+		return nil, err
+	}
+	if oldDoc == nil {
+		return nil, ErrNotFound
+	}
+
+	// If rev matches the winning revision, delegate to PutDocument (existing behavior).
+	if oldDoc.Rev == rev {
+		doc := &model.Document{
+			ID:      docID,
+			Rev:     rev,
+			Deleted: true,
+		}
+		_, err := tx.PutDocument(ctx, doc)
+		if err != nil {
+			return doc, err
+		}
+		return doc, nil
+	}
+
+	// Rev doesn't match the winner — check if it's a conflict leaf.
+	leafRevs := tx.leafRevs(docID)
+	isLeaf := false
+	for _, lr := range leafRevs {
+		if lr == rev {
+			isLeaf = true
+			break
+		}
+	}
+	if !isLeaf {
+		return nil, ErrConflict
+	}
+
+	// Get the leaf doc to preserve its RevHistory.
+	leafDoc, err := tx.getLeaf(docID, rev)
+	if err != nil {
+		return nil, ErrConflict
+	}
+
+	// Build a tombstone for this conflict branch.
+	tombstone := &model.Document{
 		ID:      docID,
 		Rev:     rev,
 		Deleted: true,
 	}
 
-	_, err := tx.PutDocument(ctx, doc)
+	// Generate a new tombstone revision (same hash logic as PutDocument).
+	revSeq := tombstone.NextSequenceRevision()
+	hash := md5.New()
+	err = cbor.NewEncoder(hash).Encode(tombstone)
 	if err != nil {
-		return doc, err
+		return nil, err
 	}
-	return doc, err
+	newRev := strconv.Itoa(revSeq) + "-" + hex.EncodeToString(hash.Sum(nil))
+	tombstone.Rev = newRev
+
+	// Build revision history from the leaf's history.
+	oldHistory := leafDoc.RevHistory
+	if len(oldHistory) == 0 && rev != "" {
+		oldHistory = []string{rev}
+	}
+	tombstone.RevHistory = append([]string{newRev}, oldHistory...)
+	if len(tombstone.RevHistory) > 1000 {
+		tombstone.RevHistory = tombstone.RevHistory[:1000]
+	}
+
+	// Update leaves: remove old rev, add tombstone.
+	tx.deleteLeaf(docID, rev)
+	_ = tx.putLeaf(tombstone)
+
+	// Recompute the winner across all remaining leaves.
+	// Re-read committed leaves and apply our pending mutations in memory.
+	committedRevs := tx.leafRevs(docID)
+	leafSet := make(map[string]bool, len(committedRevs)+2)
+	for _, r := range committedRevs {
+		leafSet[r] = true
+	}
+	// bbolt deferred writes: manually apply our pending changes.
+	delete(leafSet, rev)
+	leafSet[newRev] = true
+
+	allRevs := make([]string, 0, len(leafSet))
+	for r := range leafSet {
+		allRevs = append(allRevs, r)
+	}
+	winner := model.WinnerRev(allRevs)
+
+	// Determine the full Document for the winner.
+	var winnerDoc *model.Document
+	if winner == newRev {
+		winnerDoc = tombstone
+	} else if winner == oldDoc.Rev {
+		winnerDoc = oldDoc
+	} else {
+		winnerDoc, _ = tx.getLeaf(docID, winner)
+	}
+
+	// Update docs bucket and indices if the winner changed.
+	if winnerDoc != nil && winner != oldDoc.Rev {
+		for _, idx := range tx.Database.Indices() {
+			if err := idx.DocumentDeleted(ctx, tx, oldDoc); err != nil {
+				return nil, err
+			}
+		}
+		if err := tx.PutRaw(ctx, []byte(docID), winnerDoc); err != nil {
+			return nil, err
+		}
+		if winnerDoc.IsDesignDoc() {
+			if err := tx.Database.BuildDesignDocIndices(ctx, tx, winnerDoc, true); err != nil {
+				return nil, err
+			}
+		}
+		for _, idx := range tx.Database.Indices() {
+			if err := idx.DocumentStored(ctx, tx, winnerDoc); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return tombstone, nil
 }
 
 // GetLeaves returns all current leaf revisions of a document
