@@ -31,8 +31,11 @@ func (p Public) Mount(r *mux.Router) error {
 			if err != nil {
 				return fmt.Errorf("unable to serve zip %s due to: %w", fullPath, err)
 			}
-		} else {
+		} else if f.IsDir() {
 			r.PathPrefix("/" + f.Name() + "/").Handler(http.FileServer(http.Dir(p.Dir)))
+		} else {
+			// Serve individual files (e.g. favicon.ico) at their exact path.
+			r.Path("/" + f.Name()).Handler(http.FileServer(http.Dir(p.Dir)))
 		}
 	}
 
