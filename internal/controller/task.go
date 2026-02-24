@@ -99,7 +99,7 @@ func (c Task) ProcessTask(ctx context.Context, task *model.Task) error {
 	}
 
 	switch task.Action {
-	case model.ActionUpdateView:
+	case model.ActionUpdateView, model.ActionUpdateSearch, model.ActionUpdateMango:
 		err = vc.Rebuild(ctx, task, idx)
 	default:
 		err = fmt.Errorf("unknown task action: %d", task.Action)

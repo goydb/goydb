@@ -409,6 +409,57 @@ func TestView_ArrayKeyExactKey(t *testing.T) {
 	assert.Equal(t, "alpha", arr[1])
 }
 
+func TestView_ArrayKeyWithNumbers(t *testing.T) {
+	s, router, cleanup := setupViewTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	// Mirrors a real-world view that emits [date, lang, sortNum].
+	// The JS engine stores sortNum as int64; the query sends JSON numbers
+	// (parsed as float64).  CBOR encodes these differently so the iterator
+	// byte-range must match.
+	docs := []struct {
+		id   string
+		date string
+		lang string
+		typ  string
+	}{
+		{"np1", "2026-01-29", "de", "newspaper"},
+		{"a1", "2026-01-29", "de", "article"},
+		{"a2", "2026-01-29", "de", "article"},
+		{"np2", "2026-01-29", "en", "newspaper"}, // different lang — excluded
+		{"a3", "2026-01-30", "de", "article"},     // different date — excluded
+	}
+	for _, d := range docs {
+		_, err = db.PutDocument(ctx, &model.Document{
+			ID:   d.id,
+			Data: map[string]interface{}{"date": d.date, "language": d.lang, "type": d.typ},
+		})
+		require.NoError(t, err)
+	}
+
+	putDesignDoc(t, router, "testdb", "by_date_lang", map[string]interface{}{
+		"views": map[string]interface{}{
+			"docs": map[string]interface{}{
+				"map": `function(doc) {
+					var sort = doc.type === "newspaper" ? 0 : 1;
+					emit([doc.date, doc.language, sort], null);
+				}`,
+			},
+		},
+	})
+
+	// startkey=["2026-01-29","de",0]  endkey=["2026-01-29","de",1]
+	result, code := queryView(t, router, "testdb", "by_date_lang", "docs",
+		`reduce=false&startkey=%5B%222026-01-29%22%2C%22de%22%2C0%5D&endkey=%5B%222026-01-29%22%2C%22de%22%2C1%5D`)
+	require.Equal(t, http.StatusOK, code)
+
+	require.Len(t, result.Rows, 3, "expected 3 rows for 2026-01-29/de (1 newspaper + 2 articles)")
+}
+
 func TestView_MultiEmitPerDocument(t *testing.T) {
 	s, router, cleanup := setupViewTest(t)
 	defer cleanup()
@@ -1528,4 +1579,229 @@ func TestView_UpdateSeq_False(t *testing.T) {
 	resp, code := queryViewFull(t, router, "testdb", "users", "by_name", "reduce=false")
 	require.Equal(t, http.StatusOK, code)
 	assert.Nil(t, resp.UpdateSeq, "update_seq should be absent by default")
+}
+
+// ---------------------------------------------------------------------------
+// String key range query tests (CBOR collation fix)
+// ---------------------------------------------------------------------------
+
+func TestView_StringKeys_DifferentLengths_StartEndKey(t *testing.T) {
+	// Regression test: CBOR encodes strings with a length prefix, so strings
+	// sort by length first ("a" < "bb" < "cat" in CBOR), not lexicographically.
+	// CouchDB sorts lexicographically: "a" < "bb" < "cat" < "d" < "elephant".
+	// A range query startkey="bb"&endkey="d" must return "bb", "cat", "d".
+	s, router, cleanup := setupViewTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	for _, name := range []string{"a", "bb", "cat", "d", "elephant"} {
+		_, err = db.PutDocument(ctx, &model.Document{
+			ID:   "doc-" + name,
+			Data: map[string]interface{}{"name": name, "type": "user"},
+		})
+		require.NoError(t, err)
+	}
+
+	putDesignDoc(t, router, "testdb", "users", map[string]interface{}{
+		"views": map[string]interface{}{
+			"by_name": map[string]interface{}{
+				"map": `function(doc) { if (doc.type === "user") { emit(doc.name, null); } }`,
+			},
+		},
+	})
+
+	result, code := queryView(t, router, "testdb", "users", "by_name",
+		`reduce=false&startkey=%22bb%22&endkey=%22d%22`)
+	require.Equal(t, http.StatusOK, code)
+	require.Len(t, result.Rows, 3, "expected bb, cat, d")
+	assert.Equal(t, "bb", result.Rows[0].Key)
+	assert.Equal(t, "cat", result.Rows[1].Key)
+	assert.Equal(t, "d", result.Rows[2].Key)
+}
+
+func TestView_StartEndKey_WithLimit(t *testing.T) {
+	s, router, cleanup := setupViewTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	for _, name := range []string{"a", "bb", "cat", "d", "elephant"} {
+		_, err = db.PutDocument(ctx, &model.Document{
+			ID:   "doc-" + name,
+			Data: map[string]interface{}{"name": name, "type": "user"},
+		})
+		require.NoError(t, err)
+	}
+
+	putDesignDoc(t, router, "testdb", "users", map[string]interface{}{
+		"views": map[string]interface{}{
+			"by_name": map[string]interface{}{
+				"map": `function(doc) { if (doc.type === "user") { emit(doc.name, null); } }`,
+			},
+		},
+	})
+
+	// Range bb..d has 3 rows; limit=2 should return first 2.
+	result, code := queryView(t, router, "testdb", "users", "by_name",
+		`reduce=false&startkey=%22bb%22&endkey=%22d%22&limit=2`)
+	require.Equal(t, http.StatusOK, code)
+	require.Len(t, result.Rows, 2, "limit=2 should cap results")
+	assert.Equal(t, "bb", result.Rows[0].Key)
+	assert.Equal(t, "cat", result.Rows[1].Key)
+}
+
+func TestView_StartEndKey_WithSkip(t *testing.T) {
+	s, router, cleanup := setupViewTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	for _, name := range []string{"a", "bb", "cat", "d", "elephant"} {
+		_, err = db.PutDocument(ctx, &model.Document{
+			ID:   "doc-" + name,
+			Data: map[string]interface{}{"name": name, "type": "user"},
+		})
+		require.NoError(t, err)
+	}
+
+	putDesignDoc(t, router, "testdb", "users", map[string]interface{}{
+		"views": map[string]interface{}{
+			"by_name": map[string]interface{}{
+				"map": `function(doc) { if (doc.type === "user") { emit(doc.name, null); } }`,
+			},
+		},
+	})
+
+	// Range bb..d has 3 rows (bb, cat, d); skip=1 should return cat, d.
+	result, code := queryView(t, router, "testdb", "users", "by_name",
+		`reduce=false&startkey=%22bb%22&endkey=%22d%22&skip=1`)
+	require.Equal(t, http.StatusOK, code)
+	require.Len(t, result.Rows, 2, "skip=1 should skip first result")
+	assert.Equal(t, "cat", result.Rows[0].Key)
+	assert.Equal(t, "d", result.Rows[1].Key)
+}
+
+func TestView_Reduce_StartEndKey_Descending(t *testing.T) {
+	s, router, cleanup := setupViewTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	for _, name := range []string{"a", "bb", "cat", "d", "elephant"} {
+		_, err = db.PutDocument(ctx, &model.Document{
+			ID:   "doc-" + name,
+			Data: map[string]interface{}{"name": name, "type": "user"},
+		})
+		require.NoError(t, err)
+	}
+
+	putDesignDoc(t, router, "testdb", "users", map[string]interface{}{
+		"views": map[string]interface{}{
+			"count_by_name": map[string]interface{}{
+				"map":    `function(doc) { if (doc.type === "user") { emit(doc.name, null); } }`,
+				"reduce": "_count",
+			},
+		},
+	})
+
+	// descending=true with startkey="d"&endkey="bb" → should return d, cat, bb in descending order.
+	resp, code := queryViewFull(t, router, "testdb", "users", "count_by_name",
+		`group=true&descending=true&startkey=%22d%22&endkey=%22bb%22`)
+	require.Equal(t, http.StatusOK, code)
+	require.Len(t, resp.Rows, 3, "expected d, cat, bb in descending order")
+	assert.Equal(t, "d", resp.Rows[0].Key)
+	assert.Equal(t, "cat", resp.Rows[1].Key)
+	assert.Equal(t, "bb", resp.Rows[2].Key)
+}
+
+// ---------------------------------------------------------------------------
+// Regression: include_docs with default reduce (None reducer path)
+// ---------------------------------------------------------------------------
+
+func TestView_IncludeDocs_DefaultReduce(t *testing.T) {
+	s, router, cleanup := setupViewTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"name": "alice", "type": "user"},
+	})
+	require.NoError(t, err)
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "doc2",
+		Data: map[string]interface{}{"name": "bob", "type": "user"},
+	})
+	require.NoError(t, err)
+
+	putDesignDoc(t, router, "testdb", "users", map[string]interface{}{
+		"views": map[string]interface{}{
+			"by_name": map[string]interface{}{
+				"map": `function(doc) { if (doc.type === "user") { emit(doc.name, null); } }`,
+			},
+		},
+	})
+
+	// Query with include_docs=true but WITHOUT reduce=false.
+	// The default reduce=true path uses the None reducer for map-only views.
+	result, code := queryView(t, router, "testdb", "users", "by_name", "include_docs=true")
+	require.Equal(t, http.StatusOK, code)
+	require.Len(t, result.Rows, 2)
+
+	for _, row := range result.Rows {
+		assert.NotNil(t, row.Doc, "doc should be included with include_docs=true on default reduce path")
+		assert.NotNil(t, row.Doc["_id"], "doc should have _id")
+		assert.NotNil(t, row.Doc["_rev"], "doc should have _rev")
+		assert.NotNil(t, row.Doc["name"], "doc should have name field")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Regression: null value must be present in JSON (not omitted)
+// ---------------------------------------------------------------------------
+
+func TestView_NullValue_Present(t *testing.T) {
+	s, router, cleanup := setupViewTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"name": "alice", "type": "user"},
+	})
+	require.NoError(t, err)
+
+	putDesignDoc(t, router, "testdb", "users", map[string]interface{}{
+		"views": map[string]interface{}{
+			"by_name": map[string]interface{}{
+				"map": `function(doc) { if (doc.type === "user") { emit(doc.name, null); } }`,
+			},
+		},
+	})
+
+	// Query the view and check the raw JSON for "value": null.
+	url := "/testdb/_design/users/_view/by_name?reduce=false"
+	req := httptest.NewRequest("GET", url, nil)
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	body := w.Body.String()
+	assert.Contains(t, body, `"value":null`, "JSON must contain \"value\":null, not omit the field")
 }

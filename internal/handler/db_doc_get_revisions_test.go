@@ -199,6 +199,7 @@ func TestDocGet_ConflictsField(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// Without ?conflicts=true, _conflicts must NOT be in the response (CouchDB compat).
 	req := httptest.NewRequest("GET", "/testdb/doc1", nil)
 	req.SetBasicAuth("admin", "secret")
 	w := httptest.NewRecorder()
@@ -207,7 +208,21 @@ func TestDocGet_ConflictsField(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	var result map[string]interface{}
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
-	assert.NotNil(t, result["_conflicts"], "_conflicts should be populated when conflicts exist")
+	assert.Nil(t, result["_conflicts"], "_conflicts should NOT be present without ?conflicts=true")
+
+	// With ?conflicts=true, _conflicts MUST be present.
+	req = httptest.NewRequest("GET", "/testdb/doc1?conflicts=true", nil)
+	req.SetBasicAuth("admin", "secret")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	result = nil
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	assert.NotNil(t, result["_conflicts"], "_conflicts should be present with ?conflicts=true")
+	conflictList, ok := result["_conflicts"].([]interface{})
+	require.True(t, ok, "_conflicts should be an array")
+	assert.Len(t, conflictList, 1, "should have 1 conflict revision")
 }
 
 func TestDocGet_OpenRevsAll(t *testing.T) {
@@ -352,4 +367,91 @@ func TestAllDocs_NoRevisions(t *testing.T) {
 	assert.NotNil(t, doc["_rev"])
 	assert.Equal(t, "test", doc["name"])
 	assert.Nil(t, doc["_revisions"], "_revisions should NOT be in _all_docs response")
+}
+
+func TestDocGet_RevParam_WinningRevision(t *testing.T) {
+	s, router, cleanup := setupRevisionTest(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	rev, err := db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"x": 1},
+	})
+	require.NoError(t, err)
+
+	// ?rev= matching the winning revision should return the document normally.
+	req := httptest.NewRequest("GET", "/testdb/doc1?rev="+rev, nil)
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var result map[string]interface{}
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	assert.Equal(t, "doc1", result["_id"])
+	assert.Equal(t, rev, result["_rev"])
+}
+
+func TestDocGet_RevParam_ConflictRevision(t *testing.T) {
+	s, router, cleanup := setupRevisionTest(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	// Create two conflicting revisions via replication.
+	err = db.PutDocumentForReplication(ctx, &model.Document{
+		ID:   "doc1",
+		Rev:  "1-aaa",
+		Data: map[string]interface{}{"_id": "doc1", "_rev": "1-aaa", "source": "replica-a"},
+	})
+	require.NoError(t, err)
+
+	err = db.PutDocumentForReplication(ctx, &model.Document{
+		ID:   "doc1",
+		Rev:  "1-zzz",
+		Data: map[string]interface{}{"_id": "doc1", "_rev": "1-zzz", "source": "replica-z"},
+	})
+	require.NoError(t, err)
+
+	// Winner is 1-zzz (higher lexicographic hash). Fetch the loser 1-aaa via ?rev=.
+	req := httptest.NewRequest("GET", "/testdb/doc1?rev=1-aaa", nil)
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var result map[string]interface{}
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	assert.Equal(t, "doc1", result["_id"])
+	assert.Equal(t, "1-aaa", result["_rev"])
+	assert.Equal(t, "replica-a", result["source"])
+}
+
+func TestDocGet_RevParam_NonExistent(t *testing.T) {
+	s, router, cleanup := setupRevisionTest(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"x": 1},
+	})
+	require.NoError(t, err)
+
+	// ?rev= with a non-existent revision should return 404.
+	req := httptest.NewRequest("GET", "/testdb/doc1?rev=99-nonexistent", nil)
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }

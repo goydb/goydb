@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"sort"
@@ -25,6 +26,34 @@ type ViewResponse struct {
 	Rows      []Rows      `json:"rows"`
 }
 
+// normalizeJSONValue converts float64 values that represent whole numbers to
+// int64, recursively through arrays and maps.  This is necessary because
+// json.Unmarshal always produces float64 for JSON numbers, but the goja
+// JavaScript engine exports integer values as int64.  CBOR encodes these
+// types differently (int64(0) → 0x00 vs float64(0) → 0xfb0000000000000000),
+// so without normalisation view key range queries fail to match stored keys.
+func normalizeJSONValue(v interface{}) interface{} {
+	switch val := v.(type) {
+	case float64:
+		if val == math.Trunc(val) && !math.IsInf(val, 0) && !math.IsNaN(val) {
+			return int64(val)
+		}
+		return val
+	case []interface{}:
+		for i, elem := range val {
+			val[i] = normalizeJSONValue(elem)
+		}
+		return val
+	case map[string]interface{}:
+		for k, elem := range val {
+			val[k] = normalizeJSONValue(elem)
+		}
+		return val
+	default:
+		return v
+	}
+}
+
 // viewKeyRange parses startkey / endkey / key / inclusive_end from URL query
 // params and returns CBOR-encoded byte slices ready for SetStartKey /
 // SetEndKey on a view iterator.
@@ -44,6 +73,7 @@ func viewKeyRange(options interface{ Get(string) string }) (startKey, endKey []b
 		if err := json.Unmarshal([]byte(raw), &v); err != nil {
 			return nil, nil
 		}
+		v = normalizeJSONValue(v)
 		b, err := cbor.Marshal(v)
 		if err != nil {
 			return nil, nil
@@ -88,6 +118,7 @@ func viewKeyRange(options interface{ Get(string) string }) (startKey, endKey []b
 // cborKeyRange returns CBOR start/end keys for exact multi-key lookup.
 // startKey = bare CBOR(v), endKey = CBOR(v) + 10×0xFF (inclusive bucket range).
 func cborKeyRange(v interface{}) (startKey, endKey []byte) {
+	v = normalizeJSONValue(v)
 	b, err := cbor.Marshal(v)
 	if err != nil {
 		return nil, nil
@@ -256,17 +287,43 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		rows := make([]Rows, 0, len(docs))
+		var noneReducerDocs []*model.Document // docs from None reducer for include_docs
 		for key, value := range docs {
 			var row Rows
 			if doc, ok := value.(*model.Document); ok {
 				row.ID = doc.ID
 				row.Key = doc.Key
 				row.Value = doc.Value
+				if q.IncludeDocs {
+					noneReducerDocs = append(noneReducerDocs, doc)
+				}
 			} else {
 				row.Key = key
 				row.Value = value
 			}
 			rows = append(rows, row)
+		}
+
+		// Enrich and attach docs for include_docs=true (None reducer path).
+		if q.IncludeDocs && len(noneReducerDocs) > 0 {
+			if enrichErr := db.EnrichDocuments(r.Context(), noneReducerDocs); enrichErr != nil {
+				WriteError(w, http.StatusInternalServerError, enrichErr.Error())
+				return
+			}
+			enriched := make(map[string]*model.Document, len(noneReducerDocs))
+			for _, d := range noneReducerDocs {
+				enriched[d.ID] = d
+			}
+			for i := range rows {
+				if d, ok := enriched[rows[i].ID]; ok && d.Data != nil {
+					rows[i].Doc = d.Data
+					rows[i].Doc["_id"] = d.ID
+					rows[i].Doc["_rev"] = d.Rev
+					if d.Deleted {
+						rows[i].Doc["_deleted"] = d.Deleted
+					}
+				}
+			}
 		}
 
 		// Filter to requested keys if provided.
@@ -321,20 +378,14 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					return iterErr
 				}
 
-				iter.SetSkip(int(q.Skip))
-				iter.SetLimit(int(q.Limit))
-				iter.SetDescending(q.ViewDescending)
-				if q.ViewStartKey != nil {
-					iter.SetStartKey(q.ViewStartKey)
-				}
-				if q.ViewEndKey != nil {
-					iter.SetEndKey(q.ViewEndKey)
-					iter.SetExclusiveEnd(q.ViewExclusiveEnd)
-				}
+				// Do NOT set iterator bounds (SetStartKey/SetEndKey/SetDescending/
+				// SetSkip/SetLimit) — CBOR byte ordering diverges from CouchDB
+				// collation for strings of different lengths.  Instead, iterate
+				// the full index and rely on the semantic post-filter below.
+				// Skip and limit are applied after the sort step.
+				total = iter.Total()
 				for doc := iter.First(); iter.Continue(); doc = iter.Next() {
-					// Semantic post-filter: CBOR byte ordering doesn't match CouchDB
-					// collation order (length-prefixed strings sort by length first).
-					// Use ViewKeyCmp to correctly include/exclude rows.
+					// Semantic post-filter: use ViewKeyCmp for CouchDB-correct ordering.
 					if q.ViewDescending {
 						if q.ViewDecodedStartKey != nil && model.ViewKeyCmp(doc.Key, q.ViewDecodedStartKey) > 0 {
 							continue
@@ -362,7 +413,6 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					}
 					docList = append(docList, doc)
 				}
-				total = iter.Remaining() + len(docList)
 
 				return iterErr
 			})
@@ -386,6 +436,18 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			sort.Slice(docList, func(i, j int) bool {
 				return model.ViewKeyCmp(docList[i].Key, docList[j].Key) < 0
 			})
+		}
+
+		// Apply skip and limit after sort so they operate on correctly ordered results.
+		if q.Skip > 0 {
+			if int(q.Skip) >= len(docList) {
+				docList = nil
+			} else {
+				docList = docList[q.Skip:]
+			}
+		}
+		if q.Limit > 0 && int(q.Limit) < len(docList) {
+			docList = docList[:q.Limit]
 		}
 
 		rows := make([]Rows, len(docList))

@@ -112,6 +112,10 @@ func (c *Config) BuildDatabase() (*Goydb, error) {
 		return nil, fmt.Errorf("failed to open database dir: %w", err)
 	}
 
+	if err := s.EnsureSystemDatabases(context.Background()); err != nil {
+		return nil, fmt.Errorf("failed to ensure system databases: %w", err)
+	}
+
 	tc := controller.Task{
 		Storage: s,
 		Logger:  logger.With("component", "task"),

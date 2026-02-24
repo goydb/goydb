@@ -63,7 +63,7 @@ func setupChangesTest(t *testing.T) (*storage.Storage, *mux.Router, func()) {
 type ChangesResponse struct {
 	Results []ChangeDoc `json:"results"`
 	LastSeq string      `json:"last_seq"`
-	Pending string      `json:"pending"`
+	Pending int         `json:"pending"`
 }
 
 func TestDBChanges_FeedNormal(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
@@ -78,48 +79,43 @@ func (l *LocalDB) GetChanges(ctx context.Context, since string, limit int) (*mod
 		return nil, err
 	}
 
-	sinceSeq, sinceErr := strconv.ParseUint(since, 10, 64)
-	hasSince := sinceErr == nil && since != "" && since != "0"
-
-	// Get all doc IDs from the docs bucket using a cursor directly.
-	// This avoids the changes index iterator (which stores seq->docID mappings
-	// that aren't bson-encoded documents) and the long-polling behavior of Changes().
-	var allDocIDs []string
-	err = db.Transaction(ctx, func(tx port.DatabaseTx) error {
-		cursor := tx.Cursor(model.DocsBucket)
-		for k, _ := cursor.First(); k != nil; k, _ = cursor.Next() {
-			docID := string(k)
-			// Skip local docs
-			if len(docID) >= 7 && docID[:7] == "_local/" {
-				continue
-			}
-			allDocIDs = append(allDocIDs, docID)
+	// Use db.Changes() which iterates the changes index in sequence order.
+	// This is critical: iterating the docs bucket (alphabetical by docID) causes
+	// documents to be skipped when batching because LastSeq from an alphabetically
+	// ordered batch doesn't represent a contiguous sequence boundary.
+	//
+	// The changes index stores entries at key=seq, but doc.LocalSeq (from the
+	// invalidation index) is seq-1.  When a previous response reported
+	// LastSeq=N (based on LocalSeq), Changes() would Seek(N)+Next(), landing
+	// on the entry whose doc has LocalSeq=N — the same doc already processed.
+	// Increment since by 1 so Changes() correctly starts AFTER that entry.
+	//
+	// Normalize since="0" or "" to "" so db.Changes() starts from the very
+	// first entry (cursor.First()).
+	if since == "0" || since == "" {
+		since = ""
+	} else {
+		sinceVal, err := strconv.ParseUint(since, 10, 64)
+		if err == nil {
+			since = strconv.FormatUint(sinceVal+1, 10)
 		}
-		return nil
-	})
+	}
+	opts := &model.ChangesOptions{
+		Since:   since,
+		Limit:   limit,
+		Timeout: time.Millisecond,
+	}
+	docs, pending, err := db.Changes(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	resp := &model.ChangesResponse{}
+	resp := &model.ChangesResponse{
+		Pending: pending,
+	}
 
-	var count int
 	var lastSeq uint64
-	for _, docID := range allDocIDs {
-		// Fetch the full document to get LocalSeq, Rev, Deleted
-		doc, err := db.GetDocument(ctx, docID)
-		if err != nil || doc == nil {
-			continue
-		}
-
-		if hasSince && doc.LocalSeq <= sinceSeq {
-			continue
-		}
-		if limit > 0 && count >= limit {
-			resp.Pending++
-			continue
-		}
-
+	for _, doc := range docs {
 		cr := model.ChangeResult{
 			Seq:     strconv.FormatUint(doc.LocalSeq, 10),
 			ID:      doc.ID,
@@ -128,7 +124,6 @@ func (l *LocalDB) GetChanges(ctx context.Context, since string, limit int) (*mod
 			Doc:     doc,
 		}
 		resp.Results = append(resp.Results, cr)
-		count++
 
 		if doc.LocalSeq > lastSeq {
 			lastSeq = doc.LocalSeq

@@ -80,7 +80,7 @@ func (router Router) Build(r *mux.Router) error {
 	r.Methods("PUT").Path("/{db}/_revs_limit").Handler(&DBRevsLimitPut{Base: b})
 
 	r.Methods("GET", "POST").Path("/{db}/_design/{docid}/_view/{view}").Handler(&DBView{Base: b})
-	r.Methods("GET").Path("/{db}/_design/{docid}/_search/{index}").Handler(&DBSearch{Base: b})
+	r.Methods("GET", "POST").Path("/{db}/_design/{docid}/_search/{index}").Handler(&DBSearch{Base: b})
 	r.Methods("GET").Path("/{db}/_design/{docid}/_info").Handler(&DBIndexInfo{Base: b})
 	r.Methods("HEAD").Path("/{db}/_design/{docid}").Handler(&DBDocHead{Base: b, Design: true})
 	r.Methods("GET").Path("/{db}/_design/{docid}").Handler(&DBDocGet{Base: b, Design: true})
