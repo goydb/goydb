@@ -125,9 +125,16 @@ func (d *Database) BuildFnIndices(ctx context.Context, tx port.EngineWriteTransa
 
 // UpdateAllDocuments triggers rebuild with all documents
 func (d *Database) UpdateAllDocuments(ctx context.Context, tx port.EngineWriteTransaction, ddfn *model.DesignDocFn) error {
+	action := model.ActionUpdateView
+	switch ddfn.Type {
+	case model.SearchFn:
+		action = model.ActionUpdateSearch
+	case model.MangoFn:
+		action = model.ActionUpdateMango
+	}
 	return d.AddTasksTx(ctx, tx, []*model.Task{
 		{
-			Action:          model.ActionUpdateView,
+			Action:          action,
 			DBName:          d.Name(),
 			DesignDocFn:     ddfn.String(),
 			ProcessingTotal: 1,

@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strconv"
+	"strings"
+
+	"github.com/goydb/goydb/pkg/model"
 )
 
 type ActiveTasks struct {
@@ -40,18 +42,35 @@ func (s *ActiveTasks) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		for _, task := range dbtasks {
+			// Map action to CouchDB-compatible type
+			taskType := "indexer"
+			if task.Action == model.ActionUpdateSearch {
+				taskType = "search_indexer"
+			}
+
+			// Extract design document ID from DesignDocFn (format: "type:docname:fnname")
+			designDoc := task.DesignDocFn
+			if parts := strings.SplitN(designDoc, ":", 3); len(parts) == 3 {
+				designDoc = "_design/" + parts[1]
+			}
+
+			// Use UpdatedAt for updated_on if available, fall back to ActiveSince
+			updatedOn := task.ActiveSince
+			if !task.UpdatedAt.IsZero() {
+				updatedOn = task.UpdatedAt
+			}
+
 			tasks = append(tasks, &Task{
 				Node:           "nonode@nohost",
 				Pid:            fmt.Sprintf("<%d.%d>", os.Getpid(), task.ID),
 				ChangesDone:    task.Processed,
 				TotalChanges:   task.ProcessingTotal,
 				Database:       name,
-				DesignDocument: task.DesignDocFn,
-				Phase:          strconv.Itoa(int(task.Action)),
+				DesignDocument: designDoc,
 				Progress:       int(float64(task.Processed) / float64(task.ProcessingTotal) * 100.0),
 				StartedOn:      int(task.ActiveSince.Unix()),
-				Type:           "indexer",
-				UpdatedOn:      int(task.ActiveSince.Unix()),
+				Type:           taskType,
+				UpdatedOn:      int(updatedOn.Unix()),
 			})
 		}
 	}
@@ -66,7 +85,6 @@ type Task struct {
 	ChangesDone    int    `json:"changes_done"`
 	Database       string `json:"database"`
 	DesignDocument string `json:"design_document"`
-	Phase          string `json:"phase"`
 	Progress       int    `json:"progress"`
 	StartedOn      int    `json:"started_on"` // unix time
 	TotalChanges   int    `json:"total_changes"`

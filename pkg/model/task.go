@@ -9,7 +9,9 @@ import (
 type TaskAction int
 
 const (
-	ActionUpdateView TaskAction = iota
+	ActionUpdateView   TaskAction = iota
+	ActionUpdateSearch
+	ActionUpdateMango
 )
 
 type Task struct {
