@@ -162,7 +162,7 @@ func (s *DBChanges) handleNormalFeed(w http.ResponseWriter, r *http.Request, db 
 	}
 
 	_, _ = fmt.Fprintln(w, `],`)
-	_, _ = fmt.Fprintf(w, `"last_seq":"%d","pending":"%d"}`, lastSeq, pending)
+	_, _ = fmt.Fprintf(w, `"last_seq":"%d","pending":%d}`, lastSeq, pending)
 }
 
 func (s *DBChanges) handleContinuousFeed(w http.ResponseWriter, r *http.Request, db port.Database, options *model.ChangesOptions, includeDocs bool) {
