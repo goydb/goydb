@@ -121,7 +121,7 @@ type Value struct {
 type Rows struct {
 	ID    string                 `json:"id,omitempty"`
 	Key   interface{}            `json:"key,omitempty"`
-	Value interface{}            `json:"value,omitempty"`
+	Value interface{}            `json:"value"`
 	Doc   map[string]interface{} `json:"doc,omitempty"`
 	Error string                 `json:"error,omitempty"`
 }
