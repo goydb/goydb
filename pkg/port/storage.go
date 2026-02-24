@@ -46,21 +46,57 @@ type Observer interface {
 }
 
 type SearchQuery struct {
-	Query    string
-	Limit    int
-	Skip     int
-	Bookmark string
+	Query            string
+	Limit            int
+	Skip             int
+	Bookmark         string
+	Sort             []string            // ["field1", "-field2"]
+	IncludeDocs      bool
+	Stale            string              // "ok" or ""
+	Counts           []string            // field names for term facets
+	Ranges           map[string][]SearchRange // field -> ranges
+	Drilldown        [][]string          // [["field","val1","val2"], ...]
+	HighlightFields  []string
+	HighlightPreTag  string
+	HighlightPostTag string
+	HighlightNumber  int
+	HighlightSize    int
+	GroupField       string
+	GroupLimit       int
+	GroupSort        []string
+	IncludeFields    []string
+}
+
+// SearchRange defines a numeric range for faceted search.
+type SearchRange struct {
+	Label string
+	Min   *float64
+	Max   *float64
 }
 
 type SearchResult struct {
-	Total   uint64
-	Records []*SearchRecord
+	Total    uint64
+	Bookmark string
+	Records  []*SearchRecord
+	Counts   map[string]map[string]int
+	Ranges   map[string]map[string]int
+	Groups   []SearchGroup
+}
+
+// SearchGroup represents a grouped search result.
+type SearchGroup struct {
+	By        string
+	TotalRows int
+	Rows      []*SearchRecord
+	Bookmark  string
 }
 
 type SearchRecord struct {
-	ID     string
-	Order  []float64
-	Fields map[string]interface{}
+	ID         string
+	Order      []float64
+	Fields     map[string]interface{}
+	Doc        map[string]interface{}
+	Highlights map[string][]string
 }
 
 type ChangeListener interface {
