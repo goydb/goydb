@@ -72,18 +72,18 @@ func (db *DB) Compact() error {
 		return err
 	}
 	if err := bbolt.Compact(dst, db.db, 0); err != nil {
-		dst.Close()
-		os.Remove(tmpPath)
+		_ = dst.Close()
+		_ = os.Remove(tmpPath)
 		return err
 	}
 	if err := dst.Close(); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return err
 	}
 
 	// Phase 2: swap (brief window where src is closed)
 	if err := db.db.Close(); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return err
 	}
 	if err := os.Rename(tmpPath, srcPath); err != nil {

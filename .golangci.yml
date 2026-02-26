@@ -1,0 +1,9 @@
+version: "2"
+
+linters:
+  exclusions:
+    rules:
+      # Ignore unchecked errors in test helpers (cleanup defers, test writers)
+      - path: _test\.go
+        linters:
+          - errcheck

@@ -22,8 +22,8 @@ start:
 		defer close(wait)
 		t := time.AfterFunc(options.Timeout, func() { wait <- struct{}{} })
 		err := d.AddListener(ctx, port.ChangeListenerFunc(func(ctx context.Context, doc *model.Document) error {
-			wait <- struct{}{}
 			options.Since = strconv.FormatInt(int64(doc.LocalSeq-1), 10)
+			wait <- struct{}{}
 			return context.Canceled // only wait for the next document
 		}))
 		if err != nil {

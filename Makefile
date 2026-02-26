@@ -1,7 +1,7 @@
 PHONY: build push lint test
 
 test:
-	go test -race -v ./...
+	go test -json -race -v ./... | gotestfmt
 
 lint:
 	golangci-lint run

@@ -179,7 +179,7 @@ func (s Sort) Less(l, r *Document) bool {
 	var lv, rv SelectorValue
 	lv.Set(l.Field(s.Field))
 	rv.Set(r.Field(s.Field))
-	if s.Order == SortOrderDesc {
+	if s.Order {
 		return rv.LessThen(&lv)
 	}
 	return lv.LessThen(&rv)

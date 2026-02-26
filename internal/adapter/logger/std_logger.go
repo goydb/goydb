@@ -115,12 +115,13 @@ func (l *StdLogger) With(keysAndValues ...interface{}) port.Logger {
 	copy(newFields, l.fields)
 	copy(newFields[len(l.fields):], keysAndValues)
 
-	return &StdLogger{
-		level:      l.level,
+	nl := &StdLogger{
 		logger:     l.logger,
 		fields:     newFields,
 		fileHandle: l.fileHandle,
 	}
+	nl.level.Store(l.level.Load())
+	return nl
 }
 
 // log formats and writes a log message

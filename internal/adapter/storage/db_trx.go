@@ -447,11 +447,12 @@ func (tx *Transaction) DeleteDocument(ctx context.Context, docID, rev string) (*
 
 	// Determine the full Document for the winner.
 	var winnerDoc *model.Document
-	if winner == newRev {
+	switch winner {
+	case newRev:
 		winnerDoc = tombstone
-	} else if winner == oldDoc.Rev {
+	case oldDoc.Rev:
 		winnerDoc = oldDoc
-	} else {
+	default:
 		winnerDoc, _ = tx.getLeaf(docID, winner)
 	}
 

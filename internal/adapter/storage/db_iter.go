@@ -122,7 +122,7 @@ func (i *Iterator) First() *model.Document {
 			// key that is <= StartKey.  We pad with 10×0xFF to ensure any real
 			// suffix (seq+keyLen) still compares below the padded sentinel.
 			padded := append(append([]byte{}, i.StartKey...), bytes.Repeat([]byte{0xFF}, 10)...)
-			i.key, v = i.cursor.Seek(padded)
+			i.key, _ = i.cursor.Seek(padded)
 			if i.key == nil {
 				i.key, v = i.cursor.Last()
 			} else {

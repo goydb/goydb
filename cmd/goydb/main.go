@@ -44,7 +44,7 @@ func main() {
 		}
 	}
 
-	defer gdb.Storage.Close()
+	defer gdb.Close() //nolint:errcheck
 
 	loggedRouter := adapterlogger.NewHTTPLoggingMiddleware(gdb.Handler, gdb.Logger)
 
