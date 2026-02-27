@@ -79,7 +79,7 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 | PUT | `/{db}` | **Partially** | Creates database; missing `q` (shards), `n` (replicas), `partitioned` query params |
 | DELETE | `/{db}` | **Yes** | |
 | POST | `/{db}` | **Yes** | Creates document with auto-generated UUID |
-| GET/POST | `/{db}/_all_docs` | **Partially** | Supports `skip`, `limit`, `startkey`/`start_key`, `endkey`/`end_key`, `key`, `inclusive_end`, `include_docs`, `keys` (POST body); missing `descending`, `conflicts`, `update_seq`, `attachments`, `att_encoding_info` |
+| GET/POST | `/{db}/_all_docs` | **Partially** | Supports `skip`, `limit`, `startkey`/`start_key`, `endkey`/`end_key`, `key`, `inclusive_end`, `include_docs`, `keys` (POST body), `descending`; missing `conflicts`, `update_seq`, `attachments`, `att_encoding_info` |
 | GET/POST | `/{db}/_design_docs` | **Partially** | Basic design-doc listing; POST routed but keys body not handled; does not accept the same query params as `_all_docs` |
 | POST | `/{db}/_all_docs/queries` | **No** | Multi-query not implemented |
 | POST | `/{db}/_design_docs/queries` | **No** | |
@@ -117,10 +117,10 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 | Method | Endpoint | Status | Notes |
 |--------|----------|--------|-------|
 | HEAD | `/{db}/{docid}` | **Partially** | Returns ETag; missing `rev` query param support, `X-Couch-Full-Commit` header |
-| GET | `/{db}/{docid}` | **Partially** | Supports `revs`, `local_seq`, `multipart/mixed` accept header; `open_revs=all` and `open_revs=[...]` return all leaf revisions; `_conflicts` field auto-populated when conflict branches exist; missing `rev` (fetch specific revision), `atts_since`, `att_encoding_info`, `attachments` (inline), `conflicts` query param (CouchDB gates `_conflicts` on this; goydb always includes it), `deleted_conflicts`, `meta`, `latest` |
+| GET | `/{db}/{docid}` | **Partially** | Supports `rev`, `revs`, `conflicts`, `local_seq`, `multipart/mixed` accept header; `open_revs=all` and `open_revs=[...]` return all leaf revisions; `_conflicts` gated by `?conflicts=true`; missing `atts_since`, `att_encoding_info`, `attachments` (inline), `deleted_conflicts`, `meta`, `latest` |
 | PUT | `/{db}/{docid}` | **Partially** | Supports JSON and `multipart/related`; inline base64 attachments; `_deleted` accepts boolean or string; missing `batch=ok`, `new_edits` query param, `X-Couch-Full-Commit` header |
 | DELETE | `/{db}/{docid}` | **Partially** | Supports `rev` query param; missing `batch=ok` |
-| COPY | `/{db}/{docid}` | **No** | `COPY` HTTP method not routed |
+| COPY | `/{db}/{docid}` | **Yes** | Copies source to destination specified in `Destination` header; supports `?rev=` on destination for overwrites |
 
 ### Attachment API
 
@@ -141,7 +141,7 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 | GET | `/{db}/_design/{ddoc}` | **Yes** | |
 | PUT | `/{db}/_design/{ddoc}` | **Yes** | |
 | DELETE | `/{db}/_design/{ddoc}` | **Yes** | |
-| COPY | `/{db}/_design/{ddoc}` | **No** | `COPY` HTTP method not routed |
+| COPY | `/{db}/_design/{ddoc}` | **Yes** | Copies source to destination specified in `Destination` header |
 | HEAD | `/{db}/_design/{ddoc}/{attname}` | **Yes** | Returns `ETag`, `Content-Type`, `Content-Length`; no body |
 | GET | `/{db}/_design/{ddoc}/{attname}` | **Partially** | Returns attachment binary with `ETag` and `Content-Length`; missing `rev` query param, HTTP Range request support |
 | PUT | `/{db}/_design/{ddoc}/{attname}` | **Partially** | Uploads attachment; enforces `rev`/`If-Match` conflict detection; returns full `id`/`rev` response |
@@ -168,12 +168,12 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 
 | Method | Endpoint | Status | Notes |
 |--------|----------|--------|-------|
-| GET/POST | `/{db}/_local_docs` | **Partially** | Supports GET and POST (`{"keys":[...]}` body); missing `descending`, `conflicts`, `update_seq` params |
-| POST | `/{db}/_local_docs/queries` | **No** | |
-| GET | `/{db}/_local/{docid}` | **Yes** | |
-| PUT | `/{db}/_local/{docid}` | **Yes** | |
+| GET/POST | `/{db}/_local_docs` | **Yes** | Supports `skip`, `limit`, `startkey`/`start_key`, `endkey`/`end_key`, `key`, `inclusive_end`, `descending`, `include_docs`, `update_seq`, `keys` (POST body); returns `total_rows: null`, `offset: null` per CouchDB spec; missing `conflicts` param |
+| POST | `/{db}/_local_docs/queries` | **Yes** | Multi-query endpoint; accepts `{"queries": [...]}`, returns `{"results": [...]}` |
+| GET | `/{db}/_local/{docid}` | **Yes** | Uses `0-N` revision scheme (no content hash) per CouchDB spec |
+| PUT | `/{db}/_local/{docid}` | **Yes** | Uses `0-N` revision scheme; skips changes feed, views, and doc_leaves |
 | DELETE | `/{db}/_local/{docid}` | **Yes** | |
-| COPY | `/{db}/_local/{docid}` | **No** | `COPY` HTTP method not routed |
+| COPY | `/{db}/_local/{docid}` | **Yes** | Copies source to destination specified in `Destination` header |
 
 ---
 
@@ -198,12 +198,12 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 | Node API | 5 | 0 | 8 |
 | Authentication | 3 | 0 | 0 |
 | Database | 11 | 6 | 11 |
-| Document | 0 | 4 | 1 |
+| Document | 1 | 3 | 0 |
 | Attachment | 1 | 3 | 0 |
-| Design Document | 6 | 5 | 10 |
-| Local Documents | 3 | 1 | 2 |
+| Design Document | 7 | 4 | 10 |
+| Local Documents | 6 | 0 | 0 |
 | Partitioned DBs | 0 | 0 | 5 |
-| **Total** | **31** | **30** | **57** |
+| **Total** | **36** | **26** | **55** |
 
 ### Key capabilities present
 - Full document CRUD with attachment support (inline base64, multipart/related, PUT/DELETE/HEAD/GET via `/{db}/{docid}/{attname}` and `/_design/{ddoc}/{attname}`)
@@ -220,15 +220,12 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 - `POST /{db}/_all_docs` with `{"keys":[...]}` body
 
 ### Key gaps
-- **COPY** method not implemented anywhere
 - **Mango `_explain`** not implemented
 - **Mango `_find`** index optimisation covers top-level equality conditions; range queries without an equality index still require a full-scan
 - **Purge API** not implemented
 - **Design doc functions**: show, list, update, rewrite not implemented
 - **Partitioned databases** not supported
 - **Range requests** on attachments not supported
-- **`rev` query param** on GET `/{db}/{docid}` (fetching a specific old revision) not implemented — use `open_revs=[...]` to retrieve specific leaf revisions; non-leaf ancestors are not retrievable
-- **`conflicts` query param** on GET `/{db}/{docid}` not gated — goydb always includes `_conflicts` when conflict branches exist, rather than requiring the param
 - **Nouveau search** engine not implemented
 - Node stats/system/prometheus endpoints not exposed
 - `_dbs_info`, `_db_updates` endpoints missing
