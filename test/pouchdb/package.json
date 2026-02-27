@@ -1,0 +1,11 @@
+{
+  "private": true,
+  "scripts": {
+    "test": "node pouchdb_test.js"
+  },
+  "dependencies": {
+    "pouchdb": "^9.0.0",
+    "pouchdb-find": "^9.0.0",
+    "pouchdb-adapter-memory": "^9.0.0"
+  }
+}

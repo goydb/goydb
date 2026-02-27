@@ -1,7 +1,10 @@
-PHONY: build push lint test
+PHONY: build push lint test test-pouchdb
 
 test:
 	go test -json -race -v ./... | gotestfmt
+
+test-pouchdb:
+	go test -v -race -run TestPouchDBCompat ./test/pouchdb/
 
 lint:
 	golangci-lint run

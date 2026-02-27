@@ -1,5 +1,6 @@
 dbs
 client/node_modules
+test/pouchdb/node_modules
 
 tmp
 client/data.dump
