@@ -77,9 +77,9 @@ func (i *ChangesIndex) UpdateStored(ctx context.Context, tx port.EngineWriteTran
 		tx.PutWithSequence([]byte(ChangesIndexName), nil, []byte(doc.ID), func(_, _ []byte, seq uint64) (newKey []byte, newValue []byte) {
 			return uint64ToKey(seq), nil
 		})
-		// also add invalidation record
+		// also add invalidation record (stores the same 1-based sequence)
 		tx.PutWithSequence([]byte(ChangesIndexInvalidationName), []byte(doc.ID), nil, func(_, _ []byte, seq uint64) (newKey []byte, newValue []byte) {
-			return nil, uint64ToKey(seq - 1)
+			return nil, uint64ToKey(seq)
 		})
 	}
 
@@ -99,12 +99,9 @@ func (i *ChangesIndex) DocumentDeleted(ctx context.Context, tx port.EngineWriteT
 		return nil // already deleted
 	}
 
-	// The invalidation index stores LocalSeq = seq-1 (0-based), but the
-	// _changes key is seq (1-based).  Reconstruct the correct _changes key
-	// by adding 1 back.
 	localSeq := binary.BigEndian.Uint64(localSeqKey)
 	changesKey := make([]byte, 8)
-	binary.BigEndian.PutUint64(changesKey, localSeq+1)
+	binary.BigEndian.PutUint64(changesKey, localSeq)
 
 	tx.Delete([]byte(ChangesIndexInvalidationName), []byte(doc.ID))
 	tx.Delete([]byte(ChangesIndexName), changesKey)

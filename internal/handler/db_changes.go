@@ -59,6 +59,7 @@ func (s *DBChanges) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if feed == "" {
 		feed = "normal"
 	}
+	options.Feed = feed
 
 	// Route to appropriate handler based on feed type
 	switch feed {

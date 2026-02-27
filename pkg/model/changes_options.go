@@ -8,6 +8,7 @@ type ChangesOptions struct {
 	Timeout   time.Duration
 	Heartbeat time.Duration
 	DocIDs    []string
+	Feed      string // "normal", "longpoll", "continuous", "eventsource"
 
 	// Filter fields
 	Filter   string                 // Filter type: "_selector", "_view", "_design/ddoc/filtername"

@@ -41,7 +41,7 @@ start:
 
 		// Determine start position
 		var k, v []byte
-		if options.SinceNow() || options.Since == "" {
+		if options.SinceNow() || options.Since == "" || options.Since == "0" {
 			k, v = cursor.First()
 		} else {
 			// Parse since as uint64 and seek to it
@@ -90,7 +90,7 @@ start:
 	if err != nil {
 		return nil, 0, err
 	}
-	if len(docs) == 0 && options.Limit != 0 && !wait {
+	if len(docs) == 0 && options.Limit != 0 && !wait && options.Feed == "longpoll" {
 		wait = true
 		goto start
 	}

@@ -86,22 +86,10 @@ func (l *LocalDB) GetChanges(ctx context.Context, since string, limit int) (*mod
 	// documents to be skipped when batching because LastSeq from an alphabetically
 	// ordered batch doesn't represent a contiguous sequence boundary.
 	//
-	// The changes index stores entries at key=seq, but doc.LocalSeq (from the
-	// invalidation index) is seq-1.  When a previous response reported
-	// LastSeq=N (based on LocalSeq), Changes() would Seek(N)+Next(), landing
-	// on the entry whose doc has LocalSeq=N — the same doc already processed.
-	// Increment since by 1 so Changes() correctly starts AFTER that entry.
-	//
-	// Normalize since="0" or "" to "" so db.Changes() starts from the very
-	// first entry (cursor.First()).
-	if since == "0" || since == "" {
-		since = ""
-	} else {
-		sinceVal, err := strconv.ParseUint(since, 10, 64)
-		if err == nil {
-			since = strconv.FormatUint(sinceVal+1, 10)
-		}
-	}
+	// Changes keys and LocalSeq are both 1-based (matching the auto-increment
+	// sequence from PutWithSequence).  db.Changes() handles since="0" and ""
+	// by starting from the first entry, and for any other value it Seek(since)+Next()
+	// to return changes AFTER that sequence — no adjustment needed here.
 	opts := &model.ChangesOptions{
 		Since:   since,
 		Limit:   limit,
