@@ -51,6 +51,7 @@ type Database interface {
 	GetRevsLimit(ctx context.Context) (int, error)
 	SetRevsLimit(ctx context.Context, limit int) error
 	AddListener(ctx context.Context, l ChangeListener) error
+	NotifyDocumentUpdate(doc *model.Document)
 
 	GetTasks(ctx context.Context, count int) ([]*model.Task, error)
 	PeekTasks(ctx context.Context, count int) ([]*model.Task, error)

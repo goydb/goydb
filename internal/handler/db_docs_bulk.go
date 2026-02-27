@@ -76,6 +76,15 @@ func (s *DBDocsBulk) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Notify change listeners for each successfully stored document.
+	// This must happen after the transaction commits so the changes are
+	// visible to listeners that re-read from storage.
+	for i, doc := range req.Docs {
+		if resp[i].Ok {
+			db.NotifyDocumentUpdate(doc)
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp) // nolint: errcheck
 }
