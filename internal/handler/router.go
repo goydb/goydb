@@ -86,15 +86,18 @@ func (router Router) Build(r *mux.Router) error {
 	r.Methods("GET").Path("/{db}/_design/{docid}").Handler(&DBDocGet{Base: b, Design: true})
 	r.Methods("PUT").Path("/{db}/_design/{docid}").Handler(&DBDocPut{Base: b})
 	r.Methods("DELETE").Path("/{db}/_design/{docid}").Handler(&DBDocDelete{Base: b, Design: true})
+	r.Methods("COPY").Path("/{db}/_design/{docid}").Handler(&DBDocCopy{Base: b, Design: true})
 	r.Methods("HEAD").Path("/{db}/_design/{docid}/{attachment}").Handler(&DBDocAttachmentHead{Base: b, Design: true})
 	r.Methods("GET").Path("/{db}/_design/{docid}/{attachment}").Handler(&DBDocAttachmentGet{Base: b, Design: true})
 	r.Methods("PUT").Path("/{db}/_design/{docid}/{attachment}").Handler(&DBDocAttachmentPut{Base: b, Design: true})
 	r.Methods("DELETE").Path("/{db}/_design/{docid}/{attachment}").Handler(&DBDocAttachmentDelete{Base: b, Design: true})
 
+	r.Methods("POST").Path("/{db}/_local_docs/queries").Handler(&DBLocalDocsQueries{Base: b})
 	r.Methods("GET", "POST").Path("/{db}/_local_docs").Handler(&DBDocsAll{Base: b, Local: true})
 	r.Methods("GET").Path("/{db}/_local/{docid}").Handler(&DBDocGet{Base: b, Local: true})
 	r.Methods("PUT").Path("/{db}/_local/{docid}").Handler(&DBDocPut{Base: b})
 	r.Methods("DELETE").Path("/{db}/_local/{docid}").Handler(&DBDocDelete{Base: b, Local: true})
+	r.Methods("COPY").Path("/{db}/_local/{docid}").Handler(&DBDocCopy{Base: b, Local: true})
 
 	r.Methods("PUT", "POST").Path("/{db}/_bulk_docs").Handler(&DBDocsBulk{Base: b})
 
@@ -102,6 +105,7 @@ func (router Router) Build(r *mux.Router) error {
 	r.Methods("GET").Path("/{db}/{docid}").Handler(&DBDocGet{Base: b})
 	r.Methods("PUT").Path("/{db}/{docid}").Handler(&DBDocPut{Base: b})
 	r.Methods("DELETE").Path("/{db}/{docid}").Handler(&DBDocDelete{Base: b})
+	r.Methods("COPY").Path("/{db}/{docid}").Handler(&DBDocCopy{Base: b})
 	r.Methods("HEAD").Path("/{db}/{docid}/{attachment}").Handler(&DBDocAttachmentHead{Base: b})
 	r.Methods("GET").Path("/{db}/{docid}/{attachment}").Handler(&DBDocAttachmentGet{Base: b})
 	r.Methods("PUT").Path("/{db}/{docid}/{attachment}").Handler(&DBDocAttachmentPut{Base: b})
