@@ -79,10 +79,14 @@ func (d *Database) EnrichDocuments(ctx context.Context, docs []*model.Document) 
 			if err != nil {
 				return err
 			}
+			if dbdoc == nil {
+				continue // document deleted between notification and enrichment
+			}
 			doc.Data = dbdoc.Data
 			doc.Rev = dbdoc.Rev
 			doc.Deleted = dbdoc.Deleted
 			doc.Attachments = dbdoc.Attachments
+			doc.LocalSeq = dbdoc.LocalSeq
 		}
 
 		return nil

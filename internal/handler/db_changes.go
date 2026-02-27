@@ -266,19 +266,21 @@ func (s *DBChanges) handleContinuousFeed(w http.ResponseWriter, r *http.Request,
 		case <-ctx.Done():
 			return
 		case doc := <-changeChan:
-			// Skip if before our since marker
-			if options.Since != "" && options.Since != "now" {
-				since, _ := strconv.ParseUint(options.Since, 10, 64)
-				if doc.LocalSeq <= since {
+			// Always enrich the doc so that LocalSeq, Data, Rev, etc. are
+			// populated from storage.  The listener notification only carries
+			// the minimal document from PutDocument (LocalSeq is 0).
+			{
+				docs := []*model.Document{doc}
+				if err := db.EnrichDocuments(ctx, docs); err != nil {
+					s.Logger.Warnf(ctx, "failed to enrich document", "error", err)
 					continue
 				}
 			}
 
-			// Enrich if needed
-			if includeDocs {
-				docs := []*model.Document{doc}
-				if err := db.EnrichDocuments(ctx, docs); err != nil {
-					s.Logger.Warnf(ctx, "failed to enrich document", "error", err)
+			// Skip if before our since marker
+			if options.Since != "" && options.Since != "now" {
+				since, _ := strconv.ParseUint(options.Since, 10, 64)
+				if doc.LocalSeq <= since {
 					continue
 				}
 			}
@@ -410,19 +412,21 @@ func (s *DBChanges) handleEventSourceFeed(w http.ResponseWriter, r *http.Request
 		case <-ctx.Done():
 			return
 		case doc := <-changeChan:
-			// Skip if before our since marker
-			if options.Since != "" && options.Since != "now" {
-				since, _ := strconv.ParseUint(options.Since, 10, 64)
-				if doc.LocalSeq <= since {
+			// Always enrich the doc so that LocalSeq, Data, Rev, etc. are
+			// populated from storage.  The listener notification only carries
+			// the minimal document from PutDocument (LocalSeq is 0).
+			{
+				docs := []*model.Document{doc}
+				if err := db.EnrichDocuments(ctx, docs); err != nil {
+					s.Logger.Warnf(ctx, "failed to enrich document", "error", err)
 					continue
 				}
 			}
 
-			// Enrich if needed
-			if includeDocs {
-				docs := []*model.Document{doc}
-				if err := db.EnrichDocuments(ctx, docs); err != nil {
-					s.Logger.Warnf(ctx, "failed to enrich document", "error", err)
+			// Skip if before our since marker
+			if options.Since != "" && options.Since != "now" {
+				since, _ := strconv.ParseUint(options.Since, 10, 64)
+				if doc.LocalSeq <= since {
 					continue
 				}
 			}

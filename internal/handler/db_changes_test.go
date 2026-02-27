@@ -194,81 +194,152 @@ func TestDBChanges_FeedContinuous(t *testing.T) {
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
-	// Create initial document
+	// Create initial document.
 	_, err = db.PutDocument(ctx, &model.Document{
 		ID:   "doc1",
 		Data: map[string]interface{}{"value": 1},
 	})
 	require.NoError(t, err)
 
-	// Start continuous feed
-	req := httptest.NewRequest("GET", "/testdb/_changes?feed=continuous&timeout=2000", nil)
-	req.SetBasicAuth("admin", "secret")
-
-	// Use a custom response recorder that supports streaming
+	// Start continuous feed WITHOUT include_docs.
 	pr, pw := NewPipeRecorder()
 	defer func() { _ = pw.Close() }()
 
-	ctx, cancel := context.WithCancel(ctx)
+	reqCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	req = req.WithContext(ctx)
+	req := httptest.NewRequest("GET", "/testdb/_changes?feed=continuous&timeout=3000", nil)
+	req = req.WithContext(reqCtx)
+	req.SetBasicAuth("admin", "secret")
 
-	// Start the request in a goroutine
 	go func() {
 		router.ServeHTTP(pw, req)
 	}()
 
-	// Read the initial change (doc1)
 	scanner := bufio.NewScanner(pr)
-	var receivedChanges []ChangeDoc
 
-	// Read first change (should be doc1)
-	if scanner.Scan() {
-		line := scanner.Text()
-		if line != "" {
-			var change ChangeDoc
-			if err := json.Unmarshal([]byte(line), &change); err == nil {
-				receivedChanges = append(receivedChanges, change)
-			}
-		}
-	}
+	// Read initial change (doc1).
+	require.True(t, scanner.Scan(), "should receive initial change")
+	var initial ChangeDoc
+	require.NoError(t, json.Unmarshal(scanner.Bytes(), &initial))
+	assert.Equal(t, "doc1", initial.ID)
+	assert.Nil(t, initial.Doc, "doc should be nil without include_docs")
+	assert.NotEqual(t, "0", initial.Seq, "seq should not be 0")
 
-	// Add a new document
+	// Add a new document while the feed is open.
+	time.Sleep(50 * time.Millisecond)
 	_, err = db.PutDocument(ctx, &model.Document{
 		ID:   "doc2",
 		Data: map[string]interface{}{"value": 2},
 	})
 	require.NoError(t, err)
 
-	// Read second change (should be doc2)
-	// Give it some time to arrive
-	done := make(chan bool)
+	// Read the live change.
+	liveDone := make(chan ChangeDoc, 1)
 	go func() {
-		if scanner.Scan() {
+		for scanner.Scan() {
 			line := scanner.Text()
-			if line != "" && !strings.HasPrefix(line, "\n") {
-				var change ChangeDoc
-				if err := json.Unmarshal([]byte(line), &change); err == nil {
-					receivedChanges = append(receivedChanges, change)
-				}
+			if line == "" {
+				continue
+			}
+			var change ChangeDoc
+			if err := json.Unmarshal([]byte(line), &change); err == nil && change.ID == "doc2" {
+				liveDone <- change
+				return
 			}
 		}
-		done <- true
 	}()
 
 	select {
-	case <-done:
-		// Success - received the change
-	case <-time.After(1 * time.Second):
-		// Timeout is acceptable for this test
+	case change := <-liveDone:
+		assert.Equal(t, "doc2", change.ID)
+		assert.Nil(t, change.Doc, "doc should be nil without include_docs")
+		assert.NotEqual(t, "0", change.Seq, "live change seq should not be 0")
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for live change — live changes may be dropped")
 	}
 
-	// Cancel the request
 	cancel()
+}
 
-	// Verify we got at least the initial change
-	require.GreaterOrEqual(t, len(receivedChanges), 1)
-	assert.Equal(t, "doc1", receivedChanges[0].ID)
+// TestDBChanges_FeedContinuous_IncludeDocs verifies that live changes in
+// the continuous feed include the document body when include_docs=true
+// and that the seq field is a real sequence number (not "0").
+func TestDBChanges_FeedContinuous_IncludeDocs(t *testing.T) {
+	s, router, cleanup := setupChangesTest(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	// Create initial document so the feed has something to start with.
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"value": 1},
+	})
+	require.NoError(t, err)
+
+	// Start continuous feed with include_docs=true.
+	pr, pw := NewPipeRecorder()
+	defer func() { _ = pw.Close() }()
+
+	reqCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	req := httptest.NewRequest("GET", "/testdb/_changes?feed=continuous&include_docs=true&timeout=3000", nil)
+	req = req.WithContext(reqCtx)
+	req.SetBasicAuth("admin", "secret")
+
+	go func() {
+		router.ServeHTTP(pw, req)
+	}()
+
+	scanner := bufio.NewScanner(pr)
+
+	// Read initial change (doc1).
+	require.True(t, scanner.Scan(), "should receive initial change")
+	var initial ChangeDoc
+	require.NoError(t, json.Unmarshal(scanner.Bytes(), &initial))
+	assert.Equal(t, "doc1", initial.ID)
+	assert.NotNil(t, initial.Doc, "initial change should include doc body")
+	assert.NotEqual(t, "0", initial.Seq, "seq should not be 0")
+
+	// Now add a new document while the feed is open.
+	time.Sleep(50 * time.Millisecond) // let the feed handler settle
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "doc2",
+		Data: map[string]interface{}{"value": 2},
+	})
+	require.NoError(t, err)
+
+	// Read the live change.
+	liveDone := make(chan ChangeDoc, 1)
+	go func() {
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line == "" {
+				continue
+			}
+			var change ChangeDoc
+			if err := json.Unmarshal([]byte(line), &change); err == nil && change.ID == "doc2" {
+				liveDone <- change
+				return
+			}
+		}
+	}()
+
+	select {
+	case change := <-liveDone:
+		assert.Equal(t, "doc2", change.ID)
+		require.NotNil(t, change.Doc, "live change should include doc body with include_docs=true")
+		assert.Equal(t, float64(2), change.Doc["value"], "doc body should contain the document data")
+		assert.Equal(t, "doc2", change.Doc["_id"])
+		assert.NotEmpty(t, change.Doc["_rev"])
+		assert.NotEqual(t, "0", change.Seq, "live change seq should not be 0")
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for live change — live changes may be dropped")
+	}
+
+	cancel()
 }
 
 func TestDBChanges_Heartbeat(t *testing.T) {
