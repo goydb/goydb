@@ -117,6 +117,10 @@ func (s *DBDocGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusNotFound, "document not found")
 		return
 	}
+	if dbdoc.Deleted {
+		WriteError(w, http.StatusNotFound, "deleted")
+		return
+	}
 
 	// If a specific revision was requested and it differs from the winner,
 	// try to fetch it from the leaf store (conflict branches).

@@ -194,17 +194,18 @@ func (s *DBDocPut) handleMultipart(w http.ResponseWriter, r *http.Request, db po
 	})
 }
 
-// resolveDocID extracts the document ID from the JSON body or the URL path variable.
+// resolveDocID extracts the document ID from the URL path variable (authoritative)
+// or falls back to the JSON body _id field.
 func resolveDocID(doc map[string]interface{}, r *http.Request) string {
-	if id, ok := doc["_id"].(string); ok && id != "" {
-		return id
-	}
 	if id, ok := mux.Vars(r)["docid"]; ok {
 		if strings.Contains(r.URL.Path, "/_design/") {
 			return string(model.DesignDocPrefix) + id
 		} else if strings.Contains(r.URL.Path, "/_local/") {
 			return "_local/" + id
 		}
+		return id
+	}
+	if id, ok := doc["_id"].(string); ok && id != "" {
 		return id
 	}
 	return ""

@@ -127,7 +127,13 @@ func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (re
 		// _local docs use a simple 0-N revision scheme (no content hash).
 		// They don't participate in the changes feed, views, or replication
 		// conflict resolution, so we skip indices, RevHistory, and doc_leaves.
-		rev = doc.NextLocalRevision()
+		// Compute next revision from the stored document (oldDoc) when it exists,
+		// because the incoming doc.Rev is typically empty (the handler doesn't set it).
+		if oldDoc != nil {
+			rev = oldDoc.NextLocalRevision()
+		} else {
+			rev = "0-1"
+		}
 		doc.Rev = rev
 
 		err = tx.PutRaw(ctx, []byte(doc.ID), doc)
