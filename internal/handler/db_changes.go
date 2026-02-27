@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/goydb/goydb/pkg/model"
@@ -78,6 +79,7 @@ func (s *DBChanges) handleNormalFeed(w http.ResponseWriter, r *http.Request, db 
 	// Setup heartbeat ticker if specified
 	var heartbeatTicker *time.Ticker
 	var heartbeatDone chan struct{}
+	var heartbeatWg sync.WaitGroup
 	if options.Heartbeat > 0 {
 		// We'll start heartbeat after headers are sent
 		heartbeatTicker = time.NewTicker(options.Heartbeat)
@@ -85,6 +87,7 @@ func (s *DBChanges) handleNormalFeed(w http.ResponseWriter, r *http.Request, db 
 		defer func() {
 			heartbeatTicker.Stop()
 			close(heartbeatDone)
+			heartbeatWg.Wait() // wait for goroutine to stop before returning
 		}()
 	}
 
@@ -111,7 +114,9 @@ func (s *DBChanges) handleNormalFeed(w http.ResponseWriter, r *http.Request, db 
 	// Start heartbeat goroutine if configured
 	if heartbeatTicker != nil {
 		if flusher, ok := w.(http.Flusher); ok {
+			heartbeatWg.Add(1)
 			go func() {
+				defer heartbeatWg.Done()
 				for {
 					select {
 					case <-heartbeatTicker.C:
@@ -179,17 +184,19 @@ func (s *DBChanges) handleContinuousFeed(w http.ResponseWriter, r *http.Request,
 	ctx := r.Context()
 
 	// Setup heartbeat if specified
-	var heartbeatTicker *time.Ticker
-	var heartbeatDone chan struct{}
+	var heartbeatWg sync.WaitGroup
 	if options.Heartbeat > 0 {
-		heartbeatTicker = time.NewTicker(options.Heartbeat)
-		heartbeatDone = make(chan struct{})
+		heartbeatTicker := time.NewTicker(options.Heartbeat)
+		heartbeatDone := make(chan struct{})
 		defer func() {
 			heartbeatTicker.Stop()
 			close(heartbeatDone)
+			heartbeatWg.Wait()
 		}()
 
+		heartbeatWg.Add(1)
 		go func() {
+			defer heartbeatWg.Done()
 			for {
 				select {
 				case <-heartbeatTicker.C:
@@ -325,17 +332,19 @@ func (s *DBChanges) handleEventSourceFeed(w http.ResponseWriter, r *http.Request
 	ctx := r.Context()
 
 	// Setup heartbeat if specified
-	var heartbeatTicker *time.Ticker
-	var heartbeatDone chan struct{}
+	var heartbeatWg sync.WaitGroup
 	if options.Heartbeat > 0 {
-		heartbeatTicker = time.NewTicker(options.Heartbeat)
-		heartbeatDone = make(chan struct{})
+		heartbeatTicker := time.NewTicker(options.Heartbeat)
+		heartbeatDone := make(chan struct{})
 		defer func() {
 			heartbeatTicker.Stop()
 			close(heartbeatDone)
+			heartbeatWg.Wait()
 		}()
 
+		heartbeatWg.Add(1)
 		go func() {
+			defer heartbeatWg.Done()
 			for {
 				select {
 				case <-heartbeatTicker.C:
