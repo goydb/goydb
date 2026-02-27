@@ -30,6 +30,9 @@ func (s *DBDocsBulkGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	opts := r.URL.Query()
+	revs := boolOption("revs", false, opts)
+
 	var req bulkGetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		WriteError(w, http.StatusBadRequest, err.Error())
@@ -57,8 +60,17 @@ func (s *DBDocsBulkGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				},
 			}
 		} else {
+			docData := make(map[string]interface{}, len(doc.Data)+3)
+			for k, v := range doc.Data {
+				docData[k] = v
+			}
+			docData["_id"] = doc.ID
+			docData["_rev"] = doc.Rev
+			if revs {
+				docData["_revisions"] = doc.Revisions()
+			}
 			entry.Docs = []map[string]interface{}{
-				{"ok": doc.Data},
+				{"ok": docData},
 			}
 		}
 		results[i] = entry
