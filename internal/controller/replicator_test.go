@@ -200,6 +200,18 @@ func (m *MockPeer) GetDoc(ctx context.Context, docID string, revs bool, openRevs
 	return result, nil
 }
 
+func (m *MockPeer) BulkGet(ctx context.Context, docs []port.BulkGetRequest) ([]*model.Document, error) {
+	var result []*model.Document
+	for _, req := range docs {
+		doc, err := m.GetDoc(ctx, req.ID, true, req.Revs)
+		if err != nil {
+			continue
+		}
+		result = append(result, doc)
+	}
+	return result, nil
+}
+
 func (m *MockPeer) BulkDocs(ctx context.Context, docs []*model.Document, newEdits bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -223,6 +235,10 @@ func (m *MockPeer) CreateDB(ctx context.Context) error {
 	defer m.mu.Unlock()
 	m.CreateDBCalls++
 	m.exists = true
+	return nil
+}
+
+func (m *MockPeer) EnsureFullCommit(ctx context.Context) error {
 	return nil
 }
 
@@ -397,6 +413,111 @@ func TestReplicatorContinuous_CancelStopsCleanly(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("Run did not stop after context cancellation")
 	}
+}
+
+func TestLoadCheckpoint_HistoryFallback(t *testing.T) {
+	source := NewMockPeer(true)
+	target := NewMockPeer(true)
+
+	// Top-level session IDs differ → would normally cause a full restart.
+	// But history arrays share a common session_id entry.
+	sharedSID := "shared-session-abc"
+	sourceCP := &model.Document{
+		ID: "some-rep-id",
+		Data: map[string]interface{}{
+			"session_id":      "source-new-session",
+			"source_last_seq": "99",
+			"history": []interface{}{
+				map[string]interface{}{
+					"session_id":   sharedSID,
+					"recorded_seq": "42",
+				},
+			},
+		},
+	}
+	targetCP := &model.Document{
+		ID: "some-rep-id",
+		Data: map[string]interface{}{
+			"session_id":      "target-new-session",
+			"source_last_seq": "99",
+			"history": []interface{}{
+				map[string]interface{}{
+					"session_id":   sharedSID,
+					"recorded_seq": "42",
+				},
+			},
+		},
+	}
+	source.mu.Lock()
+	source.localDocs["some-rep-id"] = sourceCP
+	source.mu.Unlock()
+	target.mu.Lock()
+	target.localDocs["some-rep-id"] = targetCP
+	target.mu.Unlock()
+
+	r := &Replicator{
+		Source: source,
+		Target: target,
+		RepID:  "some-rep-id",
+	}
+	seq := r.loadCheckpoint(context.Background())
+	assert.Equal(t, "42", seq, "should resume from the common history entry's recorded_seq")
+}
+
+func TestLoadCheckpoint_NoCommonHistory(t *testing.T) {
+	source := NewMockPeer(true)
+	target := NewMockPeer(true)
+
+	// Completely disjoint session IDs in both top-level and history.
+	sourceCP := &model.Document{
+		ID: "rep-id",
+		Data: map[string]interface{}{
+			"session_id":      "sid-source",
+			"source_last_seq": "10",
+			"history": []interface{}{
+				map[string]interface{}{"session_id": "old-source", "recorded_seq": "5"},
+			},
+		},
+	}
+	targetCP := &model.Document{
+		ID: "rep-id",
+		Data: map[string]interface{}{
+			"session_id":      "sid-target",
+			"source_last_seq": "10",
+			"history": []interface{}{
+				map[string]interface{}{"session_id": "old-target", "recorded_seq": "5"},
+			},
+		},
+	}
+	source.mu.Lock()
+	source.localDocs["rep-id"] = sourceCP
+	source.mu.Unlock()
+	target.mu.Lock()
+	target.localDocs["rep-id"] = targetCP
+	target.mu.Unlock()
+
+	r := &Replicator{Source: source, Target: target, RepID: "rep-id"}
+	seq := r.loadCheckpoint(context.Background())
+	assert.Equal(t, "", seq, "no common ancestor → full replication")
+}
+
+func TestReplicationID_HeadersIncluded(t *testing.T) {
+	// Same URL+flags, different headers → different IDs
+	id1 := replicationID("http://src/db", map[string]string{"Authorization": "Basic abc"},
+		"http://tgt/db", nil, false, false)
+	id2 := replicationID("http://src/db", map[string]string{"Authorization": "Basic xyz"},
+		"http://tgt/db", nil, false, false)
+	assert.NotEqual(t, id1, id2, "different auth headers must produce different replication IDs")
+
+	// Same everything → same ID
+	id3 := replicationID("http://src/db", map[string]string{"Authorization": "Basic abc"},
+		"http://tgt/db", nil, false, false)
+	assert.Equal(t, id1, id3, "identical inputs must produce identical replication IDs")
+
+	// No headers → stable (no nil-map panic)
+	id4 := replicationID("http://src/db", nil, "http://tgt/db", nil, false, false)
+	id5 := replicationID("http://src/db", nil, "http://tgt/db", nil, false, false)
+	assert.Equal(t, id4, id5, "nil headers must produce stable replication IDs")
 }
 
 func TestReplicatorCheckpointFormat(t *testing.T) {

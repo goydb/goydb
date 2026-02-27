@@ -2,7 +2,9 @@ package replication
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"io"
 	"strconv"
 	"time"
 
@@ -185,7 +187,48 @@ func (l *LocalDB) GetDoc(ctx context.Context, docID string, revs bool, openRevs 
 		doc.Data["_revisions"] = doc.Revisions()
 	}
 
+	// Inline attachment blobs as base64 so the replicator can carry the data
+	// to the target without a separate request (CouchDB inline attachment format).
+	for name, att := range doc.Attachments {
+		if att == nil || att.Digest == "" {
+			continue
+		}
+		reader, err := db.AttachmentReader(att.Digest)
+		if err != nil {
+			continue // blob missing; skip rather than failing the whole doc
+		}
+		data, err := io.ReadAll(reader)
+		_ = reader.Close()
+		if err != nil {
+			continue
+		}
+		attCopy := *att
+		attCopy.Stub = false
+		attCopy.Data = base64.StdEncoding.EncodeToString(data)
+		doc.Attachments[name] = &attCopy
+	}
+
 	return doc, nil
+}
+
+// BulkGet fetches multiple documents from local storage by delegating to GetDoc per request.
+// GetDoc already inlines attachment blobs as base64, so no further handling is needed.
+func (l *LocalDB) BulkGet(ctx context.Context, docs []port.BulkGetRequest) ([]*model.Document, error) {
+	var result []*model.Document
+	for _, req := range docs {
+		doc, err := l.GetDoc(ctx, req.ID, true, req.Revs)
+		if err != nil {
+			continue // skip missing docs, same as replicator's GetDoc loop
+		}
+		result = append(result, doc)
+	}
+	return result, nil
+}
+
+// EnsureFullCommit is a no-op for local storage: writes are durable
+// immediately after the bbolt transaction commits.
+func (l *LocalDB) EnsureFullCommit(ctx context.Context) error {
+	return nil
 }
 
 func (l *LocalDB) BulkDocs(ctx context.Context, docs []*model.Document, newEdits bool) error {

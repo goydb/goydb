@@ -37,8 +37,11 @@ type RevsDiffResult struct {
 
 // ReplicationResult holds statistics from a replication run.
 type ReplicationResult struct {
-	DocsRead    int
-	DocsWritten int
-	StartTime   time.Time
-	EndTime     time.Time
+	DocsRead         int
+	DocsWritten      int
+	DocWriteFailures int
+	MissingFound     int
+	MissingChecked   int
+	StartTime        time.Time
+	EndTime          time.Time
 }

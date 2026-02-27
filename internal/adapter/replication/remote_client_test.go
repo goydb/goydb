@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/port"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -54,6 +55,9 @@ func TestRemoteClientGetDBInfo(t *testing.T) {
 
 func TestRemoteClientGetChanges(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "normal", r.URL.Query().Get("feed"))
+		assert.Equal(t, "all_docs", r.URL.Query().Get("style"))
+		assert.Equal(t, "10000", r.URL.Query().Get("heartbeat"))
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"results": []map[string]interface{}{
 				{"seq": "1", "id": "doc1", "changes": []map[string]string{{"rev": "1-a"}}},
@@ -77,6 +81,9 @@ func TestRemoteClientGetChanges(t *testing.T) {
 func TestRemoteClientGetChanges_WithSince(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "5", r.URL.Query().Get("since"))
+		assert.Equal(t, "normal", r.URL.Query().Get("feed"))
+		assert.Equal(t, "all_docs", r.URL.Query().Get("style"))
+		assert.Equal(t, "10000", r.URL.Query().Get("heartbeat"))
 		_ = json.NewEncoder(w).Encode(model.ChangesResponse{LastSeq: "5"})
 	}))
 	defer srv.Close()
@@ -166,6 +173,7 @@ func TestRemoteClientGetDoc_WithOpenRevs(t *testing.T) {
 
 func TestRemoteClientBulkDocs_NewEditsFalse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "false", r.Header.Get("X-Couch-Full-Commit"))
 		body, _ := io.ReadAll(r.Body)
 		var req map[string]interface{}
 		json.Unmarshal(body, &req) // nolint: errcheck
@@ -245,6 +253,51 @@ func TestRemoteClientGetLocalDoc(t *testing.T) {
 	doc, err := c.GetLocalDoc(context.Background(), "checkpoint-1")
 	require.NoError(t, err)
 	assert.Equal(t, "42", doc.Data["seq"])
+}
+
+func TestRemoteClientBulkGet(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Contains(t, r.URL.Path, "/_bulk_get")
+		assert.Equal(t, "true", r.URL.Query().Get("revs"))
+		assert.Equal(t, "true", r.URL.Query().Get("attachments"))
+
+		body, _ := io.ReadAll(r.Body)
+		var req map[string]interface{}
+		_ = json.Unmarshal(body, &req)
+		docs := req["docs"].([]interface{})
+		assert.Len(t, docs, 2, "two revisions for one doc should expand to two entries")
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"results": []map[string]interface{}{
+				{
+					"id": "d1",
+					"docs": []map[string]interface{}{
+						{"ok": map[string]interface{}{"_id": "d1", "_rev": "1-a", "v": 1}},
+					},
+				},
+				{
+					"id": "d1",
+					"docs": []map[string]interface{}{
+						{"missing": "1-b"},
+					},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c, err := NewRemoteClient(srv.URL, nil)
+	require.NoError(t, err)
+
+	results, err := c.BulkGet(context.Background(), []port.BulkGetRequest{
+		{ID: "d1", Revs: []string{"1-a", "1-b"}},
+	})
+	require.NoError(t, err)
+	// Only the "ok" entry should be returned; "missing" is skipped
+	require.Len(t, results, 1)
+	assert.Equal(t, "d1", results[0].ID)
+	assert.Equal(t, "1-a", results[0].Rev)
 }
 
 func TestRemoteClientPutLocalDoc(t *testing.T) {

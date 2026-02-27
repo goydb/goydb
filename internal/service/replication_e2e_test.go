@@ -3,7 +3,9 @@ package service_test
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -463,6 +465,68 @@ func TestE2E_Protocol_IncrementalCheckpoint(t *testing.T) {
 	_, total, err := tgtDB.AllDocs(ctx, port.AllDocsQuery{SkipLocal: true})
 	require.NoError(t, err)
 	assert.Equal(t, 8, total)
+}
+
+// TestE2E_AttachmentReplication verifies that binary attachments are carried
+// from source to target during local-to-local replication.
+func TestE2E_AttachmentReplication(t *testing.T) {
+	srcStorage, tgtStorage, cleanup := setupE2E(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	srcDB, err := srcStorage.CreateDatabase(ctx, "sourcedb")
+	require.NoError(t, err)
+	_, err = tgtStorage.CreateDatabase(ctx, "targetdb")
+	require.NoError(t, err)
+
+	// Put a document then attach a file to it.
+	_, err = srcDB.PutDocument(ctx, &model.Document{
+		ID:   "docwithatt",
+		Data: map[string]interface{}{"hello": "world"},
+	})
+	require.NoError(t, err)
+
+	attContent := "binary attachment content for replication test"
+	att := &model.Attachment{
+		Filename:    "hello.txt",
+		ContentType: "text/plain",
+		Reader:      io.NopCloser(strings.NewReader(attContent)),
+		ExpectedRev: "1-" + strings.Repeat("0", 32), // placeholder; PutAttachment uses the stored rev
+	}
+	// Fetch the actual rev first.
+	srcDoc, err := srcDB.GetDocument(ctx, "docwithatt")
+	require.NoError(t, err)
+	att.ExpectedRev = srcDoc.Rev
+	_, err = srcDB.PutAttachment(ctx, "docwithatt", att)
+	require.NoError(t, err)
+
+	// Replicate sourcedb → targetdb.
+	source := &adapterreplication.LocalDB{Storage: srcStorage, DBName: "sourcedb"}
+	target := &adapterreplication.LocalDB{Storage: tgtStorage, DBName: "targetdb"}
+
+	repDoc := &model.ReplicationDoc{Source: "sourcedb", Target: "targetdb"}
+	r := controller.NewReplicator(source, target, repDoc, logger.NewNoLog())
+	result, err := r.Run(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.DocsWritten)
+
+	// The document must exist on the target.
+	tgtDB, err := tgtStorage.Database(ctx, "targetdb")
+	require.NoError(t, err)
+	tgtDoc, err := tgtDB.GetDocument(ctx, "docwithatt")
+	require.NoError(t, err)
+	require.NotNil(t, tgtDoc)
+
+	// The attachment must be accessible and contain the original content.
+	tgtAtt, err := tgtDB.GetAttachment(ctx, "docwithatt", "hello.txt")
+	require.NoError(t, err)
+	require.NotNil(t, tgtAtt)
+
+	gotData, err := io.ReadAll(tgtAtt.Reader)
+	require.NoError(t, err)
+	_ = tgtAtt.Reader.Close()
+	assert.Equal(t, attContent, string(gotData))
 }
 
 // TestE2E_Protocol_AllDocsTotal_ExcludesLocalAndDeleted explicitly exercises

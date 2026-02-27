@@ -95,6 +95,9 @@ func (doc *Document) UnmarshalJSON(data []byte) error {
 						if revpos, ok := attMap["revpos"].(float64); ok {
 							att.Revpos = int(revpos)
 						}
+						if encoding, ok := attMap["encoding"].(string); ok {
+							att.Encoding = encoding
+						}
 						doc.Attachments[name] = att
 					}
 				}

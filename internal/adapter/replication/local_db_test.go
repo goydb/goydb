@@ -9,6 +9,7 @@ import (
 	"github.com/goydb/goydb/internal/adapter/logger"
 	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/port"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -314,6 +315,33 @@ func TestLocalDB_RevsDiff_ConflictLeafRecognized(t *testing.T) {
 	require.NoError(t, err)
 	_ = db // silence unused warning
 	assert.NotContains(t, result, "doc1", "conflict revs should not appear as missing")
+}
+
+func TestLocalDB_BulkGet(t *testing.T) {
+	s, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{ID: "doc1", Data: map[string]interface{}{"val": 1}})
+	require.NoError(t, err)
+	_, err = db.PutDocument(ctx, &model.Document{ID: "doc2", Data: map[string]interface{}{"val": 2}})
+	require.NoError(t, err)
+
+	l := &LocalDB{Storage: s, DBName: "testdb"}
+	results, err := l.BulkGet(ctx, []port.BulkGetRequest{
+		{ID: "doc1"},
+		{ID: "doc2"},
+		{ID: "does-not-exist"}, // should be silently skipped
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+
+	ids := []string{results[0].ID, results[1].ID}
+	assert.Contains(t, ids, "doc1")
+	assert.Contains(t, ids, "doc2")
 }
 
 func TestLocalDB_BulkDocs_CreatesConflict(t *testing.T) {

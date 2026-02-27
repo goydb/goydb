@@ -171,7 +171,7 @@ func (c *RemoteClient) PutLocalDoc(ctx context.Context, doc *model.Document) err
 }
 
 func (c *RemoteClient) GetChanges(ctx context.Context, since string, limit int) (*model.ChangesResponse, error) {
-	path := fmt.Sprintf("/_changes?limit=%d", limit)
+	path := fmt.Sprintf("/_changes?feed=normal&style=all_docs&heartbeat=10000&limit=%d", limit)
 	if since != "" {
 		path += "&since=" + url.QueryEscape(since)
 	}
@@ -219,6 +219,7 @@ func (c *RemoteClient) GetDoc(ctx context.Context, docID string, revs bool, open
 	if len(openRevs) > 0 {
 		ors, _ := json.Marshal(openRevs)
 		params.Set("open_revs", string(ors))
+		params.Set("attachments", "true")
 	}
 	if len(params) > 0 {
 		path += "?" + params.Encode()
@@ -284,6 +285,65 @@ func (c *RemoteClient) GetDoc(ctx context.Context, docID string, revs bool, open
 	return c.parseDocumentData(data), nil
 }
 
+// BulkGet fetches multiple documents from the remote peer using POST /_bulk_get.
+// Each BulkGetRequest with multiple revisions expands into one entry per revision.
+func (c *RemoteClient) BulkGet(ctx context.Context, docs []port.BulkGetRequest) ([]*model.Document, error) {
+	type docEntry struct {
+		ID  string `json:"id"`
+		Rev string `json:"rev,omitempty"`
+	}
+	type bulkGetReq struct {
+		Docs []docEntry `json:"docs"`
+	}
+
+	var entries []docEntry
+	for _, req := range docs {
+		if len(req.Revs) == 0 {
+			entries = append(entries, docEntry{ID: req.ID})
+		} else {
+			for _, rev := range req.Revs {
+				entries = append(entries, docEntry{ID: req.ID, Rev: rev})
+			}
+		}
+	}
+
+	resp, err := c.do(ctx, http.MethodPost, "/_bulk_get?revs=true&attachments=true", bulkGetReq{Docs: entries})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("POST _bulk_get returned status %d: %s", resp.StatusCode, body)
+	}
+
+	type bulkGetResp struct {
+		Results []struct {
+			ID   string `json:"id"`
+			Docs []struct {
+				OK    map[string]interface{} `json:"ok"`
+				Error map[string]interface{} `json:"error"`
+			} `json:"docs"`
+		} `json:"results"`
+	}
+
+	var result bulkGetResp
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode _bulk_get response: %w", err)
+	}
+
+	var out []*model.Document
+	for _, r := range result.Results {
+		for _, d := range r.Docs {
+			if d.OK != nil {
+				out = append(out, c.parseDocumentData(d.OK))
+			}
+			// skip missing/error entries
+		}
+	}
+	return out, nil
+}
+
 // parseDocumentData converts a map to a Document
 func (c *RemoteClient) parseDocumentData(data map[string]interface{}) *model.Document {
 	doc := &model.Document{
@@ -297,6 +357,38 @@ func (c *RemoteClient) parseDocumentData(data map[string]interface{}) *model.Doc
 	}
 	if deleted, ok := data["_deleted"].(bool); ok {
 		doc.Deleted = deleted
+	}
+	if attachments, ok := data["_attachments"].(map[string]interface{}); ok {
+		doc.Attachments = make(map[string]*model.Attachment)
+		for name, attData := range attachments {
+			attMap, ok := attData.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			att := &model.Attachment{}
+			if v, ok := attMap["content_type"].(string); ok {
+				att.ContentType = v
+			}
+			if v, ok := attMap["length"].(float64); ok {
+				att.Length = int64(v)
+			}
+			if v, ok := attMap["stub"].(bool); ok {
+				att.Stub = v
+			}
+			if v, ok := attMap["digest"].(string); ok {
+				att.Digest = v
+			}
+			if v, ok := attMap["revpos"].(float64); ok {
+				att.Revpos = int(v)
+			}
+			if v, ok := attMap["data"].(string); ok {
+				att.Data = v
+			}
+			if v, ok := attMap["encoding"].(string); ok {
+				att.Encoding = v
+			}
+			doc.Attachments[name] = att
+		}
 	}
 	return doc
 }
@@ -326,7 +418,25 @@ func (c *RemoteClient) BulkDocs(ctx context.Context, docs []*model.Document, new
 		NewEdits: newEdits,
 	}
 
-	resp, err := c.do(ctx, http.MethodPost, "/_bulk_docs", req)
+	var bodyBuf bytes.Buffer
+	if err := json.NewEncoder(&bodyBuf).Encode(req); err != nil {
+		return err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/_bulk_docs", &bodyBuf)
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Couch-Full-Commit", "false")
+	for k, v := range c.customHeaders {
+		httpReq.Header.Set(k, v)
+	}
+	if c.username != "" {
+		httpReq.SetBasicAuth(c.username, c.password)
+	}
+
+	resp, err := c.client.Do(httpReq)
 	if err != nil {
 		return err
 	}
@@ -346,6 +456,21 @@ func (c *RemoteClient) CreateDB(ctx context.Context) error {
 	_ = resp.Body.Close()
 	if resp.StatusCode >= 400 && resp.StatusCode != http.StatusPreconditionFailed {
 		return fmt.Errorf("PUT db returned status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// EnsureFullCommit calls the CouchDB _ensure_full_commit endpoint to flush
+// pending writes to stable storage after each replication batch.
+func (c *RemoteClient) EnsureFullCommit(ctx context.Context) error {
+	resp, err := c.do(ctx, http.MethodPost, "/_ensure_full_commit", map[string]interface{}{})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("POST _ensure_full_commit returned status %d: %s", resp.StatusCode, body)
 	}
 	return nil
 }

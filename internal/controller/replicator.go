@@ -2,9 +2,12 @@ package controller
 
 import (
 	"context"
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
+	"sort"
 	"time"
 
 	"github.com/goydb/goydb/pkg/model"
@@ -23,17 +26,56 @@ type Replicator struct {
 	RepID        string // unique replication ID
 }
 
-// replicationID generates a deterministic replication ID from source+target
-func replicationID(source, target string) string {
-	h := md5.New()
-	h.Write([]byte(source))
-	h.Write([]byte(target))
+// writeEndpoint writes a URL and its sorted key=value header pairs into h,
+// mirroring the reference replicator's endpoint contribution to the rep ID.
+func writeEndpoint(h io.Writer, rawURL string, headers map[string]string) {
+	io.WriteString(h, rawURL) //nolint:errcheck
+	io.WriteString(h, "|")   //nolint:errcheck
+	keys := make([]string, 0, len(headers))
+	for k := range headers {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		io.WriteString(h, k)          //nolint:errcheck
+		io.WriteString(h, "|")        //nolint:errcheck
+		io.WriteString(h, headers[k]) //nolint:errcheck
+		io.WriteString(h, "|")        //nolint:errcheck
+	}
+}
+
+// replicationID generates a deterministic replication ID from source, target,
+// their custom headers, and job flags so that one-shot and continuous jobs to
+// the same endpoints produce distinct checkpoint documents, and jobs with
+// different auth headers do not share checkpoints.
+func replicationID(source string, sourceHeaders map[string]string,
+	target string, targetHeaders map[string]string,
+	continuous, createTarget bool) string {
+	h := sha256.New()
+	writeEndpoint(h, source, sourceHeaders)
+	io.WriteString(h, "|") //nolint:errcheck
+	writeEndpoint(h, target, targetHeaders)
+	io.WriteString(h, "|") //nolint:errcheck
+	if createTarget {
+		io.WriteString(h, "T") //nolint:errcheck
+	} else {
+		io.WriteString(h, "F") //nolint:errcheck
+	}
+	if continuous {
+		io.WriteString(h, "T") //nolint:errcheck
+	} else {
+		io.WriteString(h, "F") //nolint:errcheck
+	}
 	return hex.EncodeToString(h.Sum(nil))
 }
 
 // NewReplicator creates a new Replicator
 func NewReplicator(source, target port.ReplicationPeer, repDoc *model.ReplicationDoc, logger port.Logger) *Replicator {
-	repID := replicationID(repDoc.Source, repDoc.Target)
+	repID := replicationID(
+		repDoc.Source, repDoc.SourceHeaders,
+		repDoc.Target, repDoc.TargetHeaders,
+		repDoc.Continuous, repDoc.CreateTarget,
+	)
 	return &Replicator{
 		Source:       source,
 		Target:       target,
@@ -76,6 +118,7 @@ func (r *Replicator) Run(ctx context.Context) (*model.ReplicationResult, error) 
 		default:
 		}
 
+		startSince := since
 		batchResult, newSince, pending, err := r.replicateBatch(ctx, since)
 		if err != nil {
 			r.Logger.Errorf(ctx, "batch replication failed", "error", err, "docs_read", result.DocsRead, "docs_written", result.DocsWritten)
@@ -84,6 +127,8 @@ func (r *Replicator) Run(ctx context.Context) (*model.ReplicationResult, error) 
 
 		result.DocsRead += batchResult.DocsRead
 		result.DocsWritten += batchResult.DocsWritten
+		result.MissingFound += batchResult.MissingFound
+		result.MissingChecked += batchResult.MissingChecked
 
 		if batchResult.DocsWritten > 0 {
 			r.Logger.Infof(ctx, "batch completed", "docs_read", batchResult.DocsRead, "docs_written", batchResult.DocsWritten, "pending", pending)
@@ -92,7 +137,7 @@ func (r *Replicator) Run(ctx context.Context) (*model.ReplicationResult, error) 
 		if newSince != since && newSince != "" {
 			since = newSince
 			// Save checkpoint after each batch
-			r.saveCheckpoint(ctx, since, sessionID, result)
+			r.saveCheckpoint(ctx, since, startSince, sessionID, result, batchResult)
 			r.Logger.Debugf(ctx, "checkpoint saved", "since", since)
 		}
 
@@ -152,78 +197,106 @@ func (r *Replicator) checkpointDocID() string {
 	return r.RepID
 }
 
+// unmarshalHistory extracts the history array from a checkpoint document's Data map.
+func unmarshalHistory(data map[string]interface{}) []model.ReplicationCheckpointHist {
+	raw, ok := data["history"]
+	if !ok {
+		return nil
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var h []model.ReplicationCheckpointHist
+	_ = json.Unmarshal(b, &h)
+	return h
+}
+
 func (r *Replicator) loadCheckpoint(ctx context.Context) string {
 	docID := r.checkpointDocID()
 
-	// Try source checkpoint
-	doc, err := r.Source.GetLocalDoc(ctx, docID)
-	if err != nil || doc == nil {
+	sDoc, err := r.Source.GetLocalDoc(ctx, docID)
+	if err != nil || sDoc == nil {
 		return ""
 	}
-
-	sourceSeq, _ := doc.Data["source_last_seq"].(string)
-	if sourceSeq == "" {
-		return ""
-	}
-
-	// Verify target has matching checkpoint
 	tDoc, err := r.Target.GetLocalDoc(ctx, docID)
 	if err != nil || tDoc == nil {
 		return ""
 	}
 
-	targetSeq, _ := tDoc.Data["source_last_seq"].(string)
-	sessionSource, _ := doc.Data["session_id"].(string)
-	sessionTarget, _ := tDoc.Data["session_id"].(string)
+	srcSeq, _ := sDoc.Data["source_last_seq"].(string)
+	srcSID, _ := sDoc.Data["session_id"].(string)
+	tgtSID, _ := tDoc.Data["session_id"].(string)
 
-	if sourceSeq == targetSeq && sessionSource == sessionTarget {
-		return sourceSeq
+	// Fast path: top-level session IDs agree.
+	if srcSID == tgtSID && srcSeq != "" {
+		return srcSeq
 	}
 
-	return ""
+	// Slow path: search history arrays for a common session_id.
+	srcHist := unmarshalHistory(sDoc.Data)
+	tgtHist := unmarshalHistory(tDoc.Data)
+	for _, sl := range srcHist {
+		for _, tl := range tgtHist {
+			if sl.SessionID == tl.SessionID && sl.RecordedSeq != "" {
+				return sl.RecordedSeq
+			}
+		}
+	}
+
+	return "" // no common ancestry; full replication
 }
 
-func (r *Replicator) saveCheckpoint(ctx context.Context, since, sessionID string, result *model.ReplicationResult) {
+func (r *Replicator) saveCheckpoint(ctx context.Context, since, startSince, sessionID string, result *model.ReplicationResult, batch *batchResult) {
 	docID := r.checkpointDocID()
+	now := time.Now()
 
-	data := map[string]interface{}{
-		"source_last_seq": since,
-		"session_id":      sessionID,
-		"history": []map[string]interface{}{
-			{
-				"session_id":      sessionID,
-				"source_last_seq": since,
-				"docs_read":       result.DocsRead,
-				"docs_written":    result.DocsWritten,
-				"start_time":      result.StartTime.Format(time.RFC3339),
-				"end_time":        time.Now().Format(time.RFC3339),
-			},
-		},
+	newEntry := model.ReplicationCheckpointHist{
+		SessionID:        sessionID,
+		StartLastSeq:     startSince,
+		EndLastSeq:       since,
+		RecordedSeq:      since,
+		SourceLastSeq:    since,
+		DocsRead:         result.DocsRead,
+		DocsWritten:      result.DocsWritten,
+		DocWriteFailures: result.DocWriteFailures,
+		MissingFound:     result.MissingFound,
+		MissingChecked:   result.MissingChecked,
+		StartTime:        result.StartTime.Format(time.RFC3339),
+		EndTime:          now.Format(time.RFC3339),
 	}
 
 	saveToOnePeer := func(peer port.ReplicationPeer) {
 		fullID := string(model.LocalDocPrefix) + docID
-		// Try to read existing doc to get rev
-		existing, err := peer.GetLocalDoc(ctx, docID)
-		// Make a copy of data for this peer
-		peerData := make(map[string]interface{}, len(data))
-		for k, v := range data {
-			peerData[k] = v
+		existing, _ := peer.GetLocalDoc(ctx, docID)
+
+		cp := model.ReplicationCheckpoint{
+			ReplicationIDVersion: 3,
+			SessionID:            sessionID,
+			SourceLastSeq:        since,
 		}
-		doc := &model.Document{
-			ID:   fullID,
-			Data: peerData,
+		// Preserve existing history and append new entry.
+		if existing != nil {
+			if raw, ok := existing.Data["history"]; ok {
+				if b, err := json.Marshal(raw); err == nil {
+					_ = json.Unmarshal(b, &cp.History)
+				}
+			}
 		}
-		if err == nil && existing != nil {
+		cp.History = append(cp.History, newEntry)
+
+		cpData, _ := json.Marshal(cp)
+		var m map[string]interface{}
+		_ = json.Unmarshal(cpData, &m)
+		m["_id"] = fullID
+		if existing != nil && existing.Rev != "" {
+			m["_rev"] = existing.Rev
+		}
+		doc := &model.Document{ID: fullID, Data: m}
+		if existing != nil {
 			doc.Rev = existing.Rev
 		}
-		peerData["_id"] = doc.ID
-		if doc.Rev != "" {
-			peerData["_rev"] = doc.Rev
-		}
-
-		err = peer.PutLocalDoc(ctx, doc)
-		if err != nil {
+		if err := peer.PutLocalDoc(ctx, doc); err != nil {
 			r.Logger.Warnf(ctx, "checkpoint save failed", "error", err)
 		}
 	}
@@ -233,9 +306,12 @@ func (r *Replicator) saveCheckpoint(ctx context.Context, since, sessionID string
 }
 
 type batchResult struct {
-	DocsRead    int
-	DocsWritten int
-	changes     []model.ChangeResult
+	DocsRead         int
+	DocsWritten      int
+	DocWriteFailures int
+	MissingFound     int
+	MissingChecked   int
+	changes          []model.ChangeResult
 }
 
 func (r *Replicator) replicateBatch(ctx context.Context, since string) (*batchResult, string, int, error) {
@@ -271,34 +347,29 @@ func (r *Replicator) replicateBatch(ctx context.Context, since string) (*batchRe
 	if len(revsMap) == 0 {
 		return br, changesResp.LastSeq, changesResp.Pending, nil
 	}
+	br.MissingFound = len(revsMap)
 
 	// Find missing revisions on target
 	missing, err := r.Target.RevsDiff(ctx, revsMap)
 	if err != nil {
 		return br, since, 0, fmt.Errorf("failed to get revs diff: %w", err)
 	}
+	br.MissingChecked = len(missing)
 
 	if len(missing) == 0 {
 		return br, changesResp.LastSeq, changesResp.Pending, nil
 	}
 
-	// Fetch missing docs from source
-	var docs []*model.Document
+	// Fetch missing docs from source in a single batch request
+	var requests []port.BulkGetRequest
 	for docID, diff := range missing {
-		select {
-		case <-ctx.Done():
-			return br, since, 0, ctx.Err()
-		default:
-		}
-
-		doc, err := r.Source.GetDoc(ctx, docID, true, diff.Missing)
-		if err != nil {
-			r.Logger.Warnf(ctx, "failed to get doc", "docID", docID, "error", err)
-			continue
-		}
-		br.DocsRead++
-		docs = append(docs, doc)
+		requests = append(requests, port.BulkGetRequest{ID: docID, Revs: diff.Missing})
 	}
+	docs, err := r.Source.BulkGet(ctx, requests)
+	if err != nil {
+		return br, since, 0, fmt.Errorf("failed to bulk-get docs from source: %w", err)
+	}
+	br.DocsRead = len(docs)
 
 	if len(docs) == 0 {
 		return br, changesResp.LastSeq, changesResp.Pending, nil
@@ -310,6 +381,11 @@ func (r *Replicator) replicateBatch(ctx context.Context, since string) (*batchRe
 		return br, since, 0, fmt.Errorf("failed to write docs to target: %w", err)
 	}
 	br.DocsWritten = len(docs)
+
+	// Ensure writes are durable (CouchDB protocol step 5).
+	if err := r.Target.EnsureFullCommit(ctx); err != nil {
+		r.Logger.Warnf(ctx, "ensure_full_commit failed", "error", err)
+	}
 
 	return br, changesResp.LastSeq, changesResp.Pending, nil
 }

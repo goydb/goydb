@@ -109,17 +109,24 @@ func ParseReplicationDoc(doc *Document) (*ReplicationDoc, error) {
 
 // ReplicationCheckpoint stores replication progress
 type ReplicationCheckpoint struct {
-	SourceLastSeq string                      `json:"source_last_seq"`
-	SessionID     string                      `json:"session_id"`
-	History       []ReplicationCheckpointHist `json:"history"`
+	ReplicationIDVersion int                         `json:"replication_id_version"`
+	SourceLastSeq        string                      `json:"source_last_seq"`
+	SessionID            string                      `json:"session_id"`
+	History              []ReplicationCheckpointHist `json:"history"`
 }
 
 // ReplicationCheckpointHist is a history entry in a checkpoint
 type ReplicationCheckpointHist struct {
-	SessionID     string `json:"session_id"`
-	SourceLastSeq string `json:"source_last_seq"`
-	DocsRead      int    `json:"docs_read"`
-	DocsWritten   int    `json:"docs_written"`
-	StartTime     string `json:"start_time"`
-	EndTime       string `json:"end_time"`
+	SessionID       string `json:"session_id"`
+	SourceLastSeq   string `json:"source_last_seq"`
+	DocsRead        int    `json:"docs_read"`
+	DocsWritten     int    `json:"docs_written"`
+	DocWriteFailures int   `json:"doc_write_failures"`
+	MissingFound    int    `json:"missing_found"`
+	MissingChecked  int    `json:"missing_checked"`
+	StartLastSeq    string `json:"start_last_seq"`
+	EndLastSeq      string `json:"end_last_seq"`
+	RecordedSeq     string `json:"recorded_seq"`
+	StartTime       string `json:"start_time"`
+	EndTime         string `json:"end_time"`
 }

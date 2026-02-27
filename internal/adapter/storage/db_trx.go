@@ -2,11 +2,15 @@ package storage
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/md5"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"slices"
 	"strconv"
 
@@ -276,6 +280,54 @@ func (tx *Transaction) PutDocumentForReplication(ctx context.Context, doc *model
 	// can chain from it.
 	if len(doc.RevHistory) == 0 && doc.Rev != "" {
 		doc.RevHistory = []string{doc.Rev}
+	}
+
+	// Handle inline attachment data (base64-encoded) carried by the replicator.
+	// Decode the data, write the blob to disk, update ref-counts, and replace
+	// the inline entry with a proper stub before storing the document.
+	for name, att := range doc.Attachments {
+		if att == nil || att.Data == "" {
+			continue
+		}
+		raw, err := base64.StdEncoding.DecodeString(att.Data)
+		if err != nil {
+			return fmt.Errorf("invalid base64 attachment data for %q: %w", name, err)
+		}
+		if att.Encoding == "gzip" {
+			gr, err := gzip.NewReader(bytes.NewReader(raw))
+			if err != nil {
+				return fmt.Errorf("gzip open for attachment %q: %w", name, err)
+			}
+			raw, err = io.ReadAll(gr)
+			_ = gr.Close()
+			if err != nil {
+				return fmt.Errorf("gzip decompress attachment %q: %w", name, err)
+			}
+			att.Encoding = "" // store uncompressed; goydb has no gzip storage layer
+		}
+		// Compute content-addressed digest.
+		sum := md5.New()
+		sum.Write(raw)
+		digest := hex.EncodeToString(sum.Sum(nil))
+		// Write blob to the content-addressed filesystem location.
+		if err := os.MkdirAll(tx.Database.blobDir(digest), 0755); err != nil {
+			return fmt.Errorf("mkdir for attachment %q: %w", name, err)
+		}
+		blobDest := tx.Database.blobPath(digest)
+		if _, statErr := os.Stat(blobDest); os.IsNotExist(statErr) {
+			if err := os.WriteFile(blobDest, raw, 0644); err != nil {
+				return fmt.Errorf("write attachment blob %q: %w", name, err)
+			}
+		}
+		// Track the reference count within the transaction.
+		if err := incAttRef(tx, digest); err != nil {
+			return err
+		}
+		// Replace inline entry with a stub.
+		att.Data = ""
+		att.Digest = digest
+		att.Length = int64(len(raw))
+		att.Stub = true
 	}
 
 	// Build the leaf set in memory.
