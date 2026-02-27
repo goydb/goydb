@@ -18,8 +18,7 @@ func (d *Database) Changes(ctx context.Context, options *model.ChangesOptions) (
 
 start:
 	if options.SinceNow() || wait { // wait for new database changes
-		wait := make(chan struct{})
-		defer close(wait)
+		wait := make(chan struct{}, 1) // buffered: both timer and listener may send; no close to avoid send-on-closed panic
 		t := time.AfterFunc(options.Timeout, func() { wait <- struct{}{} })
 		err := d.AddListener(ctx, port.ChangeListenerFunc(func(ctx context.Context, doc *model.Document) error {
 			options.Since = strconv.FormatInt(int64(doc.LocalSeq-1), 10)
