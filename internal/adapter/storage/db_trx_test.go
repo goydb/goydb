@@ -363,6 +363,150 @@ func TestGetDocument_HasRevisionCoversAllBranches(t *testing.T) {
 	assert.True(t, doc.HasRevision("1-zzz"))
 }
 
+func TestGetDocument_LocalDoc(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	// Store a _local document.
+	rev, err := db.PutDocument(ctx, &model.Document{
+		ID:   "_local/test-checkpoint",
+		Data: map[string]interface{}{"last_seq": "42"},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, rev)
+
+	// GET must succeed — _local docs don't participate in the changes feed,
+	// so LocalSeq must be skipped.
+	doc, err := db.GetDocument(ctx, "_local/test-checkpoint")
+	require.NoError(t, err)
+	require.NotNil(t, doc)
+	assert.Equal(t, "42", doc.Data["last_seq"])
+}
+
+func TestPutDocument_LocalDoc_Uses0NRevisionScheme(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	// First PUT should return "0-1".
+	rev1, err := db.PutDocument(ctx, &model.Document{
+		ID:   "_local/ck1",
+		Data: map[string]interface{}{"x": 1},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "0-1", rev1)
+
+	// Second PUT should return "0-2".
+	rev2, err := db.PutDocument(ctx, &model.Document{
+		ID:   "_local/ck1",
+		Rev:  rev1,
+		Data: map[string]interface{}{"x": 2},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "0-2", rev2)
+
+	// Third PUT should return "0-3".
+	rev3, err := db.PutDocument(ctx, &model.Document{
+		ID:   "_local/ck1",
+		Rev:  rev2,
+		Data: map[string]interface{}{"x": 3},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "0-3", rev3)
+
+	// GET returns the correct rev.
+	doc, err := db.GetDocument(ctx, "_local/ck1")
+	require.NoError(t, err)
+	require.NotNil(t, doc)
+	assert.Equal(t, "0-3", doc.Rev)
+}
+
+func TestPutDocument_LocalDoc_NoRevHistory(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	rev, err := db.PutDocument(ctx, &model.Document{
+		ID:   "_local/ck1",
+		Data: map[string]interface{}{"x": 1},
+	})
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "_local/ck1",
+		Rev:  rev,
+		Data: map[string]interface{}{"x": 2},
+	})
+	require.NoError(t, err)
+
+	doc, err := db.GetDocument(ctx, "_local/ck1")
+	require.NoError(t, err)
+	require.NotNil(t, doc)
+	// _local docs should not have RevHistory.
+	assert.Empty(t, doc.RevHistory)
+}
+
+func TestPutDocument_LocalDoc_NoLeaves(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "_local/ck1",
+		Data: map[string]interface{}{"x": 1},
+	})
+	require.NoError(t, err)
+
+	// _local docs should not have doc_leaves entries.
+	leaves, err := db.GetLeaves(ctx, "_local/ck1")
+	require.NoError(t, err)
+	assert.Empty(t, leaves)
+}
+
+func TestPutDocument_LocalDoc_ConflictCheck(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	rev, err := db.PutDocument(ctx, &model.Document{
+		ID:   "_local/ck1",
+		Data: map[string]interface{}{"x": 1},
+	})
+	require.NoError(t, err)
+
+	// Updating with the wrong rev should fail.
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "_local/ck1",
+		Rev:  "0-999",
+		Data: map[string]interface{}{"x": 2},
+	})
+	assert.Error(t, err)
+
+	// Updating with the correct rev should succeed.
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "_local/ck1",
+		Rev:  rev,
+		Data: map[string]interface{}{"x": 2},
+	})
+	require.NoError(t, err)
+}
+
 func TestDeleteDocument_ConflictLeaf(t *testing.T) {
 	s, cleanup := openStorage(t)
 	defer cleanup()

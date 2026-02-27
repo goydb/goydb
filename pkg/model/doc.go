@@ -188,6 +188,18 @@ func (doc Document) Revisions() Revisions {
 	}
 }
 
+func (doc Document) NextLocalRevision() string {
+	if doc.Rev == "" {
+		return "0-1"
+	}
+	parts := strings.SplitN(doc.Rev, "-", 2)
+	if len(parts) == 2 && parts[0] == "0" {
+		n, _ := strconv.Atoi(parts[1])
+		return "0-" + strconv.Itoa(n+1)
+	}
+	return "0-1" // migration from content-hash rev
+}
+
 func (doc Document) NextSequenceRevision() int {
 	rev, ok := doc.Revision()
 	if !ok {

@@ -123,6 +123,21 @@ func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (re
 		}
 	}
 
+	if doc.IsLocalDoc() {
+		// _local docs use a simple 0-N revision scheme (no content hash).
+		// They don't participate in the changes feed, views, or replication
+		// conflict resolution, so we skip indices, RevHistory, and doc_leaves.
+		rev = doc.NextLocalRevision()
+		doc.Rev = rev
+
+		err = tx.PutRaw(ctx, []byte(doc.ID), doc)
+		if err != nil {
+			return
+		}
+
+		return
+	}
+
 	// find next sequences (rev, changes)
 	revSeq := doc.NextSequenceRevision()
 
@@ -209,9 +224,11 @@ func (tx *Transaction) GetDocument(ctx context.Context, docID string) (*model.Do
 	if len(doc.Attachments) > 0 {
 		doc.Data["_attachments"] = doc.Attachments
 	}
-	err = index.LocalSeq(ctx, tx.EngineWriteTransaction, &doc)
-	if err != nil {
-		return nil, err
+	if !doc.IsLocalDoc() {
+		err = index.LocalSeq(ctx, tx.EngineWriteTransaction, &doc)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Populate _conflicts and augment RevHistory from conflict branches.

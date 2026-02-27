@@ -56,3 +56,26 @@ func TestWinnerRev_TieBreakerHash(t *testing.T) {
 func TestWinnerRev_Single(t *testing.T) {
 	assert.Equal(t, "3-xyz", WinnerRev([]string{"3-xyz"}))
 }
+
+func TestNextLocalRevision_EmptyRev(t *testing.T) {
+	doc := Document{}
+	assert.Equal(t, "0-1", doc.NextLocalRevision())
+}
+
+func TestNextLocalRevision_Increment(t *testing.T) {
+	doc := Document{Rev: "0-1"}
+	assert.Equal(t, "0-2", doc.NextLocalRevision())
+
+	doc.Rev = "0-5"
+	assert.Equal(t, "0-6", doc.NextLocalRevision())
+
+	doc.Rev = "0-99"
+	assert.Equal(t, "0-100", doc.NextLocalRevision())
+}
+
+func TestNextLocalRevision_MigrationFromContentHash(t *testing.T) {
+	// A _local doc that was stored with the old content-hash scheme
+	// should migrate to "0-1" on next write.
+	doc := Document{Rev: "1-abc123"}
+	assert.Equal(t, "0-1", doc.NextLocalRevision())
+}
