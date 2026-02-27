@@ -68,8 +68,35 @@ func (s *DBDocsAll) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	q.Limit = intOption("limit", 0, options)
 	q.SkipLocal = !s.Local
 	if s.Local {
-		q.StartKey = string(model.LocalDocPrefix)
-		q.EndKey = string(model.LocalDocPrefix) + "香"
+		localStart := string(model.LocalDocPrefix)
+		localEnd := string(model.LocalDocPrefix) + "香"
+
+		q.StartKey = strings.ReplaceAll(stringOption("startkey", "start_key", options), `"`, "")
+		if q.StartKey == "" {
+			q.StartKey = localStart
+		}
+		q.EndKey = strings.ReplaceAll(stringOption("endkey", "end_key", options), `"`, "")
+		if q.EndKey == "" {
+			q.EndKey = localEnd
+		}
+		if key := strings.ReplaceAll(stringOption("key", "key", options), `"`, ""); key != "" {
+			q.StartKey = key
+			q.EndKey = key
+		}
+		if !boolOption("inclusive_end", true, options) {
+			q.ExclusiveEnd = true
+		}
+		q.Descending = boolOption("descending", false, options)
+		if q.Descending {
+			// CouchDB convention: in descending mode the default start is the
+			// high end and the default end is the low end.
+			userStart := stringOption("startkey", "start_key", options)
+			userEnd := stringOption("endkey", "end_key", options)
+			if userStart == "" && userEnd == "" {
+				q.StartKey = localEnd
+				q.EndKey = localStart
+			}
+		}
 	} else {
 		q.StartKey = strings.ReplaceAll(stringOption("startkey", "start_key", options), `"`, "")
 		q.EndKey = strings.ReplaceAll(stringOption("endkey", "end_key", options), `"`, "")
@@ -89,31 +116,54 @@ func (s *DBDocsAll) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := AllDocsResponse{
-		TotalRows: total,
-		Rows:      make([]Rows, len(docs)),
-	}
-
+	rows := make([]Rows, len(docs))
 	for i, doc := range docs {
-		response.Rows[i].ID = doc.ID
-		response.Rows[i].Key = doc.Key
-		response.Rows[i].Value = Value{Rev: doc.Rev}
-		response.Rows[i].Doc = doc.Data
-		if response.Rows[i].Doc == nil {
-			response.Rows[i].Doc = make(map[string]interface{})
+		rows[i].ID = doc.ID
+		rows[i].Key = doc.Key
+		rows[i].Value = Value{Rev: doc.Rev}
+		rows[i].Doc = doc.Data
+		if rows[i].Doc == nil {
+			rows[i].Doc = make(map[string]interface{})
 		}
-		response.Rows[i].Doc["_id"] = doc.ID
-		response.Rows[i].Doc["_rev"] = doc.Rev
+		rows[i].Doc["_id"] = doc.ID
+		rows[i].Doc["_rev"] = doc.Rev
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response) // nolint: errcheck
+	if s.Local {
+		// CouchDB returns total_rows: null and offset: null for _local_docs.
+		response := LocalDocsResponse{
+			Rows: rows,
+		}
+		if boolOption("update_seq", false, options) {
+			// For _local_docs update_seq is always 0 (local docs don't
+			// participate in the changes feed).
+			response.UpdateSeq = json.RawMessage("0")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response) // nolint: errcheck
+	} else {
+		response := AllDocsResponse{
+			TotalRows: total,
+			Rows:      rows,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response) // nolint: errcheck
+	}
 }
 
 type AllDocsResponse struct {
 	TotalRows int    `json:"total_rows"`
 	Offset    int    `json:"offset"`
 	Rows      []Rows `json:"rows"`
+}
+
+// LocalDocsResponse matches CouchDB's _local_docs response where total_rows
+// and offset are always JSON null.
+type LocalDocsResponse struct {
+	TotalRows *int             `json:"total_rows"`
+	Offset    *int             `json:"offset"`
+	Rows      []Rows           `json:"rows"`
+	UpdateSeq json.RawMessage  `json:"update_seq,omitempty"`
 }
 type Value struct {
 	Rev string `json:"rev"`

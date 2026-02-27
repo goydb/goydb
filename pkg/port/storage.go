@@ -14,6 +14,7 @@ type AllDocsQuery struct {
 	EndKey       string
 	SkipLocal    bool
 	ExclusiveEnd bool // true when inclusive_end=false
+	Descending   bool // reverse iteration order
 	// view options
 	DDFN            *model.DesignDocFn
 	IncludeDocs     bool

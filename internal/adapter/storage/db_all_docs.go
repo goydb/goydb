@@ -31,6 +31,9 @@ func (d *Database) AllDocs(ctx context.Context, query port.AllDocsQuery) ([]*mod
 		if query.ExclusiveEnd {
 			i.SetExclusiveEnd(true)
 		}
+		if query.Descending {
+			i.SetDescending(true)
+		}
 
 		for doc := i.First(); i.Continue(); doc = i.Next() {
 			// TODO: handle IncludeDocs
