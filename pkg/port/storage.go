@@ -39,6 +39,10 @@ type AllDocsQuery struct {
 	// ViewOmitSortedInfo when true omits total_rows and offset from the response.
 	// Corresponds to the CouchDB sorted=false query parameter.
 	ViewOmitSortedInfo bool
+	// StartKeyDocID filters view rows to doc.ID >= StartKeyDocID.
+	StartKeyDocID string
+	// EndKeyDocID filters view rows to doc.ID <= EndKeyDocID.
+	EndKeyDocID string
 }
 
 type Observer interface {

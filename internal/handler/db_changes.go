@@ -37,13 +37,17 @@ func (s *DBChanges) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	includeDocs := boolOption("include_docs", false, query)
 	options := model.ChangesOptions{
-		Since:     strings.ReplaceAll(query.Get("since"), `"`, ""),
-		Limit:     int(intOption("limit", 1000, query)),
-		Timeout:   durationOption("timeout", time.Millisecond, maxTimeout, query),
-		Heartbeat: durationOption("heartbeat", time.Millisecond, maxHeartbeat, query),
-		Filter:    query.Get("filter"),
-		View:      query.Get("view"),
+		Since:      strings.ReplaceAll(query.Get("since"), `"`, ""),
+		Limit:      int(intOption("limit", 1000, query)),
+		Timeout:    durationOption("timeout", time.Millisecond, maxTimeout, query),
+		Heartbeat:  durationOption("heartbeat", time.Millisecond, maxHeartbeat, query),
+		Filter:     query.Get("filter"),
+		View:       query.Get("view"),
+		Descending: boolOption("descending", false, query),
+		Style:      query.Get("style"),
 	}
+	// seq_interval, conflicts, attachments, att_encoding_info are accepted
+	// for CouchDB API compatibility.
 
 	if r.Method == "POST" {
 		var body struct {
@@ -100,6 +104,12 @@ func (s *DBChanges) handleNormalFeed(w http.ResponseWriter, r *http.Request, db 
 	// Apply all filters
 	changes = s.applyFilters(r.Context(), db, changes, options, r)
 
+	if options.Descending {
+		for i, j := 0, len(changes)-1; i < j; i, j = i+1, j-1 {
+			changes[i], changes[j] = changes[j], changes[i]
+		}
+	}
+
 	if includeDocs {
 		err := db.EnrichDocuments(r.Context(), changes)
 		if err != nil {
@@ -146,9 +156,18 @@ func (s *DBChanges) handleNormalFeed(w http.ResponseWriter, r *http.Request, db 
 			Seq:     strconv.FormatUint(doc.LocalSeq, 10),
 			ID:      doc.ID,
 			Deleted: doc.Deleted,
-			Changes: []Revisions{
-				{Rev: doc.Rev},
-			},
+		}
+		if options.Style == "all_docs" {
+			if leaves, err := db.GetLeaves(r.Context(), doc.ID); err == nil && len(leaves) > 0 {
+				cd.Changes = make([]Revisions, len(leaves))
+				for li, l := range leaves {
+					cd.Changes[li] = Revisions{Rev: l.Rev}
+				}
+			} else {
+				cd.Changes = []Revisions{{Rev: doc.Rev}}
+			}
+		} else {
+			cd.Changes = []Revisions{{Rev: doc.Rev}}
 		}
 		if includeDocs {
 			cd.Doc = doc.Data

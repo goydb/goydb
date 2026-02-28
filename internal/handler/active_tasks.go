@@ -44,8 +44,11 @@ func (s *ActiveTasks) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for _, task := range dbtasks {
 			// Map action to CouchDB-compatible type
 			taskType := "indexer"
-			if task.Action == model.ActionUpdateSearch {
+			switch task.Action {
+			case model.ActionUpdateSearch:
 				taskType = "search_indexer"
+			case model.ActionUpdateMango:
+				taskType = "indexer"
 			}
 
 			// Extract design document ID from DesignDocFn (format: "type:docname:fnname")

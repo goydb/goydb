@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
@@ -45,17 +44,7 @@ func (s *DBDocsAll) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					response.Rows[i] = Rows{Key: key, Error: "not_found"}
 					continue
 				}
-				response.Rows[i].ID = doc.ID
-				response.Rows[i].Key = doc.ID
-				response.Rows[i].Value = Value{Rev: doc.Rev}
-				if includeDocs {
-					response.Rows[i].Doc = doc.Data
-					if response.Rows[i].Doc == nil {
-						response.Rows[i].Doc = make(map[string]interface{})
-					}
-					response.Rows[i].Doc["_id"] = doc.ID
-					response.Rows[i].Doc["_rev"] = doc.Rev
-				}
+				response.Rows[i] = formatDocRow(doc, includeDocs)
 			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(response) // nolint: errcheck
@@ -71,20 +60,12 @@ func (s *DBDocsAll) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		localStart := string(model.LocalDocPrefix)
 		localEnd := string(model.LocalDocPrefix) + "香"
 
-		q.StartKey = strings.ReplaceAll(stringOption("startkey", "start_key", options), `"`, "")
+		parseDocKeyRange(&q, options)
 		if q.StartKey == "" {
 			q.StartKey = localStart
 		}
-		q.EndKey = strings.ReplaceAll(stringOption("endkey", "end_key", options), `"`, "")
 		if q.EndKey == "" {
 			q.EndKey = localEnd
-		}
-		if key := strings.ReplaceAll(stringOption("key", "key", options), `"`, ""); key != "" {
-			q.StartKey = key
-			q.EndKey = key
-		}
-		if !boolOption("inclusive_end", true, options) {
-			q.ExclusiveEnd = true
 		}
 		q.Descending = boolOption("descending", false, options)
 		if q.Descending {
@@ -98,15 +79,7 @@ func (s *DBDocsAll) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else {
-		q.StartKey = strings.ReplaceAll(stringOption("startkey", "start_key", options), `"`, "")
-		q.EndKey = strings.ReplaceAll(stringOption("endkey", "end_key", options), `"`, "")
-		if key := strings.ReplaceAll(stringOption("key", "key", options), `"`, ""); key != "" {
-			q.StartKey = key
-			q.EndKey = key
-		}
-		if !boolOption("inclusive_end", true, options) {
-			q.ExclusiveEnd = true
-		}
+		parseDocKeyRange(&q, options)
 	}
 	q.IncludeDocs = includeDocs
 
@@ -116,18 +89,7 @@ func (s *DBDocsAll) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows := make([]Rows, len(docs))
-	for i, doc := range docs {
-		rows[i].ID = doc.ID
-		rows[i].Key = doc.Key
-		rows[i].Value = Value{Rev: doc.Rev}
-		rows[i].Doc = doc.Data
-		if rows[i].Doc == nil {
-			rows[i].Doc = make(map[string]interface{})
-		}
-		rows[i].Doc["_id"] = doc.ID
-		rows[i].Doc["_rev"] = doc.Rev
-	}
+	rows := formatDocRows(docs, includeDocs)
 
 	if s.Local {
 		// CouchDB returns total_rows: null and offset: null for _local_docs.
@@ -146,24 +108,29 @@ func (s *DBDocsAll) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			TotalRows: total,
 			Rows:      rows,
 		}
+		if boolOption("update_seq", false, options) {
+			seq, _ := db.Sequence(r.Context())
+			response.UpdateSeq = json.RawMessage(`"` + seq + `"`)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(response) // nolint: errcheck
 	}
 }
 
 type AllDocsResponse struct {
-	TotalRows int    `json:"total_rows"`
-	Offset    int    `json:"offset"`
-	Rows      []Rows `json:"rows"`
+	TotalRows int             `json:"total_rows"`
+	Offset    int             `json:"offset"`
+	Rows      []Rows          `json:"rows"`
+	UpdateSeq json.RawMessage `json:"update_seq,omitempty"`
 }
 
 // LocalDocsResponse matches CouchDB's _local_docs response where total_rows
 // and offset are always JSON null.
 type LocalDocsResponse struct {
-	TotalRows *int             `json:"total_rows"`
-	Offset    *int             `json:"offset"`
-	Rows      []Rows           `json:"rows"`
-	UpdateSeq json.RawMessage  `json:"update_seq,omitempty"`
+	TotalRows *int            `json:"total_rows"`
+	Offset    *int            `json:"offset"`
+	Rows      []Rows          `json:"rows"`
+	UpdateSeq json.RawMessage `json:"update_seq,omitempty"`
 }
 type Value struct {
 	Rev string `json:"rev"`

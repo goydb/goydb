@@ -136,6 +136,13 @@ func (v DesignDoc) ReduceDocs(ctx context.Context, tx port.EngineReadTransaction
 			}
 		}
 
+		if opts.StartKeyDocID != "" && doc.ID < opts.StartKeyDocID {
+			continue
+		}
+		if opts.EndKeyDocID != "" && doc.ID > opts.EndKeyDocID {
+			continue
+		}
+
 		// Apply group / group_level key reduction before passing to the reducer.
 		// Map-only views (no ReduceFn) skip this: they preserve keys like reduce=false.
 		if view.ReduceFn != "" {

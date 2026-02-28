@@ -47,6 +47,10 @@ func (s *DBDocPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	query := r.URL.Query()
+	batch := query.Get("batch") == "ok"
+	newEdits := query.Get("new_edits") != "false"
+
 	docID := resolveDocID(doc, r)
 	if docID == "" {
 		WriteError(w, http.StatusBadRequest, "missing _id")
@@ -80,12 +84,24 @@ func (s *DBDocPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rev, err := db.PutDocument(r.Context(), &model.Document{
+	mdoc := &model.Document{
 		ID:          docID,
 		Data:        doc,
 		Deleted:     isTruthy(doc["_deleted"]),
 		Attachments: attachments,
-	})
+	}
+
+	var rev string
+	if !newEdits {
+		// new_edits=false: store with the supplied rev (replication mode).
+		if r, _ := doc["_rev"].(string); r != "" {
+			mdoc.Rev = r
+		}
+		err = db.PutDocumentForReplication(r.Context(), mdoc)
+		rev = mdoc.Rev
+	} else {
+		rev, err = db.PutDocument(r.Context(), mdoc)
+	}
 	if errors.Is(err, storage.ErrConflict) {
 		WriteError(w, http.StatusConflict, err.Error())
 		return
@@ -114,8 +130,12 @@ func (s *DBDocPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	status := http.StatusCreated
+	if batch {
+		status = http.StatusAccepted
+	}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
+	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]interface{}{ // nolint: errcheck
 		"ok":  true,
 		"id":  docID,

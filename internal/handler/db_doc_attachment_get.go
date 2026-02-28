@@ -1,10 +1,11 @@
 package handler
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/pkg/model"
@@ -36,6 +37,10 @@ func (s *DBDocAttachmentGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	attachment := mux.Vars(r)["attachment"]
 
+	// The rev query parameter is accepted for CouchDB compatibility.
+	// In this implementation attachments are content-addressed, so
+	// we always serve the winner's attachment.
+
 	a, err := db.GetAttachment(r.Context(), docID, attachment)
 	if err != nil {
 		WriteError(w, http.StatusNotFound, err.Error())
@@ -45,6 +50,12 @@ func (s *DBDocAttachmentGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", a.ContentType)
 	w.Header().Set("ETag", fmt.Sprintf(`"md5-%s"`, a.Digest))
-	w.Header().Set("Content-Length", strconv.FormatInt(a.Length, 10))
-	io.Copy(w, a.Reader) // nolint: errcheck
+
+	// Use http.ServeContent to support Range requests (206 Partial Content).
+	data, err := io.ReadAll(a.Reader)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	http.ServeContent(w, r, attachment, time.Time{}, bytes.NewReader(data))
 }

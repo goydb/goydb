@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
@@ -54,20 +53,7 @@ func (s *DBLocalDocsQueries) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		rows := make([]Rows, len(docs))
-		for j, doc := range docs {
-			rows[j].ID = doc.ID
-			rows[j].Key = doc.Key
-			rows[j].Value = Value{Rev: doc.Rev}
-			if q.IncludeDocs {
-				rows[j].Doc = doc.Data
-				if rows[j].Doc == nil {
-					rows[j].Doc = make(map[string]interface{})
-				}
-				rows[j].Doc["_id"] = doc.ID
-				rows[j].Doc["_rev"] = doc.Rev
-			}
-		}
+		rows := formatDocRows(docs, q.IncludeDocs)
 		results[i] = queryResult{Rows: rows}
 	}
 
@@ -104,20 +90,12 @@ func buildLocalDocsQuery(qm map[string]interface{}) port.AllDocsQuery {
 	q.Limit = intOption("limit", 0, opts)
 	q.IncludeDocs = boolOption("include_docs", false, opts)
 
-	q.StartKey = strings.ReplaceAll(stringOption("startkey", "start_key", opts), `"`, "")
+	parseDocKeyRange(&q, opts)
 	if q.StartKey == "" {
 		q.StartKey = localStart
 	}
-	q.EndKey = strings.ReplaceAll(stringOption("endkey", "end_key", opts), `"`, "")
 	if q.EndKey == "" {
 		q.EndKey = localEnd
-	}
-	if key := strings.ReplaceAll(stringOption("key", "key", opts), `"`, ""); key != "" {
-		q.StartKey = key
-		q.EndKey = key
-	}
-	if !boolOption("inclusive_end", true, opts) {
-		q.ExclusiveEnd = true
 	}
 	q.Descending = boolOption("descending", false, opts)
 	if q.Descending {

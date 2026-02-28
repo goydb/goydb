@@ -435,3 +435,57 @@ func TestPutDoc_LocalDocPrefix(t *testing.T) {
 	assert.Equal(t, true, result["ok"])
 	assert.Equal(t, "_local/checkpoint1", result["id"])
 }
+
+// ---------------------------------------------------------------------------
+// batch=ok and new_edits tests
+// ---------------------------------------------------------------------------
+
+func TestPutDoc_BatchOk(t *testing.T) {
+	s, router, cleanup := setupRevsDiffTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	_, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	b, _ := json.Marshal(map[string]interface{}{"_id": "doc1", "hello": "world"})
+	req := httptest.NewRequest("PUT", "/testdb/doc1?batch=ok", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusAccepted, w.Code)
+	var result map[string]interface{}
+	_ = json.NewDecoder(w.Body).Decode(&result)
+	assert.Equal(t, true, result["ok"])
+	assert.Equal(t, "doc1", result["id"])
+	assert.NotEmpty(t, result["rev"])
+}
+
+func TestPutDoc_NewEditsFalse(t *testing.T) {
+	s, router, cleanup := setupRevsDiffTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	_, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	b, _ := json.Marshal(map[string]interface{}{
+		"_id":  "doc1",
+		"_rev": "1-abc",
+		"data": "replicated",
+	})
+	req := httptest.NewRequest("PUT", "/testdb/doc1?new_edits=false", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+	var result map[string]interface{}
+	_ = json.NewDecoder(w.Body).Decode(&result)
+	assert.Equal(t, true, result["ok"])
+	assert.Equal(t, "doc1", result["id"])
+	assert.Equal(t, "1-abc", result["rev"])
+}

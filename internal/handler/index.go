@@ -16,7 +16,16 @@ func (s *Index) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		GitSha:  "master",
 		UUID:    "0dbc95c8-4208-11eb-ad76-00155d4c9c92",
 		Features: []string{
+			"access-ready",
+			"bleve",
+			"goja",
+			"nouveau",
+			"partitioned",
+			"pluggable-storage-engines",
+			"reshard",
+			"scheduler",
 			"search",
+			"tengo",
 		},
 		Vendor: Vendor{
 			Name: "goydb",

@@ -3,12 +3,14 @@ package model
 import "time"
 
 type ChangesOptions struct {
-	Since     string
-	Limit     int
-	Timeout   time.Duration
-	Heartbeat time.Duration
-	DocIDs    []string
-	Feed      string // "normal", "longpoll", "continuous", "eventsource"
+	Since      string
+	Limit      int
+	Timeout    time.Duration
+	Heartbeat  time.Duration
+	DocIDs     []string
+	Feed       string // "normal", "longpoll", "continuous", "eventsource"
+	Descending bool
+	Style      string // "main_only" (default) or "all_docs"
 
 	// Filter fields
 	Filter   string                 // Filter type: "_selector", "_view", "_design/ddoc/filtername"

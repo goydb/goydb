@@ -238,3 +238,145 @@ func TestSchedulerJobs_MultipleJobs(t *testing.T) {
 	assert.Equal(t, "running", byID["job-b"].Status)
 	assert.Equal(t, "crashing", byID["job-c"].Status)
 }
+
+// TestSchedulerJobs_HistoryAndInfo verifies that jobs include history entries
+// and info fields.
+func TestSchedulerJobs_HistoryAndInfo(t *testing.T) {
+	s, router, cleanup := setupRevsDiffTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	db, err := s.CreateDatabase(ctx, "_replicator")
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID: "myjob",
+		Data: map[string]interface{}{
+			"source":                          "http://source/db",
+			"target":                          "http://target/db",
+			"_replication_state":              "error",
+			"_replication_state_reason":       "db_not_found",
+			"_replication_state_time":         "2024-06-01T12:00:00Z",
+			"_replication_consecutive_fails":  float64(3),
+		},
+	})
+	require.NoError(t, err)
+
+	resp := getSchedulerJobs(t, router)
+	require.Len(t, resp.Jobs, 1)
+
+	job := resp.Jobs[0]
+	assert.Equal(t, "crashing", job.Status)
+	assert.Equal(t, 3, job.ErrorCount)
+	assert.NotEmpty(t, job.LastUpdated)
+	require.Len(t, job.History, 1)
+	assert.Equal(t, "crashing", job.History[0]["type"])
+	assert.Equal(t, "db_not_found", job.Info["error"])
+}
+
+// --- Scheduler Docs Tests ---
+
+type schedulerDocsResponse struct {
+	TotalRows int                `json:"total_rows"`
+	Offset    int                `json:"offset"`
+	Docs      []SchedulerDocInfo `json:"docs"`
+}
+
+func getSchedulerDocs(t *testing.T, router http.Handler) schedulerDocsResponse {
+	t.Helper()
+	req := httptest.NewRequest("GET", "/_scheduler/docs", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp schedulerDocsResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	return resp
+}
+
+// TestSchedulerDocs_NoReplicatorDB verifies empty response when _replicator doesn't exist.
+func TestSchedulerDocs_NoReplicatorDB(t *testing.T) {
+	_, router, cleanup := setupRevsDiffTest(t)
+	defer cleanup()
+
+	resp := getSchedulerDocs(t, router)
+	assert.Equal(t, 0, resp.TotalRows)
+	assert.Empty(t, resp.Docs)
+}
+
+// TestSchedulerDocs_ListsDocs verifies docs are returned from _replicator.
+func TestSchedulerDocs_ListsDocs(t *testing.T) {
+	s, router, cleanup := setupRevsDiffTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	db, err := s.CreateDatabase(ctx, "_replicator")
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID: "rep1",
+		Data: map[string]interface{}{
+			"source":             "http://src/a",
+			"target":             "http://tgt/a",
+			"_replication_state": "running",
+		},
+	})
+	require.NoError(t, err)
+
+	resp := getSchedulerDocs(t, router)
+	require.Equal(t, 1, resp.TotalRows)
+	require.Len(t, resp.Docs, 1)
+
+	doc := resp.Docs[0]
+	assert.Equal(t, "_replicator", doc.Database)
+	assert.Equal(t, "rep1", doc.DocID)
+	assert.Equal(t, "http://src/a", doc.Source)
+	assert.Equal(t, "http://tgt/a", doc.Target)
+	assert.Equal(t, "running", doc.State)
+	assert.Equal(t, "nonode@nohost", doc.Node)
+}
+
+// TestSchedulerDocByID_Found verifies individual doc lookup.
+func TestSchedulerDocByID_Found(t *testing.T) {
+	s, router, cleanup := setupRevsDiffTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	db, err := s.CreateDatabase(ctx, "_replicator")
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID: "rep-abc",
+		Data: map[string]interface{}{
+			"source":             "http://src/x",
+			"target":             "http://tgt/x",
+			"_replication_state": "completed",
+		},
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest("GET", "/_scheduler/docs/rep-abc", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var doc SchedulerDocInfo
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&doc))
+	assert.Equal(t, "rep-abc", doc.DocID)
+	assert.Equal(t, "http://src/x", doc.Source)
+	assert.Equal(t, "http://tgt/x", doc.Target)
+	assert.Equal(t, "completed", doc.State)
+}
+
+// TestSchedulerDocByID_NotFound verifies 404 for missing doc.
+func TestSchedulerDocByID_NotFound(t *testing.T) {
+	s, router, cleanup := setupRevsDiffTest(t)
+	defer cleanup()
+
+	_, err := s.CreateDatabase(t.Context(), "_replicator")
+	require.NoError(t, err)
+
+	req := httptest.NewRequest("GET", "/_scheduler/docs/nonexistent", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}

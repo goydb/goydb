@@ -221,6 +221,38 @@ func TestNodeConfig(t *testing.T) {
 	assert.Equal(t, "https://app.example.com", val)
 }
 
+// TestConfigReload verifies POST /_node/{node}/_config/_reload returns ok.
+func TestConfigReload(t *testing.T) {
+	_, router, cleanup := setupRevsDiffTest(t)
+	defer cleanup()
+
+	req := httptest.NewRequest("POST", "/_node/nonode@nohost/_config/_reload", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var result map[string]bool
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	assert.True(t, result["ok"])
+}
+
+// TestConfigReload_Local verifies POST /_node/_local/_config/_reload also works.
+func TestConfigReload_Local(t *testing.T) {
+	_, router, cleanup := setupRevsDiffTest(t)
+	defer cleanup()
+
+	req := httptest.NewRequest("POST", "/_node/_local/_config/_reload", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var result map[string]bool
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	assert.True(t, result["ok"])
+}
+
 // TestConfigPersistence verifies that config values written via PUT survive a
 // server restart by reopening the storage directory and rebuilding the router.
 func TestConfigPersistence(t *testing.T) {

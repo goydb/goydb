@@ -178,6 +178,46 @@ func TestGetAttachment_Headers(t *testing.T) {
 	assert.Equal(t, content, w.Body.String())
 }
 
+func TestGetAttachment_RevParam(t *testing.T) {
+	s, router, cleanup := setupRevsDiffTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	_, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	rev := createDocAndAttachment(t, router, "testdb", "doc1", "file.txt", "hello")
+
+	req := httptest.NewRequest("GET", "/testdb/doc1/file.txt?rev="+rev, nil)
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "hello", w.Body.String())
+}
+
+func TestGetAttachment_RangeRequest(t *testing.T) {
+	s, router, cleanup := setupRevsDiffTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	_, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	_ = createDocAndAttachment(t, router, "testdb", "doc1", "file.txt", "hello world")
+
+	req := httptest.NewRequest("GET", "/testdb/doc1/file.txt", nil)
+	req.Header.Set("Range", "bytes=0-4")
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusPartialContent, w.Code)
+	assert.Equal(t, "hello", w.Body.String())
+	assert.Contains(t, w.Header().Get("Content-Range"), "bytes 0-4/11")
+}
+
 func TestGetAttachment_ETagFormat(t *testing.T) {
 	s, router, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
@@ -326,6 +366,63 @@ func TestDeleteAttachment_RemovedFromGet(t *testing.T) {
 	// attachment should be gone
 	attCode, _ := getAttachment(t, router, "/testdb/doc1/file.txt")
 	assert.Equal(t, http.StatusNotFound, attCode)
+}
+
+// ---------------------------------------------------------------------------
+// Design-doc attachment routes
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// batch=ok support
+// ---------------------------------------------------------------------------
+
+func TestPutAttachment_BatchOk(t *testing.T) {
+	s, router, cleanup := setupRevsDiffTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	_, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	code, result := putDoc(t, router, "/testdb/doc1", map[string]interface{}{"_id": "doc1"})
+	require.Equal(t, http.StatusCreated, code)
+	rev := result["rev"].(string)
+
+	req := httptest.NewRequest("PUT", "/testdb/doc1/file.txt?rev="+rev+"&batch=ok", strings.NewReader("hello"))
+	req.Header.Set("Content-Type", "text/plain")
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusAccepted, w.Code)
+	var attResult map[string]interface{}
+	_ = json.NewDecoder(w.Body).Decode(&attResult)
+	assert.Equal(t, true, attResult["ok"])
+	assert.Equal(t, "doc1", attResult["id"])
+	assert.NotEmpty(t, attResult["rev"])
+}
+
+func TestDeleteAttachment_BatchOk(t *testing.T) {
+	s, router, cleanup := setupRevsDiffTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	_, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	rev := createDocAndAttachment(t, router, "testdb", "doc1", "file.txt", "hello")
+
+	req := httptest.NewRequest("DELETE", "/testdb/doc1/file.txt?rev="+rev+"&batch=ok", nil)
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusAccepted, w.Code)
+	var result map[string]interface{}
+	_ = json.NewDecoder(w.Body).Decode(&result)
+	assert.Equal(t, true, result["ok"])
+	assert.Equal(t, "doc1", result["id"])
+	assert.NotEmpty(t, result["rev"])
 }
 
 // ---------------------------------------------------------------------------

@@ -135,20 +135,25 @@ func (i *RegularIndex) RemoveOldKeys(tx port.EngineWriteTransaction, doc *model.
 	// use the invalidation function to get all keys that are
 	// created based on the provided document
 	c := tx.Cursor(i.indexInvalidationBucket)
+	docID := []byte(doc.ID)
 
-	for k, v := c.Seek([]byte(doc.ID)); k != nil; k, v = c.Next() {
-		// compare key
-		if len(k) < len(doc.ID) {
+	for k, v := c.Seek(docID); k != nil; k, v = c.Next() {
+		if len(k) < len(docID) {
 			break
 		}
-		if !bytes.Equal(k[:len(doc.ID)], []byte(doc.ID)) {
-			break // not the same document
+		if !bytes.Equal(k[:len(docID)], docID) {
+			break // past all keys with this prefix
+		}
+		// Key format: docID + seq(8) + docIDLen(2).
+		// Verify that the stored docID length matches exactly so that
+		// e.g. docID "test" does not match keys for "test1".
+		if len(k) < 10 || int(binary.BigEndian.Uint16(k[len(k)-2:])) != len(docID) {
+			continue
 		}
 
 		// document matches, delete key in regular index
 		// and mark invalidation key for later deletion
 		tx.Delete(i.bucketName, v)
-		// remove all invalidation keys
 		tx.Delete(i.indexInvalidationBucket, k)
 	}
 
@@ -192,13 +197,23 @@ func keyWithSeq(key, _ []byte, seq uint64) ([]byte, []byte) {
 	return mk, nil
 }
 
-func keyWithSeqInv(_, value []byte, seq uint64) ([]byte, []byte) {
-	lkey := len(value)
+func keyWithSeqInv(key, value []byte, seq uint64) ([]byte, []byte) {
+	// Build unique invalidation key: docID + seq + docIDLen
+	lkey := len(key)
 	mk := make([]byte, lkey+8+2)
-	copy(mk[:lkey], value)
+	copy(mk[:lkey], key)
 	binary.BigEndian.PutUint64(mk[lkey:], seq)
 	binary.BigEndian.PutUint16(mk[lkey+8:], uint16(lkey))
-	return nil, mk
+
+	// Build value: main index key format (indexKey + seq + indexKeyLen)
+	// so RemoveOldKeys can delete the corresponding main index entry
+	lval := len(value)
+	mv := make([]byte, lval+8+2)
+	copy(mv[:lval], value)
+	binary.BigEndian.PutUint64(mv[lval:], seq)
+	binary.BigEndian.PutUint16(mv[lval+8:], uint16(lval))
+
+	return mk, mv
 }
 
 func keyLen(key []byte) uint16 {

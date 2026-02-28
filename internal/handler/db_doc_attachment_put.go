@@ -40,6 +40,7 @@ func (s *DBDocAttachmentPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	attachment := mux.Vars(r)["attachment"]
 
 	rev := revFromRequest(r)
+	batch := r.URL.Query().Get("batch") == "ok"
 
 	newRev, err := db.PutAttachment(ctx, docID, &model.Attachment{
 		ContentType: r.Header.Get("Content-Type"),
@@ -60,8 +61,12 @@ func (s *DBDocAttachmentPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	status := http.StatusCreated
+	if batch {
+		status = http.StatusAccepted
+	}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
+	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(SimpleDocResponse{Ok: true, ID: docID, Rev: newRev}) // nolint: errcheck
 }
 

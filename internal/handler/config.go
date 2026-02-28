@@ -73,6 +73,18 @@ func (s *ConfigKeyPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(old) // nolint: errcheck
 }
 
+// ConfigReload handles POST /_node/{node}/_config/_reload.
+// For an embedded server, config is always in-memory, so this is a no-op.
+type ConfigReload struct {
+	Base
+}
+
+func (s *ConfigReload) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close() //nolint:errcheck
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"ok": true}) // nolint: errcheck
+}
+
 // ConfigKeyDelete handles DELETE /_config/{section}/{key}.
 type ConfigKeyDelete struct {
 	Base

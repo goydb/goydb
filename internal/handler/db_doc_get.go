@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -46,8 +47,18 @@ func (s *DBDocGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	revs := boolOption("revs", false, opts)
 	conflicts := boolOption("conflicts", false, opts)
 	localSeq := boolOption("local_seq", false, opts)
-	// latest := boolOption("latest", false, opts)
+	latest := boolOption("latest", false, opts)
+	deletedConflicts := boolOption("deleted_conflicts", false, opts)
+	meta := boolOption("meta", false, opts)
+	attachments := boolOption("attachments", false, opts)
+	attEncodingInfo := boolOption("att_encoding_info", false, opts)
 	revParam := opts.Get("rev")
+
+	// meta implies conflicts, deleted_conflicts, and revs_info
+	if meta {
+		conflicts = true
+		deletedConflicts = true
+	}
 	var openRevs []string
 	if v := opts.Get("open_revs"); len(v) != 0 {
 		if v == "all" {
@@ -124,7 +135,8 @@ func (s *DBDocGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// If a specific revision was requested and it differs from the winner,
 	// try to fetch it from the leaf store (conflict branches).
-	if revParam != "" && dbdoc.Rev != revParam {
+	// latest=true overrides: always use the winning revision.
+	if revParam != "" && dbdoc.Rev != revParam && !latest {
 		leaf, leafErr := db.GetLeaf(r.Context(), docID, revParam)
 		if leafErr != nil || leaf == nil {
 			WriteError(w, http.StatusNotFound, "missing")
@@ -158,6 +170,48 @@ func (s *DBDocGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if revs {
 		responseData["_revisions"] = dbdoc.Revisions()
+	}
+	if deletedConflicts {
+		if dc := getDeletedConflicts(r.Context(), db, docID); len(dc) > 0 {
+			responseData["_deleted_conflicts"] = dc
+		}
+	}
+	if attachments && len(dbdoc.Attachments) > 0 {
+		attsMap := make(map[string]interface{}, len(dbdoc.Attachments))
+		for name, att := range dbdoc.Attachments {
+			entry := map[string]interface{}{
+				"content_type": att.ContentType,
+				"digest":       "md5-" + att.Digest,
+				"length":       att.Length,
+				"revpos":       att.Revpos,
+				"stub":         false,
+			}
+			if rd, err := db.AttachmentReader(att.Digest); err == nil {
+				data, _ := io.ReadAll(rd)
+				_ = rd.Close()
+				entry["data"] = base64Encode(data)
+			}
+			if attEncodingInfo {
+				entry["encoding"] = "identity"
+				entry["encoded_length"] = att.Length
+			}
+			attsMap[name] = entry
+		}
+		responseData["_attachments"] = attsMap
+	} else if attEncodingInfo && len(dbdoc.Attachments) > 0 {
+		attsMap := make(map[string]interface{}, len(dbdoc.Attachments))
+		for name, att := range dbdoc.Attachments {
+			attsMap[name] = map[string]interface{}{
+				"content_type":   att.ContentType,
+				"digest":         "md5-" + att.Digest,
+				"length":         att.Length,
+				"revpos":         att.Revpos,
+				"stub":           true,
+				"encoding":       "identity",
+				"encoded_length": att.Length,
+			}
+		}
+		responseData["_attachments"] = attsMap
 	}
 
 	switch r.Header.Get("Accept") {
@@ -263,4 +317,23 @@ func (r *MultipartResponse) WriteDocument(ctx context.Context, doc *model.Docume
 
 func (r *MultipartResponse) Close() {
 	_ = r.mw.Close()
+}
+
+// getDeletedConflicts returns revisions of deleted conflict leaves.
+func getDeletedConflicts(ctx context.Context, db port.Database, docID string) []string {
+	leaves, err := db.GetLeaves(ctx, docID)
+	if err != nil {
+		return nil
+	}
+	var dc []string
+	for _, l := range leaves {
+		if l.Deleted {
+			dc = append(dc, l.Rev)
+		}
+	}
+	return dc
+}
+
+func base64Encode(data []byte) string {
+	return base64.StdEncoding.EncodeToString(data)
 }

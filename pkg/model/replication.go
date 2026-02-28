@@ -26,6 +26,9 @@ type ReplicationDoc struct {
 	TargetHeaders map[string]string // Custom headers for target endpoint
 	Continuous   bool
 	CreateTarget bool
+	DocIDs       []string
+	Filter       string
+	Selector     map[string]interface{}
 
 	// State fields (written back to the doc)
 	ReplicationState       ReplicationState
@@ -75,6 +78,22 @@ func ParseReplicationDoc(doc *Document) (*ReplicationDoc, error) {
 
 	continuous, _ := doc.Data["continuous"].(bool)
 	createTarget, _ := doc.Data["create_target"].(bool)
+	filter, _ := doc.Data["filter"].(string)
+
+	var docIDs []string
+	if ids, ok := doc.Data["doc_ids"].([]interface{}); ok {
+		for _, id := range ids {
+			if s, ok := id.(string); ok {
+				docIDs = append(docIDs, s)
+			}
+		}
+	}
+
+	var selector map[string]interface{}
+	if sel, ok := doc.Data["selector"].(map[string]interface{}); ok {
+		selector = sel
+	}
+
 	state, _ := doc.Data["_replication_state"].(string)
 	stateReason, _ := doc.Data["_replication_state_reason"].(string)
 
@@ -100,6 +119,9 @@ func ParseReplicationDoc(doc *Document) (*ReplicationDoc, error) {
 		TargetHeaders:          targetHeaders,
 		Continuous:             continuous,
 		CreateTarget:           createTarget,
+		DocIDs:                 docIDs,
+		Filter:                 filter,
+		Selector:               selector,
 		ReplicationState:       ReplicationState(state),
 		ReplicationStateReason: stateReason,
 		ConsecutiveFails:       consecutiveFails,

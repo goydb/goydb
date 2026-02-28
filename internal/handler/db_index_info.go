@@ -32,7 +32,9 @@ func (s *DBIndexInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := &ViewInfoResponse{}
+	response := &ViewInfoResponse{
+		Name: docID,
+	}
 	response.ViewIndex.Language = doc.Language()
 
 	err = db.Transaction(r.Context(), func(tx port.DatabaseTx) error {

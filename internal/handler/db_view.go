@@ -225,38 +225,11 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var q port.AllDocsQuery
-	q.Skip = intOption("skip", 0, options)
-	q.Limit = intOption("limit", 100, options)
+	parseViewQueryOptions(&q, options)
 	q.DDFN = &model.DesignDocFn{
 		Type:        model.ViewFn,
 		DesignDocID: docID,
 		FnName:      viewName,
-	}
-	q.IncludeDocs = boolOption("include_docs", false, options)
-	q.ViewGroup = stringOption("group", "", options)
-	q.ViewGroupLevel = int(intOption("group_level", 0, options))
-	q.ViewDescending = boolOption("descending", false, options)
-	q.ViewUpdateSeq = boolOption("update_seq", false, options)
-	// sorted defaults to true; only false when explicitly "false"
-	q.ViewOmitSortedInfo = options.Get("sorted") == "false"
-
-	// Parse multi-key lookup.
-	if keysRaw := options.Get("keys"); keysRaw != "" {
-		var keys []interface{}
-		if err := json.Unmarshal([]byte(keysRaw), &keys); err == nil {
-			q.ViewKeys = keys
-		}
-	}
-
-	q.ViewStartKey, q.ViewEndKey, q.ViewDecodedStartKey, q.ViewDecodedEndKey, q.ViewExclusiveEnd = viewKeyRange(options)
-
-	// In descending mode the endkey is the lower bound; strip the 0xFF
-	// padding that viewKeyRange added for inclusive forward endkey matching.
-	// The descending Continue() check uses >= (inclusive) without padding.
-	if q.ViewDescending && q.ViewEndKey != nil && !q.ViewExclusiveEnd {
-		if len(q.ViewEndKey) >= 10 {
-			q.ViewEndKey = q.ViewEndKey[:len(q.ViewEndKey)-10]
-		}
 	}
 
 	var total int
@@ -410,6 +383,12 @@ func (s *DBView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 								continue
 							}
 						}
+					}
+					if q.StartKeyDocID != "" && doc.ID < q.StartKeyDocID {
+						continue
+					}
+					if q.EndKeyDocID != "" && doc.ID > q.EndKeyDocID {
+						continue
 					}
 					docList = append(docList, doc)
 				}

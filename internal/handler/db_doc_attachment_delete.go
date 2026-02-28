@@ -37,6 +37,7 @@ func (s *DBDocAttachmentDelete) ServeHTTP(w http.ResponseWriter, r *http.Request
 	attachment := mux.Vars(r)["attachment"]
 
 	rev := revFromRequest(r)
+	batch := r.URL.Query().Get("batch") == "ok"
 
 	newRev, err := db.DeleteAttachment(r.Context(), docID, attachment, rev)
 	if errors.Is(err, storage.ErrConflict) {
@@ -53,5 +54,8 @@ func (s *DBDocAttachmentDelete) ServeHTTP(w http.ResponseWriter, r *http.Request
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	if batch {
+		w.WriteHeader(http.StatusAccepted)
+	}
 	json.NewEncoder(w).Encode(SimpleDocResponse{Ok: true, ID: docID, Rev: newRev}) // nolint: errcheck
 }

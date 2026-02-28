@@ -34,7 +34,9 @@ func (s *DBDocDelete) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else if s.Local {
 		docID = string(model.LocalDocPrefix) + docID
 	}
-	rev := r.URL.Query().Get("rev")
+	query := r.URL.Query()
+	rev := query.Get("rev")
+	batch := query.Get("batch") == "ok"
 
 	dbdoc, err := db.DeleteDocument(r.Context(), docID, rev)
 	if errors.Is(err, storage.ErrConflict) {
@@ -54,6 +56,9 @@ func (s *DBDocDelete) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	resp.Ok = true
 
 	w.Header().Set("Content-Type", "application/json")
+	if batch {
+		w.WriteHeader(http.StatusAccepted)
+	}
 	json.NewEncoder(w).Encode(resp) // nolint: errcheck
 }
 
