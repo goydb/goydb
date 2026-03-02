@@ -12,6 +12,7 @@ const (
 	SearchFn FnType = "indexes"
 	FilterFn FnType = "filters"
 	MangoFn  FnType = "mango_indexes"
+	UpdateFn FnType = "updates"
 )
 
 type DesignDocFn struct {

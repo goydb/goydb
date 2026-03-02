@@ -40,20 +40,10 @@ func (s *DDListFunction) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // DDUpdateFunction handles POST/PUT /{db}/_design/{ddoc}/_update/{func}[/{docid}].
-// Update functions are a CouchDB 1.x feature. Returns 501 Not Implemented.
+// Update functions are server-side JavaScript handlers that can create or modify
+// documents. The implementation is in ddoc_update.go.
 type DDUpdateFunction struct {
 	Base
-}
-
-func (s *DDUpdateFunction) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close() //nolint:errcheck
-
-	db := Database{Base: s.Base}.Do(w, r)
-	if db == nil {
-		return
-	}
-
-	WriteError(w, http.StatusNotImplemented, "update functions are not supported")
 }
 
 // DDRewrite handles ALL /{db}/_design/{ddoc}/_rewrite/{path:.*}.

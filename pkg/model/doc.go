@@ -236,12 +236,13 @@ type Function struct {
 	Name string
 	Type FnType
 
-	MapFn       string
-	ReduceFn    string
-	SearchFn    string
-	Analyzer    string
-	FilterFn    string
-	MangoFields []string
+	MapFn        string
+	ReduceFn     string
+	SearchFn     string
+	Analyzer     string
+	FilterFn     string
+	UpdateFnCode string
+	MangoFields  []string
 }
 
 func (f *Function) DesignDocFn() *DesignDocFn {
@@ -459,6 +460,60 @@ func (doc *Document) Filter(name string) (*Function, bool) {
 		Name:     name,
 		Type:     FilterFn,
 		FilterFn: code,
+	}, true
+}
+
+// Updates returns all update functions defined in this design doc
+func (doc *Document) Updates() []*Function {
+	if !doc.IsDesignDoc() {
+		return nil
+	}
+
+	updates, ok := doc.Data["updates"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	var fns []*Function
+	for name, fnCode := range updates {
+		if code, ok := fnCode.(string); ok {
+			fns = append(fns, &Function{
+				doc:          doc,
+				Name:         name,
+				Type:         UpdateFn,
+				UpdateFnCode: code,
+			})
+		}
+	}
+	return fns
+}
+
+// Update returns a specific update function by name
+func (doc *Document) Update(name string) (*Function, bool) {
+	if !doc.IsDesignDoc() {
+		return nil, false
+	}
+
+	updates, ok := doc.Data["updates"].(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+
+	fnCode, ok := updates[name]
+	if !ok {
+		return nil, false
+	}
+
+	code, ok := fnCode.(string)
+	if !ok {
+		return nil, false
+	}
+
+	return &Function{
+		doc:          doc,
+		Name:         name,
+		Type:         UpdateFn,
+		UpdateFnCode: code,
 	}, true
 }
 

@@ -26,6 +26,7 @@ type Database struct {
 	filterEngines   map[string]port.FilterServerBuilder
 	reducerEngines  map[string]port.ReducerServerBuilder
 	validateEngines map[string]port.ValidateServerBuilder
+	updateEngines   map[string]port.UpdateServerBuilder
 	logger          port.Logger
 }
 
@@ -89,6 +90,10 @@ func (d *Database) ValidateEngine(name string) port.ValidateServerBuilder {
 	return d.validateEngines[name]
 }
 
+func (d *Database) UpdateEngine(name string) port.UpdateServerBuilder {
+	return d.updateEngines[name]
+}
+
 func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Database, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -114,6 +119,7 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 		filterEngines:   s.filterEngines,
 		reducerEngines:  s.reducerEngines,
 		validateEngines: s.validateEngines,
+		updateEngines:   s.updateEngines,
 		logger:         s.logger.With("database", name),
 	}
 	s.dbs[name] = database

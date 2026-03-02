@@ -19,6 +19,7 @@ type Storage struct {
 	filterEngines   port.FilterEngines
 	reducerEngines  port.ReducerEngines
 	validateEngines port.ValidateEngines
+	updateEngines   port.UpdateEngines
 	logger          port.Logger
 }
 
@@ -31,6 +32,7 @@ func Open(path string, options ...StorageOption) (*Storage, error) {
 		filterEngines:   make(port.FilterEngines),
 		reducerEngines:  make(port.ReducerEngines),
 		validateEngines: make(port.ValidateEngines),
+		updateEngines:   make(port.UpdateEngines),
 	}
 
 	for _, option := range options {
@@ -117,6 +119,14 @@ func (s *Storage) RegisterValidateEngine(name string, builder port.ValidateServe
 	return nil
 }
 
+func (s *Storage) RegisterUpdateEngine(name string, builder port.UpdateServerBuilder) error {
+	if _, ok := s.updateEngines[name]; ok {
+		return fmt.Errorf("update engine with name %q already registered", name)
+	}
+	s.updateEngines[name] = builder
+	return nil
+}
+
 func (s *Storage) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -153,6 +163,12 @@ func WithReducerEngine(name string, builder port.ReducerServerBuilder) StorageOp
 func WithValidateEngine(name string, builder port.ValidateServerBuilder) StorageOption {
 	return func(s *Storage) error {
 		return s.RegisterValidateEngine(name, builder)
+	}
+}
+
+func WithUpdateEngine(name string, builder port.UpdateServerBuilder) StorageOption {
+	return func(s *Storage) error {
+		return s.RegisterUpdateEngine(name, builder)
 	}
 }
 

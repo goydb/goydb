@@ -706,6 +706,32 @@ func TestVDU_BulkDocsReplicationValidates_GlobalConfig(t *testing.T) {
 	assert.Contains(t, results[0]["reason"], "all writes rejected")
 }
 
+func TestVDU_BulkDocsReplicationValidates_PerDesignDoc(t *testing.T) {
+	s, router, cleanup := setupVDUTest(t)
+	defer cleanup()
+
+	_, err := s.CreateDatabase(t.Context(), "testdb")
+	require.NoError(t, err)
+
+	// Global config is OFF (default). Design doc opts in.
+	createDesignDocWithVDUAndReplication(t, router, "testdb", "rejectall",
+		`function(newDoc, oldDoc, userCtx, secObj) {
+			throw({forbidden: "all writes rejected"});
+		}`, true)
+
+	newEdits := false
+	code, results := vduBulkDocs(t, router, "testdb", map[string]interface{}{
+		"new_edits": newEdits,
+		"docs": []map[string]interface{}{
+			{"_id": "doc1", "_rev": "1-abc", "data": "replicated"},
+		},
+	})
+	assert.Equal(t, http.StatusOK, code)
+	require.Len(t, results, 1)
+	assert.Equal(t, "forbidden", results[0]["error"])
+	assert.Contains(t, results[0]["reason"], "all writes rejected")
+}
+
 func TestVDU_CompilationErrorSkipped(t *testing.T) {
 	s, router, cleanup := setupVDUTest(t)
 	defer cleanup()

@@ -70,6 +70,7 @@ type Database interface {
 	FilterEngine(name string) FilterServerBuilder
 	ReducerEngine(name string) ReducerServerBuilder
 	ValidateEngine(name string) ValidateServerBuilder
+	UpdateEngine(name string) UpdateServerBuilder
 }
 
 // Storage is the high-level interface for the storage layer that manages

@@ -39,7 +39,7 @@ func TestListFunction_NotImplemented(t *testing.T) {
 	assert.Equal(t, http.StatusNotImplemented, w.Code)
 }
 
-func TestUpdateFunction_NotImplemented(t *testing.T) {
+func TestUpdateFunction_MissingDesignDoc(t *testing.T) {
 	s, router, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
@@ -51,7 +51,7 @@ func TestUpdateFunction_NotImplemented(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusNotImplemented, w.Code)
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
 func TestRewrite_NotImplemented(t *testing.T) {
