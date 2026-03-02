@@ -126,6 +126,12 @@ func (a Authenticator) DB(w http.ResponseWriter, r *http.Request, db port.Databa
 		roles = sec.Members.Roles
 	}
 
+	// CouchDB semantics: empty Members = any authenticated user may access.
+	// Do() above already verified authentication.
+	if !a.RequiresAdmin && len(names) == 0 && len(roles) == 0 {
+		return s, true
+	}
+
 	for _, name := range names {
 		if name == s.Name {
 			return s, true
