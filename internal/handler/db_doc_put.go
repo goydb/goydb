@@ -121,16 +121,20 @@ func (s *DBDocPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Run validate_doc_update for normal edits on non-local docs.
-	if newEdits && !isLocalDoc(docID) {
+	// Run validate_doc_update for non-local docs.
+	if !isLocalDoc(docID) {
 		var oldDoc *model.Document
 		if existing, err := db.GetDocument(r.Context(), docID); err == nil && existing != nil && !existing.Deleted {
 			oldDoc = existing
 		}
-		if err := ValidateDocUpdate(r.Context(), db, s.Logger, mdoc, oldDoc, session); err != nil {
-			if writeValidationError(w, err) {
-				return
-			}
+		var validateErr error
+		if newEdits {
+			validateErr = ValidateDocUpdate(r.Context(), db, s.Logger, mdoc, oldDoc, session)
+		} else {
+			validateErr = ValidateDocUpdateForReplication(r.Context(), db, s.Logger, mdoc, oldDoc, session, s.Config)
+		}
+		if writeValidationError(w, validateErr) {
+			return
 		}
 	}
 

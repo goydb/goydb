@@ -85,44 +85,48 @@ func (s *DBDocsBulk) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Pre-validate all docs against VDU functions (when newEdits=true).
+	// Pre-validate all docs against VDU functions.
 	vduSkip := make(map[int]bool)
 	resp := make([]SimpleDocResponse, len(req.Docs))
-	if newEdits {
-		for i, doc := range req.Docs {
-			// Hash plaintext passwords in _users docs before validation.
-			if !doc.Deleted {
-				if err := hashUserPassword(db.Name(), doc); err != nil {
-					resp[i].ID = doc.ID
-					resp[i].Ok = false
-					resp[i].Error, resp[i].Reason = "internal_server_error", err.Error()
-					vduSkip[i] = true
-					continue
-				}
-			}
-			if isLocalDoc(doc.ID) {
-				continue
-			}
-			var oldDoc *model.Document
-			if doc.Rev != "" || doc.Deleted {
-				if existing, err := db.GetDocument(r.Context(), doc.ID); err == nil && existing != nil && !existing.Deleted {
-					oldDoc = existing
-				}
-			}
-			if err := ValidateDocUpdate(r.Context(), db, s.Logger, doc, oldDoc, session); err != nil {
+	for i, doc := range req.Docs {
+		// Hash plaintext passwords in _users docs before validation (normal edits only).
+		if newEdits && !doc.Deleted {
+			if err := hashUserPassword(db.Name(), doc); err != nil {
 				resp[i].ID = doc.ID
 				resp[i].Ok = false
-				var forbiddenErr *model.ErrForbidden
-				var unauthorizedErr *model.ErrUnauthorized
-				if errors.As(err, &forbiddenErr) {
-					resp[i].Error, resp[i].Reason = "forbidden", forbiddenErr.Msg
-				} else if errors.As(err, &unauthorizedErr) {
-					resp[i].Error, resp[i].Reason = "unauthorized", unauthorizedErr.Msg
-				} else {
-					resp[i].Error, resp[i].Reason = "internal_server_error", err.Error()
-				}
+				resp[i].Error, resp[i].Reason = "internal_server_error", err.Error()
 				vduSkip[i] = true
+				continue
 			}
+		}
+		if isLocalDoc(doc.ID) {
+			continue
+		}
+		var oldDoc *model.Document
+		if doc.Rev != "" || doc.Deleted {
+			if existing, err := db.GetDocument(r.Context(), doc.ID); err == nil && existing != nil && !existing.Deleted {
+				oldDoc = existing
+			}
+		}
+		var validateErr error
+		if newEdits {
+			validateErr = ValidateDocUpdate(r.Context(), db, s.Logger, doc, oldDoc, session)
+		} else {
+			validateErr = ValidateDocUpdateForReplication(r.Context(), db, s.Logger, doc, oldDoc, session, s.Config)
+		}
+		if validateErr != nil {
+			resp[i].ID = doc.ID
+			resp[i].Ok = false
+			var forbiddenErr *model.ErrForbidden
+			var unauthorizedErr *model.ErrUnauthorized
+			if errors.As(validateErr, &forbiddenErr) {
+				resp[i].Error, resp[i].Reason = "forbidden", forbiddenErr.Msg
+			} else if errors.As(validateErr, &unauthorizedErr) {
+				resp[i].Error, resp[i].Reason = "unauthorized", unauthorizedErr.Msg
+			} else {
+				resp[i].Error, resp[i].Reason = "internal_server_error", validateErr.Error()
+			}
+			vduSkip[i] = true
 		}
 	}
 

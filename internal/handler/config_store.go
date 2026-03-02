@@ -18,8 +18,9 @@ var defaultConfig = map[string]map[string]string{
 		"max_document_size":   "8000000",
 		"max_dbs":             "0",
 		"max_docs_per_db":     "0",
-		"max_attachment_size": "0",
-		"max_db_size":         "0",
+		"max_attachment_size":        "0",
+		"max_db_size":               "0",
+		"validate_on_replication":   "false",
 	},
 	"chttpd": {
 		"max_http_request_size": "4294967296",

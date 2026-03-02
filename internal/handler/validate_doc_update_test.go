@@ -562,6 +562,150 @@ func TestVDU_VDUReceivesOldDoc(t *testing.T) {
 	assert.Equal(t, true, result["ok"])
 }
 
+// vduSetConfig sets a config value via the HTTP API.
+func vduSetConfig(t *testing.T, router http.Handler, section, key, value string) {
+	t.Helper()
+	b, _ := json.Marshal(value)
+	req := httptest.NewRequest("PUT", "/_node/_local/_config/"+section+"/"+key, bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "failed to set config %s/%s", section, key)
+}
+
+// createDesignDocWithVDUAndReplication creates a design document with a
+// validate_doc_update function and optionally the validate_on_replication flag.
+func createDesignDocWithVDUAndReplication(t *testing.T, router http.Handler, dbName, ddocName, vduFn string, validateOnReplication bool) string {
+	t.Helper()
+	doc := map[string]interface{}{
+		"language":            "javascript",
+		"validate_doc_update": vduFn,
+	}
+	if validateOnReplication {
+		doc["validate_on_replication"] = true
+	}
+	code, result := vduPutDoc(t, router, "/"+dbName+"/_design/"+ddocName, doc)
+	require.Equal(t, http.StatusCreated, code, "failed to create design doc: %v", result)
+	return result["rev"].(string)
+}
+
+func TestVDU_ReplicationValidates_GlobalConfig(t *testing.T) {
+	s, router, cleanup := setupVDUTest(t)
+	defer cleanup()
+
+	_, err := s.CreateDatabase(t.Context(), "testdb")
+	require.NoError(t, err)
+
+	// Enable global validate_on_replication.
+	vduSetConfig(t, router, "couchdb", "validate_on_replication", "true")
+
+	// VDU that rejects everything.
+	createDesignDocWithVDU(t, router, "testdb", "rejectall",
+		`function(newDoc, oldDoc, userCtx, secObj) {
+			throw({forbidden: "all writes rejected"});
+		}`)
+
+	// new_edits=false with global config enabled → VDU should reject.
+	b, _ := json.Marshal(map[string]interface{}{
+		"_id":  "doc1",
+		"_rev": "1-abc",
+		"data": "replicated",
+	})
+	req := httptest.NewRequest("PUT", "/testdb/doc1?new_edits=false", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestVDU_ReplicationValidates_PerDesignDoc(t *testing.T) {
+	s, router, cleanup := setupVDUTest(t)
+	defer cleanup()
+
+	_, err := s.CreateDatabase(t.Context(), "testdb")
+	require.NoError(t, err)
+
+	// Global config is OFF (default). Design doc opts in.
+	createDesignDocWithVDUAndReplication(t, router, "testdb", "rejectall",
+		`function(newDoc, oldDoc, userCtx, secObj) {
+			throw({forbidden: "all writes rejected"});
+		}`, true)
+
+	// new_edits=false → per-ddoc flag should cause VDU to run and reject.
+	b, _ := json.Marshal(map[string]interface{}{
+		"_id":  "doc1",
+		"_rev": "1-abc",
+		"data": "replicated",
+	})
+	req := httptest.NewRequest("PUT", "/testdb/doc1?new_edits=false", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestVDU_ReplicationSkips_PerDesignDoc_Default(t *testing.T) {
+	s, router, cleanup := setupVDUTest(t)
+	defer cleanup()
+
+	_, err := s.CreateDatabase(t.Context(), "testdb")
+	require.NoError(t, err)
+
+	// Global config is OFF (default). Design doc does NOT have the flag.
+	createDesignDocWithVDU(t, router, "testdb", "rejectall",
+		`function(newDoc, oldDoc, userCtx, secObj) {
+			throw({forbidden: "all writes rejected"});
+		}`)
+
+	// new_edits=false → no flag set, VDU should be skipped, write succeeds.
+	b, _ := json.Marshal(map[string]interface{}{
+		"_id":  "doc1",
+		"_rev": "1-abc",
+		"data": "replicated",
+	})
+	req := httptest.NewRequest("PUT", "/testdb/doc1?new_edits=false", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+}
+
+func TestVDU_BulkDocsReplicationValidates_GlobalConfig(t *testing.T) {
+	s, router, cleanup := setupVDUTest(t)
+	defer cleanup()
+
+	_, err := s.CreateDatabase(t.Context(), "testdb")
+	require.NoError(t, err)
+
+	// Enable global validate_on_replication.
+	vduSetConfig(t, router, "couchdb", "validate_on_replication", "true")
+
+	// VDU that rejects everything.
+	createDesignDocWithVDU(t, router, "testdb", "rejectall",
+		`function(newDoc, oldDoc, userCtx, secObj) {
+			throw({forbidden: "all writes rejected"});
+		}`)
+
+	newEdits := false
+	code, results := vduBulkDocs(t, router, "testdb", map[string]interface{}{
+		"new_edits": newEdits,
+		"docs": []map[string]interface{}{
+			{"_id": "doc1", "_rev": "1-abc", "data": "replicated"},
+		},
+	})
+	assert.Equal(t, http.StatusOK, code)
+	require.Len(t, results, 1)
+	assert.Equal(t, "forbidden", results[0]["error"])
+	assert.Contains(t, results[0]["reason"], "all writes rejected")
+}
+
 func TestVDU_CompilationErrorSkipped(t *testing.T) {
 	s, router, cleanup := setupVDUTest(t)
 	defer cleanup()

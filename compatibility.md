@@ -225,3 +225,27 @@ Legend: **Yes** = fully implemented · **Partially** = implemented with gaps (se
 - **Nouveau search** returns stub responses (no real search engine)
 - **Range requests** on attachments not supported
 - Some design document view/search parameters only partially supported
+
+### goydb Extensions
+
+These features are deliberate deviations from CouchDB behaviour, designed to address real-world gaps.
+
+#### `validate_on_replication` — VDU enforcement on replication writes
+
+CouchDB's replication protocol uses `new_edits=false`, which bypasses `validate_doc_update` (VDU) functions. This is by design for trusted server-to-server replication, but it creates a security gap when untrusted clients (e.g. PouchDB in a browser) replicate directly to the server.
+
+goydb adds two opt-in mechanisms to run VDU functions on replication writes:
+
+| Mechanism | Scope | Default |
+|-----------|-------|---------|
+| `[couchdb] validate_on_replication` (config) | Global — all VDU functions run on replication writes | `false` |
+| `"validate_on_replication": true` (design doc field) | Per-design-doc — only that VDU function runs on replication writes | not set |
+
+**Behaviour:**
+- When the global config is `true`, **all** VDU functions run on replication writes, regardless of per-design-doc settings.
+- When the global config is `false` (default), only design documents that explicitly set `"validate_on_replication": true` run their VDU function on replication writes.
+- Normal writes (`new_edits=true`) are unaffected — VDU functions always run as usual.
+
+**Use case:** PouchDB or other untrusted client replication where you want server-side document validation.
+
+**Warning:** Enabling this may break server-to-server replication if VDU rules on the target reject documents that the source considers valid. Use with care in multi-master setups.

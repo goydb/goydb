@@ -17,6 +17,33 @@ func ValidateDocUpdate(ctx context.Context, db port.Database, logger port.Logger
 	newDoc, oldDoc *model.Document,
 	session *model.Session) error {
 
+	return validateDocUpdate(ctx, db, logger, newDoc, oldDoc, session, nil, false)
+}
+
+// ValidateDocUpdateForReplication runs VDU functions for replication writes
+// (new_edits=false). Whether each VDU function runs depends on:
+//   - Global config [couchdb] validate_on_replication = true → all VDU functions run
+//   - Per-design-doc "validate_on_replication": true → that VDU function runs
+//   - Otherwise the VDU function is skipped (CouchDB default behaviour)
+func ValidateDocUpdateForReplication(ctx context.Context, db port.Database, logger port.Logger,
+	newDoc, oldDoc *model.Document,
+	session *model.Session, config *ConfigStore) error {
+
+	return validateDocUpdate(ctx, db, logger, newDoc, oldDoc, session, config, true)
+}
+
+// validateDocUpdate is the shared implementation for both normal and replication
+// VDU execution.
+func validateDocUpdate(ctx context.Context, db port.Database, logger port.Logger,
+	newDoc, oldDoc *model.Document,
+	session *model.Session, config *ConfigStore, isReplication bool) error {
+
+	// When replicating, check the global config flag.
+	globalEnabled := false
+	if isReplication && config != nil {
+		globalEnabled = configBool(config, "couchdb", "validate_on_replication", false)
+	}
+
 	docs, _, err := db.AllDesignDocs(ctx)
 	if err != nil {
 		return err
@@ -25,6 +52,12 @@ func ValidateDocUpdate(ctx context.Context, db port.Database, logger port.Logger
 	for _, ddoc := range docs {
 		fnStr, ok := ddoc.Data["validate_doc_update"].(string)
 		if !ok || fnStr == "" {
+			continue
+		}
+
+		// For replication writes, skip this VDU unless globally enabled or
+		// the design document itself opts in.
+		if isReplication && !globalEnabled && !ddocBool(ddoc, "validate_on_replication") {
 			continue
 		}
 
@@ -54,6 +87,18 @@ func ValidateDocUpdate(ctx context.Context, db port.Database, logger port.Logger
 	}
 
 	return nil
+}
+
+// ddocBool reads a boolean field from a design document's Data map.
+// Handles both JSON boolean true and the string "true".
+func ddocBool(ddoc *model.Document, key string) bool {
+	switch v := ddoc.Data[key].(type) {
+	case bool:
+		return v
+	case string:
+		return v == "true"
+	}
+	return false
 }
 
 // docToJSObj converts a model.Document to the flat map that CouchDB
