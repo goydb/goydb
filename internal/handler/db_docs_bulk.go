@@ -23,7 +23,8 @@ func (s *DBDocsBulk) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := (Authenticator{Base: s.Base}.DB(w, r, db)); !ok {
+	session, ok := Authenticator{Base: s.Base}.DB(w, r, db)
+	if !ok {
 		return
 	}
 
@@ -84,9 +85,42 @@ func (s *DBDocsBulk) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Pre-validate all docs against VDU functions (when newEdits=true).
+	vduSkip := make(map[int]bool)
 	resp := make([]SimpleDocResponse, len(req.Docs))
+	if newEdits {
+		for i, doc := range req.Docs {
+			if isLocalDoc(doc.ID) {
+				continue
+			}
+			var oldDoc *model.Document
+			if doc.Rev != "" || doc.Deleted {
+				if existing, err := db.GetDocument(r.Context(), doc.ID); err == nil && existing != nil && !existing.Deleted {
+					oldDoc = existing
+				}
+			}
+			if err := ValidateDocUpdate(r.Context(), db, s.Logger, doc, oldDoc, session); err != nil {
+				resp[i].ID = doc.ID
+				resp[i].Ok = false
+				var forbiddenErr *model.ErrForbidden
+				var unauthorizedErr *model.ErrUnauthorized
+				if errors.As(err, &forbiddenErr) {
+					resp[i].Error, resp[i].Reason = "forbidden", forbiddenErr.Msg
+				} else if errors.As(err, &unauthorizedErr) {
+					resp[i].Error, resp[i].Reason = "unauthorized", unauthorizedErr.Msg
+				} else {
+					resp[i].Error, resp[i].Reason = "internal_server_error", err.Error()
+				}
+				vduSkip[i] = true
+			}
+		}
+	}
+
 	err = db.Transaction(r.Context(), func(tx port.DatabaseTx) error {
 		for i, doc := range req.Docs {
+			if vduSkip[i] {
+				continue
+			}
 			var rev string
 			var err error
 

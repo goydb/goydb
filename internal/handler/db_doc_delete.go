@@ -24,7 +24,8 @@ func (s *DBDocDelete) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := (Authenticator{Base: s.Base}.DB(w, r, db)); !ok {
+	session, ok := Authenticator{Base: s.Base}.DB(w, r, db)
+	if !ok {
 		return
 	}
 
@@ -37,6 +38,24 @@ func (s *DBDocDelete) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	rev := query.Get("rev")
 	batch := query.Get("batch") == "ok"
+
+	// Run validate_doc_update for non-local docs.
+	if !s.Local && !isLocalDoc(docID) {
+		var oldDoc *model.Document
+		if existing, err := db.GetDocument(r.Context(), docID); err == nil && existing != nil && !existing.Deleted {
+			oldDoc = existing
+		}
+		newDoc := &model.Document{
+			ID:      docID,
+			Deleted: true,
+			Data:    map[string]interface{}{"_id": docID, "_deleted": true},
+		}
+		if err := ValidateDocUpdate(r.Context(), db, s.Logger, newDoc, oldDoc, session); err != nil {
+			if writeValidationError(w, err) {
+				return
+			}
+		}
+	}
 
 	dbdoc, err := db.DeleteDocument(r.Context(), docID, rev)
 	if errors.Is(err, storage.ErrConflict) {

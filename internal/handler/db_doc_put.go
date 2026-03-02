@@ -30,13 +30,14 @@ func (s *DBDocPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := (Authenticator{Base: s.Base}.DB(w, r, db)); !ok {
+	session, ok := Authenticator{Base: s.Base}.DB(w, r, db)
+	if !ok {
 		return
 	}
 
 	mediaType, params, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if mediaType == "multipart/related" {
-		s.handleMultipart(w, r, db, params["boundary"])
+		s.handleMultipart(w, r, db, params["boundary"], session)
 		return
 	}
 
@@ -112,6 +113,19 @@ func (s *DBDocPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Attachments: attachments,
 	}
 
+	// Run validate_doc_update for normal edits on non-local docs.
+	if newEdits && !isLocalDoc(docID) {
+		var oldDoc *model.Document
+		if existing, err := db.GetDocument(r.Context(), docID); err == nil && existing != nil && !existing.Deleted {
+			oldDoc = existing
+		}
+		if err := ValidateDocUpdate(r.Context(), db, s.Logger, mdoc, oldDoc, session); err != nil {
+			if writeValidationError(w, err) {
+				return
+			}
+		}
+	}
+
 	var rev string
 	if !newEdits {
 		// new_edits=false: store with the supplied rev (replication mode).
@@ -167,7 +181,7 @@ func (s *DBDocPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *DBDocPut) handleMultipart(w http.ResponseWriter, r *http.Request, db port.Database, boundary string) {
+func (s *DBDocPut) handleMultipart(w http.ResponseWriter, r *http.Request, db port.Database, boundary string, session *model.Session) {
 	mr := multipart.NewReader(r.Body, boundary)
 
 	// Part 1: JSON document.
@@ -203,11 +217,26 @@ func (s *DBDocPut) handleMultipart(w http.ResponseWriter, r *http.Request, db po
 		return
 	}
 
-	rev, err := db.PutDocument(r.Context(), &model.Document{
+	mdoc := &model.Document{
 		ID:      docID,
 		Data:    doc,
 		Deleted: isTruthy(doc["_deleted"]),
-	})
+	}
+
+	// Run validate_doc_update for non-local docs.
+	if !isLocalDoc(docID) {
+		var oldDoc *model.Document
+		if existing, err := db.GetDocument(r.Context(), docID); err == nil && existing != nil && !existing.Deleted {
+			oldDoc = existing
+		}
+		if err := ValidateDocUpdate(r.Context(), db, s.Logger, mdoc, oldDoc, session); err != nil {
+			if writeValidationError(w, err) {
+				return
+			}
+		}
+	}
+
+	rev, err := db.PutDocument(r.Context(), mdoc)
 	if errors.Is(err, storage.ErrConflict) {
 		WriteError(w, http.StatusConflict, err.Error())
 		return

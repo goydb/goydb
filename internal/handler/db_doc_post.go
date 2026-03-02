@@ -24,7 +24,8 @@ func (s *DBDocPost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := (Authenticator{Base: s.Base}.DB(w, r, db)); !ok {
+	session, ok := Authenticator{Base: s.Base}.DB(w, r, db)
+	if !ok {
 		return
 	}
 
@@ -59,10 +60,19 @@ func (s *DBDocPost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	docID := hex.EncodeToString(b)
 	doc["_id"] = docID
 
-	rev, err := db.PutDocument(r.Context(), &model.Document{
+	mdoc := &model.Document{
 		ID:   docID,
 		Data: doc,
-	})
+	}
+
+	// Run validate_doc_update (POST is always a new document).
+	if err := ValidateDocUpdate(r.Context(), db, s.Logger, mdoc, nil, session); err != nil {
+		if writeValidationError(w, err) {
+			return
+		}
+	}
+
+	rev, err := db.PutDocument(r.Context(), mdoc)
 	if errors.Is(err, storage.ErrConflict) {
 		WriteError(w, http.StatusConflict, err.Error())
 		return
