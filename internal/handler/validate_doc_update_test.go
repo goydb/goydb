@@ -437,6 +437,18 @@ func TestVDU_DesignDocUpdatesValidated(t *testing.T) {
 	assert.Contains(t, result["reason"], "regular docs not allowed")
 }
 
+// vduGetDoc GETs a document and returns the status code and decoded JSON response.
+func vduGetDoc(t *testing.T, router http.Handler, path string) (int, map[string]interface{}) {
+	t.Helper()
+	req := httptest.NewRequest("GET", path, nil)
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	result := map[string]interface{}{}
+	_ = json.NewDecoder(w.Body).Decode(&result)
+	return w.Code, result
+}
+
 func TestVDU_UsersDBValidation(t *testing.T) {
 	s, router, cleanup := setupVDUTest(t)
 	defer cleanup()
@@ -453,7 +465,8 @@ func TestVDU_UsersDBValidation(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, code)
 	assert.Contains(t, result["reason"], "doc.type must be user")
 
-	// PUT a well-formed user doc -> should succeed.
+	// PUT a well-formed user doc with plaintext password -> should succeed
+	// and the password should be hashed server-side.
 	code, result = vduPutDoc(t, router, "/_users/org.couchdb.user:testuser", map[string]interface{}{
 		"_id":      "org.couchdb.user:testuser",
 		"name":     "testuser",
@@ -463,6 +476,47 @@ func TestVDU_UsersDBValidation(t *testing.T) {
 	})
 	assert.Equal(t, http.StatusCreated, code)
 	assert.Equal(t, true, result["ok"])
+
+	// GET the stored doc and verify password was hashed.
+	code, stored := vduGetDoc(t, router, "/_users/org.couchdb.user:testuser")
+	require.Equal(t, http.StatusOK, code)
+	assert.Nil(t, stored["password"], "plaintext password must be removed")
+	assert.NotEmpty(t, stored["derived_key"], "derived_key must be set")
+	assert.NotEmpty(t, stored["salt"], "salt must be set")
+	assert.Equal(t, "pbkdf2", stored["password_scheme"])
+}
+
+func TestVDU_UsersDB_PasswordHashAndLogin(t *testing.T) {
+	s, router, cleanup := setupVDUTest(t)
+	defer cleanup()
+
+	err := s.EnsureSystemDatabases(t.Context())
+	require.NoError(t, err)
+
+	// Create a user with plaintext password.
+	code, result := vduPutDoc(t, router, "/_users/org.couchdb.user:logintest", map[string]interface{}{
+		"_id":      "org.couchdb.user:logintest",
+		"name":     "logintest",
+		"type":     "user",
+		"roles":    []string{},
+		"password": "mypassword",
+	})
+	require.Equal(t, http.StatusCreated, code)
+	require.Equal(t, true, result["ok"])
+
+	// Verify login via POST /_session with the plaintext password.
+	form := "name=logintest&password=mypassword"
+	req := httptest.NewRequest("POST", "/_session", bytes.NewReader([]byte(form)))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var sessionResult map[string]interface{}
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&sessionResult))
+	assert.Equal(t, true, sessionResult["ok"])
+	assert.Equal(t, "logintest", sessionResult["name"])
 }
 
 func TestVDU_VDUReceivesOldDoc(t *testing.T) {

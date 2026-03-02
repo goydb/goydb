@@ -90,6 +90,16 @@ func (s *DBDocsBulk) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	resp := make([]SimpleDocResponse, len(req.Docs))
 	if newEdits {
 		for i, doc := range req.Docs {
+			// Hash plaintext passwords in _users docs before validation.
+			if !doc.Deleted {
+				if err := hashUserPassword(db.Name(), doc); err != nil {
+					resp[i].ID = doc.ID
+					resp[i].Ok = false
+					resp[i].Error, resp[i].Reason = "internal_server_error", err.Error()
+					vduSkip[i] = true
+					continue
+				}
+			}
 			if isLocalDoc(doc.ID) {
 				continue
 			}

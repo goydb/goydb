@@ -65,6 +65,12 @@ func (s *DBDocPost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Data: doc,
 	}
 
+	// Hash plaintext passwords in _users docs before validation and storage.
+	if err := hashUserPassword(db.Name(), mdoc); err != nil {
+		WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	// Run validate_doc_update (POST is always a new document).
 	if err := ValidateDocUpdate(r.Context(), db, s.Logger, mdoc, nil, session); err != nil {
 		if writeValidationError(w, err) {

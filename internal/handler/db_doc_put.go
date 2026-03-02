@@ -113,6 +113,14 @@ func (s *DBDocPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Attachments: attachments,
 	}
 
+	// Hash plaintext passwords in _users docs before validation and storage.
+	if newEdits && !mdoc.Deleted {
+		if err := hashUserPassword(db.Name(), mdoc); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+
 	// Run validate_doc_update for normal edits on non-local docs.
 	if newEdits && !isLocalDoc(docID) {
 		var oldDoc *model.Document
@@ -221,6 +229,14 @@ func (s *DBDocPut) handleMultipart(w http.ResponseWriter, r *http.Request, db po
 		ID:      docID,
 		Data:    doc,
 		Deleted: isTruthy(doc["_deleted"]),
+	}
+
+	// Hash plaintext passwords in _users docs before validation and storage.
+	if !mdoc.Deleted {
+		if err := hashUserPassword(db.Name(), mdoc); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 
 	// Run validate_doc_update for non-local docs.
