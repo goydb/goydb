@@ -11,6 +11,57 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDBsInfo_AdminOnly_Default(t *testing.T) {
+	_, router, cleanup := setupRevsDiffTest(t)
+	defer cleanup()
+
+	createRegularUser(t, router, "bob", "bobpass")
+
+	// Unauthenticated request should get 401.
+	body := strings.NewReader(`{"keys":["_users"]}`)
+	req := httptest.NewRequest("POST", "/_dbs_info", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+
+	// Regular user should get 401 (not a server admin).
+	body = strings.NewReader(`{"keys":["_users"]}`)
+	req = httptest.NewRequest("POST", "/_dbs_info", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("bob", "bobpass")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestDBsInfo_AdminOnly_False(t *testing.T) {
+	s, router, cleanup := setupRevsDiffTest(t)
+	defer cleanup()
+
+	createRegularUser(t, router, "bob", "bobpass")
+	_, err := s.CreateDatabase(t.Context(), "mydb")
+	require.NoError(t, err)
+
+	// Set admin_only_all_dbs to false.
+	setConfig(t, router, "chttpd", "admin_only_all_dbs", "false")
+
+	// Regular user should now be able to access _dbs_info.
+	body := strings.NewReader(`{"keys":["mydb"]}`)
+	req := httptest.NewRequest("POST", "/_dbs_info", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("bob", "bobpass")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var results []map[string]interface{}
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&results))
+	require.Len(t, results, 1)
+	assert.Equal(t, "mydb", results[0]["key"])
+	assert.NotNil(t, results[0]["info"])
+}
+
 func TestDBsInfo_ExistingDatabases(t *testing.T) {
 	s, router, cleanup := setupRevsDiffTest(t)
 	defer cleanup()

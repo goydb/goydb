@@ -13,6 +13,16 @@ import (
 // ErrLimitExceeded is returned by limitedReadCloser when the read limit is exceeded.
 var ErrLimitExceeded = errors.New("entity too large")
 
+// configBool reads a config value from the given section/key and interprets it as a boolean.
+// Returns defaultVal if absent or empty; otherwise returns true only when the value is "true".
+func configBool(config *ConfigStore, section, key string, defaultVal bool) bool {
+	v, ok := config.Get(section, key)
+	if !ok || v == "" {
+		return defaultVal
+	}
+	return v == "true"
+}
+
 // configInt64 reads a config value from the given section/key and parses it as int64.
 // Returns 0 if absent, empty, or unparseable (0 means unlimited).
 func configInt64(config *ConfigStore, section, key string) int64 {

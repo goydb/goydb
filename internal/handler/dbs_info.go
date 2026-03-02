@@ -14,7 +14,8 @@ type DBsInfo struct {
 func (s *DBsInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close() //nolint:errcheck
 
-	if _, ok := (Authenticator{Base: s.Base, RequiresAdmin: true}.Do(w, r)); !ok {
+	adminOnly := configBool(s.Config, "chttpd", "admin_only_all_dbs", true)
+	if _, ok := (Authenticator{Base: s.Base, RequiresAdmin: adminOnly}.Do(w, r)); !ok {
 		return
 	}
 

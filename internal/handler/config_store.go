@@ -23,6 +23,7 @@ var defaultConfig = map[string]map[string]string{
 	},
 	"chttpd": {
 		"max_http_request_size": "4294967296",
+		"admin_only_all_dbs":    "true",
 	},
 	"httpd": {
 		"bind_address":            "0.0.0.0",
