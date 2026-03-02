@@ -704,8 +704,8 @@ func TestDBChanges_FilterView(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Filter using view
-	req := httptest.NewRequest("GET", "/testdb/_changes?filter=_view&view=_design/blog/published", nil)
+	// Filter using view (CouchDB format: no _design/ prefix)
+	req := httptest.NewRequest("GET", "/testdb/_changes?filter=_view&view=blog/published", nil)
 	req.SetBasicAuth("admin", "secret")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -758,8 +758,8 @@ func TestDBChanges_FilterCustom(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Filter by priority >= 3
-	req := httptest.NewRequest("GET", "/testdb/_changes?filter=_design/app/important&minPriority=3", nil)
+	// Filter by priority >= 3 (CouchDB format: no _design/ prefix)
+	req := httptest.NewRequest("GET", "/testdb/_changes?filter=app/important&minPriority=3", nil)
 	req.SetBasicAuth("admin", "secret")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -889,4 +889,237 @@ func TestDBChanges_EventSourceWithFilter(t *testing.T) {
 	// Should only receive post1
 	require.Len(t, receivedChanges, 1)
 	assert.Equal(t, "post1", receivedChanges[0])
+}
+
+func TestDBChanges_FilterCustom_DesignPrefix(t *testing.T) {
+	s, router, cleanup := setupChangesTest(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	// Create design doc with filter function
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID: "_design/app",
+		Data: map[string]interface{}{
+			"filters": map[string]interface{}{
+				"important": "function(doc, req) { return doc.priority >= parseInt(req.query.minPriority || '0'); }",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "task1",
+		Data: map[string]interface{}{"task": "Fix bug", "priority": 5},
+	})
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "task2",
+		Data: map[string]interface{}{"task": "Nice to have", "priority": 1},
+	})
+	require.NoError(t, err)
+
+	// Use _design/ prefix format (backwards compatibility)
+	req := httptest.NewRequest("GET", "/testdb/_changes?filter=_design/app/important&minPriority=3", nil)
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var result ChangesResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+
+	// Should only receive task1 (priority >= 3)
+	require.Len(t, result.Results, 1)
+	assert.Equal(t, "task1", result.Results[0].ID)
+}
+
+func TestDBChanges_FilterDesign(t *testing.T) {
+	s, router, cleanup := setupChangesTest(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	// Create a design document
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID: "_design/myapp",
+		Data: map[string]interface{}{
+			"views": map[string]interface{}{
+				"all": map[string]interface{}{
+					"map": "function(doc) { emit(doc._id, 1); }",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	// Create regular documents
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"value": 1},
+	})
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "doc2",
+		Data: map[string]interface{}{"value": 2},
+	})
+	require.NoError(t, err)
+
+	// Filter to only design documents
+	req := httptest.NewRequest("GET", "/testdb/_changes?filter=_design", nil)
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var result ChangesResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+
+	// Should only receive the design document
+	require.Len(t, result.Results, 1)
+	assert.Equal(t, "_design/myapp", result.Results[0].ID)
+}
+
+func TestDBChanges_FilterView_DesignPrefix(t *testing.T) {
+	s, router, cleanup := setupChangesTest(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	// Create design doc with view
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID: "_design/blog",
+		Data: map[string]interface{}{
+			"views": map[string]interface{}{
+				"published": map[string]interface{}{
+					"map": "function(doc) { if (doc.published) emit(doc._id, 1); }",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "post1",
+		Data: map[string]interface{}{"title": "A", "published": true},
+	})
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "draft1",
+		Data: map[string]interface{}{"title": "B", "published": false},
+	})
+	require.NoError(t, err)
+
+	// Use _design/ prefix format (backwards compatibility)
+	req := httptest.NewRequest("GET", "/testdb/_changes?filter=_view&view=_design/blog/published", nil)
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var result ChangesResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+
+	// Should only receive published posts
+	require.Len(t, result.Results, 1)
+	assert.Equal(t, "post1", result.Results[0].ID)
+}
+
+func TestDBChanges_FilterCustom_UserCtx(t *testing.T) {
+	s, router, cleanup := setupChangesTest(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	// Create design doc with filter that checks userCtx
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID: "_design/app",
+		Data: map[string]interface{}{
+			"filters": map[string]interface{}{
+				"by_user": "function(doc, req) { return doc.author === req.userCtx.name; }",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	// Create documents by different authors
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"author": "admin", "text": "Hello"},
+	})
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "doc2",
+		Data: map[string]interface{}{"author": "other", "text": "World"},
+	})
+	require.NoError(t, err)
+
+	// Filter using custom filter that checks userCtx.name (authenticated as "admin")
+	req := httptest.NewRequest("GET", "/testdb/_changes?filter=app/by_user", nil)
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var result ChangesResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+
+	// Should only receive doc1 (authored by "admin")
+	require.Len(t, result.Results, 1)
+	assert.Equal(t, "doc1", result.Results[0].ID)
+}
+
+func TestDBChanges_FilterDocIDs_ExplicitFilter(t *testing.T) {
+	s, router, cleanup := setupChangesTest(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	for i := 1; i <= 3; i++ {
+		_, err = db.PutDocument(ctx, &model.Document{
+			ID:   fmt.Sprintf("doc%d", i),
+			Data: map[string]interface{}{"value": i},
+		})
+		require.NoError(t, err)
+	}
+
+	// Use filter=_doc_ids with doc_ids in POST body
+	bodyData := map[string]interface{}{
+		"doc_ids": []string{"doc1", "doc3"},
+	}
+	body, _ := json.Marshal(bodyData)
+
+	req := httptest.NewRequest("POST", "/testdb/_changes?filter=_doc_ids", bytes.NewReader(body))
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var result ChangesResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+
+	require.Len(t, result.Results, 2)
+	docIDs := []string{result.Results[0].ID, result.Results[1].ID}
+	assert.Contains(t, docIDs, "doc1")
+	assert.Contains(t, docIDs, "doc3")
+	assert.NotContains(t, docIDs, "doc2")
 }

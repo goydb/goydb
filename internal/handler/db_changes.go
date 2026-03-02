@@ -25,7 +25,8 @@ const maxHeartbeat = time.Minute * 5
 func (s *DBChanges) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close() //nolint:errcheck
 
-	if _, ok := (Authenticator{Base: s.Base, RequiresAdmin: true}.Do(w, r)); !ok {
+	session, ok := Authenticator{Base: s.Base, RequiresAdmin: true}.Do(w, r)
+	if !ok {
 		return
 	}
 
@@ -69,17 +70,17 @@ func (s *DBChanges) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Route to appropriate handler based on feed type
 	switch feed {
 	case "normal", "longpoll":
-		s.handleNormalFeed(w, r, db, &options, includeDocs)
+		s.handleNormalFeed(w, r, db, &options, includeDocs, session)
 	case "continuous":
-		s.handleContinuousFeed(w, r, db, &options, includeDocs)
+		s.handleContinuousFeed(w, r, db, &options, includeDocs, session)
 	case "eventsource":
-		s.handleEventSourceFeed(w, r, db, &options, includeDocs)
+		s.handleEventSourceFeed(w, r, db, &options, includeDocs, session)
 	default:
 		WriteError(w, http.StatusBadRequest, "invalid feed type")
 	}
 }
 
-func (s *DBChanges) handleNormalFeed(w http.ResponseWriter, r *http.Request, db port.Database, options *model.ChangesOptions, includeDocs bool) {
+func (s *DBChanges) handleNormalFeed(w http.ResponseWriter, r *http.Request, db port.Database, options *model.ChangesOptions, includeDocs bool, session *model.Session) {
 	// Setup heartbeat ticker if specified
 	var heartbeatTicker *time.Ticker
 	var heartbeatDone chan struct{}
@@ -102,7 +103,7 @@ func (s *DBChanges) handleNormalFeed(w http.ResponseWriter, r *http.Request, db 
 	}
 
 	// Apply all filters
-	changes = s.applyFilters(r.Context(), db, changes, options, r)
+	changes = s.applyFilters(r.Context(), db, changes, options, r, session)
 
 	if options.Descending {
 		for i, j := 0, len(changes)-1; i < j; i, j = i+1, j-1 {
@@ -190,7 +191,7 @@ func (s *DBChanges) handleNormalFeed(w http.ResponseWriter, r *http.Request, db 
 	_, _ = fmt.Fprintf(w, `"last_seq":"%d","pending":%d}`, lastSeq, pending)
 }
 
-func (s *DBChanges) handleContinuousFeed(w http.ResponseWriter, r *http.Request, db port.Database, options *model.ChangesOptions, includeDocs bool) {
+func (s *DBChanges) handleContinuousFeed(w http.ResponseWriter, r *http.Request, db port.Database, options *model.ChangesOptions, includeDocs bool, session *model.Session) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Transfer-Encoding", "chunked")
 
@@ -258,7 +259,7 @@ func (s *DBChanges) handleContinuousFeed(w http.ResponseWriter, r *http.Request,
 	}
 
 	// Apply all filters
-	changes = s.applyFilters(ctx, db, changes, options, r)
+	changes = s.applyFilters(ctx, db, changes, options, r, session)
 
 	if includeDocs {
 		if err := db.EnrichDocuments(ctx, changes); err != nil {
@@ -312,7 +313,7 @@ func (s *DBChanges) handleContinuousFeed(w http.ResponseWriter, r *http.Request,
 			}
 
 			// Apply filters
-			filtered := s.applyFilters(ctx, db, []*model.Document{doc}, options, r)
+			filtered := s.applyFilters(ctx, db, []*model.Document{doc}, options, r, session)
 			if len(filtered) == 0 {
 				continue // Document was filtered out
 			}
@@ -337,7 +338,7 @@ func (s *DBChanges) handleContinuousFeed(w http.ResponseWriter, r *http.Request,
 	}
 }
 
-func (s *DBChanges) handleEventSourceFeed(w http.ResponseWriter, r *http.Request, db port.Database, options *model.ChangesOptions, includeDocs bool) {
+func (s *DBChanges) handleEventSourceFeed(w http.ResponseWriter, r *http.Request, db port.Database, options *model.ChangesOptions, includeDocs bool, session *model.Session) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -406,7 +407,7 @@ func (s *DBChanges) handleEventSourceFeed(w http.ResponseWriter, r *http.Request
 	}
 
 	// Apply all filters
-	changes = s.applyFilters(ctx, db, changes, options, r)
+	changes = s.applyFilters(ctx, db, changes, options, r, session)
 
 	if includeDocs {
 		if err := db.EnrichDocuments(ctx, changes); err != nil {
@@ -460,7 +461,7 @@ func (s *DBChanges) handleEventSourceFeed(w http.ResponseWriter, r *http.Request
 			}
 
 			// Apply filters
-			filtered := s.applyFilters(ctx, db, []*model.Document{doc}, options, r)
+			filtered := s.applyFilters(ctx, db, []*model.Document{doc}, options, r, session)
 			if len(filtered) == 0 {
 				continue
 			}
@@ -524,28 +525,34 @@ func (s *DBChanges) writeChangeDoc(w http.ResponseWriter, doc *model.Document, i
 }
 
 // applyFilters applies all configured filters to a slice of documents
-func (s *DBChanges) applyFilters(ctx context.Context, db port.Database, changes []*model.Document, options *model.ChangesOptions, r *http.Request) []*model.Document {
-	// 1. Apply doc_ids filter
+func (s *DBChanges) applyFilters(ctx context.Context, db port.Database, changes []*model.Document, options *model.ChangesOptions, r *http.Request, session *model.Session) []*model.Document {
+	// Apply doc_ids filter when present
 	if len(options.DocIDs) > 0 {
 		changes = s.filterByDocIDs(changes, options.DocIDs)
 	}
 
-	// 2. Apply selector filter
-	if options.Filter == "_selector" && options.Selector != nil {
+	switch {
+	case options.Filter == "_selector" && options.Selector != nil:
 		changes = s.filterBySelector(ctx, changes, options.Selector)
-	}
-
-	// 3. Apply view filter
-	if options.Filter == "_view" && options.View != "" {
+	case options.Filter == "_design":
+		changes = s.filterByDesign(changes)
+	case options.Filter == "_view" && options.View != "":
 		changes = s.filterByView(ctx, db, changes, options.View)
-	}
-
-	// 4. Apply custom filter
-	if strings.HasPrefix(options.Filter, "_design/") {
-		changes = s.filterByCustomFilter(ctx, db, changes, options.Filter, r)
+	case options.Filter != "" && options.Filter != "_doc_ids" && options.Filter != "_selector":
+		changes = s.filterByCustomFilter(ctx, db, changes, options.Filter, r, session)
 	}
 
 	return changes
+}
+
+func (s *DBChanges) filterByDesign(changes []*model.Document) []*model.Document {
+	filtered := make([]*model.Document, 0)
+	for _, doc := range changes {
+		if strings.HasPrefix(doc.ID, "_design/") {
+			filtered = append(filtered, doc)
+		}
+	}
+	return filtered
 }
 
 func (s *DBChanges) filterByDocIDs(changes []*model.Document, docIDs []string) []*model.Document {
@@ -583,8 +590,9 @@ func (s *DBChanges) filterBySelector(ctx context.Context, changes []*model.Docum
 }
 
 func (s *DBChanges) filterByView(ctx context.Context, db port.Database, changes []*model.Document, viewPath string) []*model.Document {
-	// Parse view path: "_design/ddoc/viewname"
-	parts := strings.Split(strings.TrimPrefix(viewPath, "_design/"), "/")
+	// Parse view path: accepts both "ddoc/viewname" and "_design/ddoc/viewname"
+	path := strings.TrimPrefix(viewPath, "_design/")
+	parts := strings.SplitN(path, "/", 2)
 	if len(parts) < 2 {
 		s.Logger.Warnf(ctx, "invalid view path", "path", viewPath)
 		return changes
@@ -632,9 +640,10 @@ func (s *DBChanges) filterByView(ctx context.Context, db port.Database, changes 
 	return filtered
 }
 
-func (s *DBChanges) filterByCustomFilter(ctx context.Context, db port.Database, changes []*model.Document, filterPath string, r *http.Request) []*model.Document {
-	// Parse filter path: "_design/ddoc/filtername"
-	parts := strings.Split(strings.TrimPrefix(filterPath, "_design/"), "/")
+func (s *DBChanges) filterByCustomFilter(ctx context.Context, db port.Database, changes []*model.Document, filterPath string, r *http.Request, session *model.Session) []*model.Document {
+	// Parse filter path: accepts both "ddoc/filtername" and "_design/ddoc/filtername"
+	path := strings.TrimPrefix(filterPath, "_design/")
+	parts := strings.SplitN(path, "/", 2)
 	if len(parts) < 2 {
 		s.Logger.Warnf(ctx, "invalid filter path", "path", filterPath)
 		return changes
@@ -670,13 +679,14 @@ func (s *DBChanges) filterByCustomFilter(ctx context.Context, db port.Database, 
 		return changes
 	}
 
-	// Prepare request context
+	// Prepare request context with session info
+	sessionForCtx := session
+	if sessionForCtx == nil {
+		sessionForCtx = &model.Session{}
+	}
 	req := map[string]interface{}{
-		"query": make(map[string]interface{}),
-		"userCtx": map[string]interface{}{
-			"name":  nil,
-			"roles": []string{},
-		},
+		"query":   make(map[string]interface{}),
+		"userCtx": userCtxToJS(sessionForCtx, db.Name()),
 	}
 
 	// Add all query parameters to req.query
