@@ -25,13 +25,13 @@ const maxHeartbeat = time.Minute * 5
 func (s *DBChanges) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close() //nolint:errcheck
 
-	session, ok := Authenticator{Base: s.Base, RequiresAdmin: true}.Do(w, r)
-	if !ok {
+	db := Database{Base: s.Base}.Do(w, r)
+	if db == nil {
 		return
 	}
 
-	db := Database{Base: s.Base}.Do(w, r)
-	if db == nil {
+	session, ok := Authenticator{Base: s.Base}.DB(w, r, db)
+	if !ok {
 		return
 	}
 
