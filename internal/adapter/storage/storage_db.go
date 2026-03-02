@@ -125,6 +125,7 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 		tx.EnsureBucket(model.AttRefsBucket)
 		tx.EnsureBucket(model.DocLeavesBucket)
 		tx.EnsureBucket(model.MetaBucket)
+		tx.EnsureBucket(internalDocsBucket)
 
 		err := database.BuildIndices(ctx, tx, false)
 		if err != nil {

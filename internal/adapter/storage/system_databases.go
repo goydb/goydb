@@ -151,5 +151,15 @@ func (s *Storage) ensureUsersDB(ctx context.Context) error {
 		newDoc.Rev = doc.Rev
 	}
 	_, err = db.PutDocument(ctx, newDoc)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Set CouchDB-compatible security: empty Members/Admins means any
+	// authenticated user may access (VDU restricts writes to own doc).
+	usersSecurity := &model.Security{
+		Admins:  model.Admins{Names: []string{}, Roles: []string{}},
+		Members: model.Members{Names: []string{}, Roles: []string{}},
+	}
+	return db.PutSecurity(ctx, usersSecurity)
 }

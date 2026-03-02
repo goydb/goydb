@@ -45,6 +45,29 @@ func TestEnsureSystemDatabases_SeedsAuthDesignDoc(t *testing.T) {
 	assert.Contains(t, vdu, "doc.type must be user")
 }
 
+func TestEnsureSystemDatabases_SetsEmptySecurity(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	err := s.EnsureSystemDatabases(ctx)
+	require.NoError(t, err)
+
+	db, err := s.Database(ctx, "_users")
+	require.NoError(t, err)
+
+	sec, err := db.GetSecurity(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, sec)
+
+	// CouchDB defaults: empty Members/Admins = any authenticated user may access.
+	assert.Empty(t, sec.Members.Names)
+	assert.Empty(t, sec.Members.Roles)
+	assert.Empty(t, sec.Admins.Names)
+	assert.Empty(t, sec.Admins.Roles)
+}
+
 func TestEnsureSystemDatabases_Idempotent(t *testing.T) {
 	s, cleanup := openStorage(t)
 	defer cleanup()
