@@ -25,6 +25,10 @@ func (s *DBCreate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if CheckMaxDatabases(w, s.Config, r.Context(), s.Storage) {
+		return
+	}
+
 	_, err := s.Storage.CreateDatabase(r.Context(), dbName)
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, err.Error())

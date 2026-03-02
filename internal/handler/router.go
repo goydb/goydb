@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"net/http"
 	"path/filepath"
 
 	"github.com/goydb/goydb/internal/service"
@@ -162,6 +163,17 @@ func (router Router) Build(r *mux.Router) error {
 	r.Methods("POST").Path("/{db}").Handler(&DBDocPost{Base: b})
 
 	r.Methods("GET").Path("/").Handler(&Index{})
+
+	// Middleware: enforce max_http_request_size on all requests.
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			limit := configInt64(b.Config, "chttpd", "max_http_request_size")
+			if limit > 0 && req.Body != nil {
+				req.Body = http.MaxBytesReader(w, req.Body, limit)
+			}
+			next.ServeHTTP(w, req)
+		})
+	})
 
 	return nil
 }

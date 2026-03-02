@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
 	"github.com/goydb/goydb/pkg/model"
@@ -26,14 +27,62 @@ func (s *DBDocsBulk) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req BulkDocRequest
-	err := json.NewDecoder(r.Body).Decode(&req)
+	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
+	// Check total request body against max_http_request_size.
+	httpLimit := configInt64(s.Config, "chttpd", "max_http_request_size")
+	if httpLimit > 0 && int64(len(bodyBytes)) > httpLimit {
+		WriteError(w, http.StatusRequestEntityTooLarge, "request_entity_too_large")
+		return
+	}
+
+	var req BulkDocRequest
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Check each document's size against max_document_size.
+	docSizeLimit := configInt64(s.Config, "couchdb", "max_document_size")
+	if docSizeLimit > 0 {
+		for _, doc := range req.Docs {
+			docBytes, err := json.Marshal(doc.Data)
+			if err != nil {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if int64(len(docBytes)) > docSizeLimit {
+				WriteError(w, http.StatusRequestEntityTooLarge, "document_too_large")
+				return
+			}
+		}
+	}
+
 	newEdits := req.NewEdits == nil || *req.NewEdits
+
+	// Count new docs in the batch (no Rev, not Deleted) and check max_docs_per_db.
+	// Skip when new_edits=false (replication mode).
+	if newEdits {
+		var newCount int64
+		for _, doc := range req.Docs {
+			if doc.Rev == "" && !doc.Deleted {
+				newCount++
+			}
+		}
+		if newCount > 0 {
+			if CheckMaxDocsPerDB(w, s.Config, r.Context(), db, newCount) {
+				return
+			}
+		}
+	}
+
+	if CheckMaxDBSize(w, s.Config, r.Context(), db) {
+		return
+	}
 
 	resp := make([]SimpleDocResponse, len(req.Docs))
 	err = db.Transaction(r.Context(), func(tx port.DatabaseTx) error {

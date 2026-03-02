@@ -13,8 +13,16 @@ import (
 // defaultConfig is the seed applied on the very first run (when no file exists).
 var defaultConfig = map[string]map[string]string{
 	"couchdb": {
-		"uuid":    "0dbc95c8-4208-11eb-ad76-00155d4c9c92",
-		"version": "0.1.0",
+		"uuid":                "0dbc95c8-4208-11eb-ad76-00155d4c9c92",
+		"version":             "0.1.0",
+		"max_document_size":   "8000000",
+		"max_dbs":             "0",
+		"max_docs_per_db":     "0",
+		"max_attachment_size": "0",
+		"max_db_size":         "0",
+	},
+	"chttpd": {
+		"max_http_request_size": "4294967296",
 	},
 	"httpd": {
 		"bind_address":            "0.0.0.0",

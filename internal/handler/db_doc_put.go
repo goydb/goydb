@@ -40,9 +40,18 @@ func (s *DBDocPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var doc map[string]interface{}
-	err := json.NewDecoder(r.Body).Decode(&doc)
+	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if CheckMaxDocumentSize(w, s.Config, int64(len(bodyBytes))) {
+		return
+	}
+
+	var doc map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &doc); err != nil {
 		WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -84,6 +93,18 @@ func (s *DBDocPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check per-DB doc count for genuinely new documents (no _rev, newEdits=true, not _deleted).
+	_, hasRev := doc["_rev"]
+	if newEdits && !hasRev && !isTruthy(doc["_deleted"]) {
+		if CheckMaxDocsPerDB(w, s.Config, r.Context(), db, 1) {
+			return
+		}
+	}
+
+	if CheckMaxDBSize(w, s.Config, r.Context(), db) {
+		return
+	}
+
 	mdoc := &model.Document{
 		ID:          docID,
 		Data:        doc,
@@ -117,6 +138,9 @@ func (s *DBDocPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		decoded, err := base64.StdEncoding.DecodeString(att.data)
 		if err != nil {
 			WriteError(w, http.StatusBadRequest, "bad base64 in attachment "+name)
+			return
+		}
+		if CheckMaxAttachmentSize(w, s.Config, int64(len(decoded))) {
 			return
 		}
 		rev, err = db.PutAttachment(r.Context(), docID, &model.Attachment{
@@ -154,8 +178,17 @@ func (s *DBDocPut) handleMultipart(w http.ResponseWriter, r *http.Request, db po
 	}
 	defer part.Close() //nolint:errcheck
 
+	partBytes, err := io.ReadAll(part)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if CheckMaxDocumentSize(w, s.Config, int64(len(partBytes))) {
+		return
+	}
+
 	var doc map[string]interface{}
-	if err := json.NewDecoder(part).Decode(&doc); err != nil {
+	if err := json.Unmarshal(partBytes, &doc); err != nil {
 		WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -163,6 +196,10 @@ func (s *DBDocPut) handleMultipart(w http.ResponseWriter, r *http.Request, db po
 	docID := resolveDocID(doc, r)
 	if docID == "" {
 		WriteError(w, http.StatusBadRequest, "missing _id")
+		return
+	}
+
+	if CheckMaxDBSize(w, s.Config, r.Context(), db) {
 		return
 	}
 
@@ -194,11 +231,18 @@ func (s *DBDocPut) handleMultipart(w http.ResponseWriter, r *http.Request, db po
 		filename := filenameFromPart(part)
 		ct := part.Header.Get("Content-Type")
 
+		attLimit := configInt64(s.Config, "couchdb", "max_attachment_size")
+		reader := newLimitedReadCloser(io.NopCloser(part), attLimit)
+
 		rev, err = db.PutAttachment(r.Context(), docID, &model.Attachment{
 			Filename:    filename,
 			ContentType: ct,
-			Reader:      io.NopCloser(part),
+			Reader:      reader,
 		})
+		if errors.Is(err, ErrLimitExceeded) {
+			WriteError(w, http.StatusRequestEntityTooLarge, "attachment_too_large")
+			return
+		}
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return

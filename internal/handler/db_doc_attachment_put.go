@@ -42,12 +42,31 @@ func (s *DBDocAttachmentPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rev := revFromRequest(r)
 	batch := r.URL.Query().Get("batch") == "ok"
 
+	// Fast path: check Content-Length header against max_attachment_size.
+	if r.ContentLength > 0 {
+		if CheckMaxAttachmentSize(w, s.Config, r.ContentLength) {
+			return
+		}
+	}
+
+	if CheckMaxDBSize(w, s.Config, ctx, db) {
+		return
+	}
+
+	// Wrap body with a limited reader if an attachment size limit is configured.
+	attLimit := configInt64(s.Config, "couchdb", "max_attachment_size")
+	body := newLimitedReadCloser(r.Body, attLimit)
+
 	newRev, err := db.PutAttachment(ctx, docID, &model.Attachment{
 		ContentType: r.Header.Get("Content-Type"),
 		Filename:    attachment,
-		Reader:      r.Body,
+		Reader:      body,
 		ExpectedRev: rev,
 	})
+	if errors.Is(err, ErrLimitExceeded) {
+		WriteError(w, http.StatusRequestEntityTooLarge, "attachment_too_large")
+		return
+	}
 	if errors.Is(err, storage.ErrConflict) {
 		WriteError(w, http.StatusConflict, err.Error())
 		return

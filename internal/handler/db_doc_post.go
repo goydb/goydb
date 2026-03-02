@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
 	"github.com/goydb/goydb/internal/adapter/storage"
@@ -27,9 +28,27 @@ func (s *DBDocPost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if CheckMaxDocumentSize(w, s.Config, int64(len(bodyBytes))) {
+		return
+	}
+
 	var doc map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&doc); err != nil {
+	if err := json.Unmarshal(bodyBytes, &doc); err != nil {
 		doc = make(map[string]interface{})
+	}
+
+	if CheckMaxDocsPerDB(w, s.Config, r.Context(), db, 1) {
+		return
+	}
+
+	if CheckMaxDBSize(w, s.Config, r.Context(), db) {
+		return
 	}
 
 	b := make([]byte, 16)
