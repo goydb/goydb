@@ -12,23 +12,25 @@ import (
 )
 
 type Storage struct {
-	path           string
-	dbs            map[string]*Database
-	mu             sync.RWMutex
-	viewEngines    port.ViewEngines
-	filterEngines  port.FilterEngines
-	reducerEngines port.ReducerEngines
-	logger         port.Logger
+	path            string
+	dbs             map[string]*Database
+	mu              sync.RWMutex
+	viewEngines     port.ViewEngines
+	filterEngines   port.FilterEngines
+	reducerEngines  port.ReducerEngines
+	validateEngines port.ValidateEngines
+	logger          port.Logger
 }
 
 type StorageOption func(s *Storage) error
 
 func Open(path string, options ...StorageOption) (*Storage, error) {
 	s := &Storage{
-		path:           path,
-		viewEngines:    make(port.ViewEngines),
-		filterEngines:  make(port.FilterEngines),
-		reducerEngines: make(port.ReducerEngines),
+		path:            path,
+		viewEngines:     make(port.ViewEngines),
+		filterEngines:   make(port.FilterEngines),
+		reducerEngines:  make(port.ReducerEngines),
+		validateEngines: make(port.ValidateEngines),
 	}
 
 	for _, option := range options {
@@ -107,6 +109,14 @@ func (s *Storage) RegisterReducerEngine(name string, builder port.ReducerServerB
 	return nil
 }
 
+func (s *Storage) RegisterValidateEngine(name string, builder port.ValidateServerBuilder) error {
+	if _, ok := s.validateEngines[name]; ok {
+		return fmt.Errorf("validate engine with name %q already registered", name)
+	}
+	s.validateEngines[name] = builder
+	return nil
+}
+
 func (s *Storage) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -137,6 +147,12 @@ func WithFilterEngine(name string, builder port.FilterServerBuilder) StorageOpti
 func WithReducerEngine(name string, builder port.ReducerServerBuilder) StorageOption {
 	return func(s *Storage) error {
 		return s.RegisterReducerEngine(name, builder)
+	}
+}
+
+func WithValidateEngine(name string, builder port.ValidateServerBuilder) StorageOption {
+	return func(s *Storage) error {
+		return s.RegisterValidateEngine(name, builder)
 	}
 }
 

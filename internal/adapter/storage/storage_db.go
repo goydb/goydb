@@ -21,11 +21,12 @@ type Database struct {
 
 	listener sync.Map
 
-	indices        map[string]port.DocumentIndex
-	viewEngines    map[string]port.ViewServerBuilder
-	filterEngines  map[string]port.FilterServerBuilder
-	reducerEngines map[string]port.ReducerServerBuilder
-	logger         port.Logger
+	indices         map[string]port.DocumentIndex
+	viewEngines     map[string]port.ViewServerBuilder
+	filterEngines   map[string]port.FilterServerBuilder
+	reducerEngines  map[string]port.ReducerServerBuilder
+	validateEngines map[string]port.ValidateServerBuilder
+	logger          port.Logger
 }
 
 func (d *Database) ChangesIndex() port.DocumentIndex {
@@ -84,6 +85,10 @@ func (d *Database) ReducerEngine(name string) port.ReducerServerBuilder {
 	return d.reducerEngines[name]
 }
 
+func (d *Database) ValidateEngine(name string) port.ValidateServerBuilder {
+	return d.validateEngines[name]
+}
+
 func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Database, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -105,9 +110,10 @@ func (s *Storage) CreateDatabase(ctx context.Context, name string) (port.Databas
 			index.ChangesIndexName: index.NewChangesIndex(),
 			index.DeletedIndexName: index.NewDeletedIndex(),
 		},
-		viewEngines:    s.viewEngines,
-		filterEngines:  s.filterEngines,
-		reducerEngines: s.reducerEngines,
+		viewEngines:     s.viewEngines,
+		filterEngines:   s.filterEngines,
+		reducerEngines:  s.reducerEngines,
+		validateEngines: s.validateEngines,
 		logger:         s.logger.With("database", name),
 	}
 	s.dbs[name] = database

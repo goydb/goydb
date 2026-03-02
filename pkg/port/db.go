@@ -69,6 +69,7 @@ type Database interface {
 	ViewEngine(name string) ViewServerBuilder
 	FilterEngine(name string) FilterServerBuilder
 	ReducerEngine(name string) ReducerServerBuilder
+	ValidateEngine(name string) ValidateServerBuilder
 }
 
 // Storage is the high-level interface for the storage layer that manages

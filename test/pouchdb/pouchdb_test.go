@@ -13,6 +13,7 @@ import (
 	"github.com/goydb/goydb/internal/adapter/logger"
 	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/internal/adapter/view/gojaview"
+	"github.com/goydb/goydb/internal/adapter/view/tengoview"
 	"github.com/goydb/goydb/internal/controller"
 	"github.com/goydb/goydb/internal/handler"
 	"github.com/goydb/goydb/internal/service"
@@ -41,6 +42,9 @@ func TestPouchDBCompat(t *testing.T) {
 		storage.WithFilterEngine("javascript", gojaview.NewFilterServer),
 		storage.WithReducerEngine("", gojaview.NewReducerBuilder(log)),
 		storage.WithReducerEngine("javascript", gojaview.NewReducerBuilder(log)),
+		storage.WithValidateEngine("", gojaview.NewValidateServerBuilder(log)),
+		storage.WithValidateEngine("javascript", gojaview.NewValidateServerBuilder(log)),
+		storage.WithValidateEngine("tengo", tengoview.NewValidateServerBuilder(log)),
 	)
 	if err != nil {
 		t.Fatalf("failed to open storage: %v", err)

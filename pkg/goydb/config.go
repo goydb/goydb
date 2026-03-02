@@ -107,6 +107,9 @@ func (c *Config) BuildDatabase() (*Goydb, error) {
 		storage.WithFilterEngine("tengo", tengoview.NewFilterServer),
 		storage.WithReducerEngine("", gojaview.NewReducerBuilder(logger.With("component", "reducer"))),
 		storage.WithReducerEngine("javascript", gojaview.NewReducerBuilder(logger.With("component", "reducer"))),
+		storage.WithValidateEngine("", gojaview.NewValidateServerBuilder(logger.With("component", "validate"))),
+		storage.WithValidateEngine("javascript", gojaview.NewValidateServerBuilder(logger.With("component", "validate"))),
+		storage.WithValidateEngine("tengo", tengoview.NewValidateServerBuilder(logger.With("component", "validate"))),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database dir: %w", err)
