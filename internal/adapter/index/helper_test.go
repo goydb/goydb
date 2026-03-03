@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/d5/tengo/v2/require"
+	"github.com/stretchr/testify/require"
 	adapterlogger "github.com/goydb/goydb/internal/adapter/logger"
 	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/port"

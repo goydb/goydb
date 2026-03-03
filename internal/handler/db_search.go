@@ -1,3 +1,5 @@
+//go:build !nosearch
+
 package handler
 
 import (
@@ -145,20 +147,6 @@ func searchRecordToRow(rec *port.SearchRecord) SearchRow {
 		row.Highlights = rec.Highlights
 	}
 	return row
-}
-
-// unquoteJSON strips surrounding JSON double-quotes from a string value if
-// present.  When mergeBodyIntoOptions stores POST body fields, JSON strings
-// like `"ok"` keep their quotes.  This helper decodes them so downstream
-// comparisons work correctly (e.g. stale == "ok" instead of stale == `"ok"`).
-func unquoteJSON(s string) string {
-	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
-		var unquoted string
-		if json.Unmarshal([]byte(s), &unquoted) == nil {
-			return unquoted
-		}
-	}
-	return s
 }
 
 // buildSearchQuery parses all CouchDB search parameters from URL values.

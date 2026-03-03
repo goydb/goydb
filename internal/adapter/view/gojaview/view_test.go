@@ -1,3 +1,5 @@
+//go:build !nogoja
+
 package gojaview
 
 import (

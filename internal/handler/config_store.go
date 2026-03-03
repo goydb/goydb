@@ -39,13 +39,6 @@ var defaultConfig = map[string]map[string]string{
 		"x_auth_roles":     "X-Auth-CouchDB-Roles",
 		"x_auth_token":     "X-Auth-CouchDB-Token",
 	},
-	"jwt_keys": {},
-	"jwt_auth": {
-		"required_claims":  "",
-		"roles_claim_path": "_couchdb.roles",
-		"jwks_url":         "",
-		"jwks_cache_ttl":   "3600",
-	},
 	"cors": {
 		"origins":     "*",
 		"credentials": "false",
@@ -57,6 +50,20 @@ var defaultConfig = map[string]map[string]string{
 		"file":  "",
 	},
 	"admins": {},
+}
+
+// RegisterConfigDefaults merges additional default config sections.
+// Called from init() in build-tagged feature files so the config store
+// seed reflects only compiled-in features.
+func RegisterConfigDefaults(sections map[string]map[string]string) {
+	for section, kv := range sections {
+		if _, ok := defaultConfig[section]; !ok {
+			defaultConfig[section] = make(map[string]string)
+		}
+		for k, v := range kv {
+			defaultConfig[section][k] = v
+		}
+	}
 }
 
 // ConfigStore is a thread-safe CouchDB-style configuration store.

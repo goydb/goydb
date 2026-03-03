@@ -1,3 +1,5 @@
+//go:build !nototp
+
 package handler
 
 import (

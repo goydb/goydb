@@ -90,7 +90,10 @@ func (d *Database) BuildFnIndices(ctx context.Context, tx port.EngineWriteTransa
 	case model.ViewFn:
 		disu = index.NewViewIndex(ddfn, d.viewEngines, d.logger.With("index", ddfn.String()))
 	case model.SearchFn:
-		disu = index.NewExternalSearchIndex(ddfn, d.viewEngines, d.searchIndexPath(ddfn.String()), d.logger.With("index", ddfn.String()))
+		if searchIndexFactory == nil {
+			return fmt.Errorf("search index support not compiled in (build with default tags to enable)")
+		}
+		disu = searchIndexFactory(ddfn, d.viewEngines, d.searchIndexPath(ddfn.String()), d.logger.With("index", ddfn.String()))
 	case model.MangoFn:
 		disu = index.NewMangoIndex(ddfn, d.logger.With("index", ddfn.String()))
 	default:
@@ -148,7 +151,7 @@ func (d *Database) SearchDocuments(ctx context.Context, ddfn *model.DesignDocFn,
 		return nil, ErrNotFound
 	}
 
-	si, ok := idx.(*index.ExternalSearchIndex)
+	si, ok := idx.(port.Searcher)
 	if !ok {
 		return nil, fmt.Errorf("can't SearchDocuments on non search index: %q", ddfn)
 	}

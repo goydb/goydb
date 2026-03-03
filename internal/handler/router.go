@@ -63,8 +63,6 @@ func (router Router) Build(r *mux.Router) error {
 	r.Methods("GET").Path("/_scheduler/jobs").Handler(&SchedulerJobs{Base: b})
 	r.Methods("GET").Path("/_scheduler/docs").Handler(&SchedulerDocs{Base: b})
 	r.Methods("GET").Path("/_scheduler/docs/{repid}").Handler(&SchedulerDocByID{Base: b})
-	r.Methods("POST").Path("/_search_analyze").Handler(&SearchAnalyze{Base: b})
-	r.Methods("POST").Path("/_nouveau_analyze").Handler(&SearchAnalyze{Base: b})
 
 	r.Methods("GET").Path("/_reshard").Handler(&ReshardGet{Base: b})
 	r.Methods("GET", "PUT").Path("/_reshard/state").Handler(&ReshardState{Base: b})
@@ -86,8 +84,6 @@ func (router Router) Build(r *mux.Router) error {
 	r.Methods("GET").Path("/{db}/_shards").Handler(&DBShards{Base: b})
 	r.Methods("GET").Path("/{db}/_shards/{docid}").Handler(&DBShardsDoc{Base: b})
 	r.Methods("POST").Path("/{db}/_sync_shards").Handler(&DBSyncShards{Base: b})
-	r.Methods("POST").Path("/{db}/_search_cleanup").Handler(&SearchCleanup{Base: b})
-	r.Methods("POST").Path("/{db}/_nouveau_cleanup").Handler(&SearchCleanup{Base: b})
 	r.Methods("POST").Path("/{db}/_purge").Handler(&DBPurge{Base: b})
 	r.Methods("GET").Path("/{db}/_purged_infos_limit").Handler(&DBPurgedInfosLimitGet{Base: b})
 	r.Methods("PUT").Path("/{db}/_purged_infos_limit").Handler(&DBPurgedInfosLimitPut{Base: b})
@@ -109,10 +105,10 @@ func (router Router) Build(r *mux.Router) error {
 
 	r.Methods("POST").Path("/{db}/_design/{docid}/_view/{view}/queries").Handler(&DBViewQueries{Base: b})
 	r.Methods("GET", "POST").Path("/{db}/_design/{docid}/_view/{view}").Handler(&DBView{Base: b})
-	r.Methods("GET", "POST").Path("/{db}/_design/{docid}/_search/{index}").Handler(&DBSearch{Base: b})
-	r.Methods("GET").Path("/{db}/_design/{docid}/_search_info/{index}").Handler(&SearchInfo{Base: b})
-	r.Methods("POST").Path("/{db}/_design/{docid}/_nouveau/{index}").Handler(&NouveauSearch{Base: b})
-	r.Methods("GET").Path("/{db}/_design/{docid}/_nouveau_info/{index}").Handler(&NouveauInfo{Base: b})
+	for _, hook := range routerHooks {
+		hook(r, b)
+	}
+
 	r.Methods("GET", "POST").Path("/{db}/_design/{docid}/_show/{func}").Handler(&DDShowFunction{Base: b})
 	r.Methods("GET", "POST").Path("/{db}/_design/{docid}/_show/{func}/{showdocid}").Handler(&DDShowFunction{Base: b})
 	r.Methods("GET", "POST").Path("/{db}/_design/{docid}/_list/{func}/{view}").Handler(&DDListFunction{Base: b})

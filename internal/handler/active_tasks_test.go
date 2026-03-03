@@ -1,3 +1,5 @@
+//go:build !nogoja
+
 package handler
 
 import (
@@ -88,32 +90,6 @@ func TestActiveTasks_ViewIndexType(t *testing.T) {
 	require.Len(t, tasks, 1)
 	assert.Equal(t, "indexer", tasks[0].Type)
 	assert.Equal(t, "_design/myddoc", tasks[0].DesignDocument)
-	assert.Equal(t, "testdb", tasks[0].Database)
-}
-
-func TestActiveTasks_SearchIndexType(t *testing.T) {
-	s, router, cleanup := setupActiveTasksTest(t)
-	defer cleanup()
-
-	ctx := t.Context()
-	_, err := s.CreateDatabase(ctx, "testdb")
-	require.NoError(t, err)
-
-	putDesignDoc(t, router, "testdb", "myidx", map[string]interface{}{
-		"indexes": map[string]interface{}{
-			"search": map[string]interface{}{
-				"index": `function(doc) {
-					index("name", doc.name, {"store": true});
-				}`,
-			},
-		},
-	})
-
-	tasks, code := getActiveTasks(t, router)
-	require.Equal(t, http.StatusOK, code)
-	require.Len(t, tasks, 1)
-	assert.Equal(t, "search_indexer", tasks[0].Type)
-	assert.Equal(t, "_design/myidx", tasks[0].DesignDocument)
 	assert.Equal(t, "testdb", tasks[0].Database)
 }
 

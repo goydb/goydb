@@ -31,6 +31,20 @@ func boolOption(name string, fallback bool, options url.Values) bool {
 	return options[name][0] == "true"
 }
 
+// unquoteJSON strips surrounding JSON double-quotes from a string value if
+// present.  When mergeBodyIntoOptions stores POST body fields, JSON strings
+// like `"ok"` keep their quotes.  This helper decodes them so downstream
+// comparisons work correctly (e.g. stale == "ok" instead of stale == `"ok"`).
+func unquoteJSON(s string) string {
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		var unquoted string
+		if json.Unmarshal([]byte(s), &unquoted) == nil {
+			return unquoted
+		}
+	}
+	return s
+}
+
 func stringOption(name string, alias string, options url.Values) string {
 	if len(options[name]) > 0 {
 		return options[name][0]

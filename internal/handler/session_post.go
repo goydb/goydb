@@ -53,14 +53,9 @@ func (s *SessionPost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// TOTP verification: if the user has TOTP configured, require and verify the token.
 	// Admin users (user == nil) skip TOTP — they have no user document.
-	if user != nil && user.HasTOTP() {
-		if totpToken == "" {
-			WriteError(w, http.StatusUnauthorized, "TOTP token required.")
-			return
-		}
-		ok, err := user.TOTP.VerifyTOTP(totpToken)
-		if err != nil || !ok {
-			WriteError(w, http.StatusUnauthorized, "Invalid TOTP token.")
+	if user != nil {
+		if err := checkTOTP(user, totpToken); err != nil {
+			WriteError(w, http.StatusUnauthorized, err.Error())
 			return
 		}
 	}

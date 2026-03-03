@@ -78,17 +78,18 @@ type NodeVersions struct {
 func (s *NodeVersions) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close() //nolint:errcheck
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{ // nolint: errcheck
-		"javascript_engine": map[string]interface{}{
-			"name":    "goja",
-			"version": "0.0.0",
-		},
+	versions := map[string]interface{}{
 		"collation_driver": map[string]interface{}{
 			"name":    "builtin",
 			"version": "0.0.0",
 		},
-	})
+	}
+	if jsEngineInfo != nil {
+		versions["javascript_engine"] = jsEngineInfo
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(versions) // nolint: errcheck
 }
 
 // NodeSmooshStatus handles GET /_node/{node}/_smoosh/status.

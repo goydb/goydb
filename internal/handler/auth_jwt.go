@@ -1,3 +1,5 @@
+//go:build !nojwt
+
 package handler
 
 import (
@@ -15,6 +17,16 @@ import (
 func init() {
 	RegisterAuthHandler("jwt_authentication_handler", func(b Base) AuthHandler {
 		return &JWTAuthHandler{Config: b.Config}
+	})
+	RegisterFeature("jwt")
+	RegisterConfigDefaults(map[string]map[string]string{
+		"jwt_keys": {},
+		"jwt_auth": {
+			"required_claims":  "",
+			"roles_claim_path": "_couchdb.roles",
+			"jwks_url":         "",
+			"jwks_cache_ttl":   "3600",
+		},
 	})
 }
 

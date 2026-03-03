@@ -1,3 +1,5 @@
+//go:build !nojwt
+
 package handler
 
 import (

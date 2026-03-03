@@ -1,3 +1,5 @@
+//go:build !nosearch && !nogoja
+
 package handler
 
 import (

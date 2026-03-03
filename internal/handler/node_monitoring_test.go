@@ -68,7 +68,7 @@ func TestNodeVersions(t *testing.T) {
 
 	var result map[string]interface{}
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
-	assert.Contains(t, result, "javascript_engine")
+	assert.Contains(t, result, "collation_driver")
 }
 
 func TestNodeSmooshStatus(t *testing.T) {

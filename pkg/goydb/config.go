@@ -14,8 +14,6 @@ import (
 	"github.com/gorilla/sessions"
 	adapterlogger "github.com/goydb/goydb/internal/adapter/logger"
 	"github.com/goydb/goydb/internal/adapter/storage"
-	"github.com/goydb/goydb/internal/adapter/view/gojaview"
-	"github.com/goydb/goydb/internal/adapter/view/tengoview"
 	"github.com/goydb/goydb/internal/controller"
 	"github.com/goydb/goydb/internal/handler"
 	"github.com/goydb/goydb/internal/service"
@@ -96,24 +94,13 @@ func (c *Config) BuildDatabase() (*Goydb, error) {
 	gdb.Logger = logger
 
 	// Open storage with logger
-	s, err := storage.Open(
-		c.DatabaseDir,
+	storageOpts := []storage.StorageOption{
 		storage.WithLogger(logger.With("component", "storage")),
-		storage.WithViewEngine("", gojaview.NewViewServer), // default langage
-		storage.WithViewEngine("javascript", gojaview.NewViewServer),
-		storage.WithViewEngine("tengo", tengoview.NewViewServer),
-		storage.WithFilterEngine("", gojaview.NewFilterServer),
-		storage.WithFilterEngine("javascript", gojaview.NewFilterServer),
-		storage.WithFilterEngine("tengo", tengoview.NewFilterServer),
-		storage.WithReducerEngine("", gojaview.NewReducerBuilder(logger.With("component", "reducer"))),
-		storage.WithReducerEngine("javascript", gojaview.NewReducerBuilder(logger.With("component", "reducer"))),
-		storage.WithValidateEngine("", gojaview.NewValidateServerBuilder(logger.With("component", "validate"))),
-		storage.WithValidateEngine("javascript", gojaview.NewValidateServerBuilder(logger.With("component", "validate"))),
-		storage.WithValidateEngine("tengo", tengoview.NewValidateServerBuilder(logger.With("component", "validate"))),
-		storage.WithUpdateEngine("", gojaview.NewUpdateServer),
-		storage.WithUpdateEngine("javascript", gojaview.NewUpdateServer),
-		storage.WithUpdateEngine("tengo", tengoview.NewUpdateServer),
-	)
+	}
+	for _, hook := range storageOptionHooks {
+		storageOpts = append(storageOpts, hook(logger)...)
+	}
+	s, err := storage.Open(c.DatabaseDir, storageOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database dir: %w", err)
 	}

@@ -1,3 +1,5 @@
+//go:build !nogoja
+
 package pouchdb_test
 
 import (
