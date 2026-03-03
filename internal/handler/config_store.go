@@ -32,6 +32,20 @@ var defaultConfig = map[string]map[string]string{
 		"enable_cors":             "false",
 		"authentication_handlers": "cookie_authentication_handler,default_authentication_handler",
 	},
+	"couch_httpd_auth": {
+		"proxy_use_secret": "false",
+		"secret":           "",
+		"x_auth_username":  "X-Auth-CouchDB-UserName",
+		"x_auth_roles":     "X-Auth-CouchDB-Roles",
+		"x_auth_token":     "X-Auth-CouchDB-Token",
+	},
+	"jwt_keys": {},
+	"jwt_auth": {
+		"required_claims":  "",
+		"roles_claim_path": "_couchdb.roles",
+		"jwks_url":         "",
+		"jwks_cache_ttl":   "3600",
+	},
 	"cors": {
 		"origins":     "*",
 		"credentials": "false",

@@ -16,10 +16,12 @@ func (s *SessionGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	session, via := Authenticator{Base: s.Base}.Auth(r)
 
+	chain := buildAuthChain(s.Base)
+
 	resp := &SessionResponse{
 		Ok: true,
 		SessionInfo: SessionInfo{
-			AuthenticationHandlers: []string{"cookie", "default"},
+			AuthenticationHandlers: authHandlerNames(chain),
 			AuthenticationDB:       "_users",
 		},
 		SessionUserCtx: SessionUserCtx{

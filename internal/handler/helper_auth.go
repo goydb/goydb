@@ -51,31 +51,52 @@ func (a Authenticator) Authenticate(ctx context.Context, username, password stri
 	return sb
 }
 
-func (a Authenticator) Auth(r *http.Request) (*model.Session, string) {
-	var s model.Session
-	var via string
+// AuthenticateWithUser is like Authenticate but also returns the *model.User
+// when authenticated via the _users database. Returns nil user for server
+// admins (they have no user document).
+func (a Authenticator) AuthenticateWithUser(ctx context.Context, username, password string) (port.SessionBuilder, *model.User) {
+	admin := a.Admins.Authenticate(username, password)
+	if admin != nil {
+		return admin, nil
+	}
 
-	session, err := a.SessionStore.Get(r, sessionName)
+	db, err := a.Storage.Database(ctx, "_users")
 	if err != nil {
-		return nil, ""
+		a.Logger.Warnf(ctx, "failed to load users database", "error", err)
+		return nil, nil
 	}
-
-	if !session.IsNew {
-		s.Restore(session.Values)
-		via = "cookie"
+	doc, err := db.GetDocument(ctx, "org.couchdb.user:"+username)
+	if err != nil {
+		a.Logger.Warnf(ctx, "failed to load user document", "username", username, "error", err)
+		return nil, nil
 	}
-
-	if !s.Authenticated() {
-		username, password, ok := r.BasicAuth()
+	if doc != nil {
+		var u model.User
+		err = u.FromDocument(doc)
+		if err != nil {
+			a.Logger.Warnf(ctx, "failed to parse user document", "error", err)
+			return nil, nil
+		}
+		ok, err := u.VerifyPassword(password)
+		if err != nil {
+			a.Logger.Warnf(ctx, "failed to verify password", "error", err)
+			return nil, nil
+		}
 		if ok {
-			user := a.Authenticate(r.Context(), username, password)
-			if user != nil {
-				return user.Session(), "default"
-			}
+			return &u, &u
 		}
 	}
 
-	return &s, via
+	return nil, nil
+}
+
+func (a Authenticator) Auth(r *http.Request) (*model.Session, string) {
+	for _, h := range buildAuthChain(a.Base) {
+		if s, ok := h.Authenticate(r); ok {
+			return s, h.Name()
+		}
+	}
+	return &model.Session{}, ""
 }
 
 func (a Authenticator) Do(w http.ResponseWriter, r *http.Request) (*model.Session, bool) {

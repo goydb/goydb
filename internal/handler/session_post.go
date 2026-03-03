@@ -13,7 +13,7 @@ type SessionPost struct {
 func (s *SessionPost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close() //nolint:errcheck
 
-	var username, password string
+	var username, password, totpToken string
 
 	ct := r.Header.Get("Content-Type")
 	if idx := strings.Index(ct, ";"); idx != -1 {
@@ -24,6 +24,7 @@ func (s *SessionPost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Name     string `json:"name"`
 			Password string `json:"password"`
+			Token    string `json:"token"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			WriteError(w, http.StatusBadRequest, err.Error())
@@ -31,6 +32,7 @@ func (s *SessionPost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		username = body.Name
 		password = body.Password
+		totpToken = body.Token
 	} else {
 		if err := r.ParseForm(); err != nil {
 			WriteError(w, http.StatusBadRequest, err.Error())
@@ -38,13 +40,29 @@ func (s *SessionPost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		username = strings.Join(r.Form["name"], "")
 		password = strings.Join(r.Form["password"], "")
+		totpToken = strings.Join(r.Form["token"], "")
 	}
 
-	sb := Authenticator{Base: s.Base}.Authenticate(r.Context(), username, password)
+	auth := Authenticator{Base: s.Base}
+	sb, user := auth.AuthenticateWithUser(r.Context(), username, password)
 
 	if sb == nil {
 		WriteError(w, http.StatusUnauthorized, "Name or password is incorrect.")
 		return
+	}
+
+	// TOTP verification: if the user has TOTP configured, require and verify the token.
+	// Admin users (user == nil) skip TOTP — they have no user document.
+	if user != nil && user.HasTOTP() {
+		if totpToken == "" {
+			WriteError(w, http.StatusUnauthorized, "TOTP token required.")
+			return
+		}
+		ok, err := user.TOTP.VerifyTOTP(totpToken)
+		if err != nil || !ok {
+			WriteError(w, http.StatusUnauthorized, "Invalid TOTP token.")
+			return
+		}
 	}
 
 	session, err := s.SessionStore.New(r, sessionName)

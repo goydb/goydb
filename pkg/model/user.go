@@ -11,14 +11,20 @@ import (
 )
 
 type User struct {
-	Name           string   `mapstructure:"name" json:"name"`
-	Roles          []string `mapstructure:"roles" json:"roles"`
-	Type           string   `mapstructure:"type" json:"type"`
-	Password       string   `mapstructure:"password" json:"password"`
-	PasswordScheme string   `mapstructure:"password_scheme" json:"password_scheme"`
-	Iterations     int      `mapstructure:"iterations" json:"iterations"`
-	DerivedKey     string   `mapstructure:"derived_key" json:"derived_key"`
-	Salt           string   `mapstructure:"salt" json:"salt"`
+	Name           string      `mapstructure:"name" json:"name"`
+	Roles          []string    `mapstructure:"roles" json:"roles"`
+	Type           string      `mapstructure:"type" json:"type"`
+	Password       string      `mapstructure:"password" json:"password"`
+	PasswordScheme string      `mapstructure:"password_scheme" json:"password_scheme"`
+	Iterations     int         `mapstructure:"iterations" json:"iterations"`
+	DerivedKey     string      `mapstructure:"derived_key" json:"derived_key"`
+	Salt           string      `mapstructure:"salt" json:"salt"`
+	TOTP           *TOTPConfig `mapstructure:"totp" json:"totp,omitempty"`
+}
+
+// HasTOTP returns true if the user has TOTP configured.
+func (u *User) HasTOTP() bool {
+	return u.TOTP != nil && u.TOTP.Key != ""
 }
 
 var (
