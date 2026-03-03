@@ -49,6 +49,49 @@ jobs:
         path: /tmp/gotest.log
         if-no-files-found: error
 
+  build-tags:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tags:
+          - ""
+          - nogoja
+          - notengo
+          - nosearch
+          - nojwt
+          - nototp
+          - nogoja,nosearch,notengo,nojwt,nototp
+    name: "build-tags (${{ matrix.tags || 'default' }})"
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+
+    - name: Build
+      run: go build -tags '${{ matrix.tags }}' -v ./...
+
+    - name: Set up gotestfmt
+      uses: gotesttools/gotestfmt-action@v2
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Test
+      run: |
+        set -euo pipefail
+        go test -tags '${{ matrix.tags }}' -json -race -v ./... 2>&1 | tee /tmp/gotest.log | gotestfmt
+
+    - name: Upload test log
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-log-${{ matrix.tags || 'default' }}
+        path: /tmp/gotest.log
+        if-no-files-found: error
+
   lint:
     runs-on: ubuntu-latest
     steps:
