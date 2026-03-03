@@ -80,8 +80,7 @@ func (v DesignDoc) ReduceDocs(ctx context.Context, tx port.EngineReadTransaction
 	case "_stats":
 		r = reducer.NewStats()
 	case "_approx_count_distinct":
-		// FIXME: this is not giving the same speed but the correctness
-		r = new(reducer.Count)
+		r = reducer.NewApproxCountDistinct()
 	case "": // NONE
 		r = reducer.NewNone()
 	default: // CUSTOM
@@ -146,6 +145,10 @@ func (v DesignDoc) ReduceDocs(ctx context.Context, tx port.EngineReadTransaction
 		// Apply group / group_level key reduction before passing to the reducer.
 		// Map-only views (no ReduceFn) skip this: they preserve keys like reduce=false.
 		if view.ReduceFn != "" {
+			// _approx_count_distinct counts distinct keys, so save the
+			// original key into Value before group-level collapsing.
+			originalKey := doc.Key
+
 			if opts.ViewGroupLevel > 0 {
 				if arr, ok := doc.Key.([]interface{}); ok && opts.ViewGroupLevel < len(arr) {
 					doc.Key = arr[:opts.ViewGroupLevel]
@@ -156,6 +159,10 @@ func (v DesignDoc) ReduceDocs(ctx context.Context, tx port.EngineReadTransaction
 				doc.Key = nil
 			}
 			// group=true: keep full key unchanged
+
+			if view.ReduceFn == "_approx_count_distinct" {
+				doc.Value = originalKey
+			}
 		}
 
 		r.Reduce(doc)

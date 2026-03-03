@@ -1807,3 +1807,77 @@ func TestView_NullValue_Present(t *testing.T) {
 	body := w.Body.String()
 	assert.Contains(t, body, `"value":null`, "JSON must contain \"value\":null, not omit the field")
 }
+
+func TestReduce_ApproxCountDistinct_Basic(t *testing.T) {
+	s, router, cleanup := setupViewTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	// Insert documents with distinct keys.
+	for i := 0; i < 50; i++ {
+		_, err = db.PutDocument(ctx, &model.Document{
+			ID:   fmt.Sprintf("d%d", i),
+			Data: map[string]interface{}{"k": fmt.Sprintf("key-%d", i)},
+		})
+		require.NoError(t, err)
+	}
+
+	putDesignDoc(t, router, "testdb", "acd", map[string]interface{}{
+		"views": map[string]interface{}{
+			"distinct": map[string]interface{}{
+				"map":    `function(doc) { emit(doc.k, 1); }`,
+				"reduce": "_approx_count_distinct",
+			},
+		},
+	})
+
+	result, code := queryView(t, router, "testdb", "acd", "distinct", "")
+	require.Equal(t, http.StatusOK, code)
+	require.Len(t, result.Rows, 1)
+	assert.Nil(t, result.Rows[0].Key)
+	est, ok := result.Rows[0].Value.(float64)
+	require.True(t, ok, "value should be a number, got %T", result.Rows[0].Value)
+	assert.InDelta(t, 50.0, est, 10.0, "HLL estimate should be close to 50")
+}
+
+func TestReduce_Sum_ArrayValues(t *testing.T) {
+	s, router, cleanup := setupViewTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	for _, e := range []struct {
+		id string
+		a  int
+		b  int
+	}{{"d1", 1, 2}, {"d2", 3, 4}, {"d3", 5, 6}} {
+		_, err = db.PutDocument(ctx, &model.Document{
+			ID:   e.id,
+			Data: map[string]interface{}{"a": e.a, "b": e.b},
+		})
+		require.NoError(t, err)
+	}
+
+	putDesignDoc(t, router, "testdb", "arrsum", map[string]interface{}{
+		"views": map[string]interface{}{
+			"totals": map[string]interface{}{
+				"map":    `function(doc) { emit(null, [doc.a, doc.b]); }`,
+				"reduce": "_sum",
+			},
+		},
+	})
+
+	result, code := queryView(t, router, "testdb", "arrsum", "totals", "")
+	require.Equal(t, http.StatusOK, code)
+	require.Len(t, result.Rows, 1)
+	arr, ok := result.Rows[0].Value.([]interface{})
+	require.True(t, ok, "value should be an array, got %T", result.Rows[0].Value)
+	require.Len(t, arr, 2)
+	assert.EqualValues(t, 9, arr[0])  // 1+3+5
+	assert.EqualValues(t, 12, arr[1]) // 2+4+6
+}

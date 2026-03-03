@@ -1,5 +1,3 @@
-//go:build nogoja
-
 package reducer
 
 import (

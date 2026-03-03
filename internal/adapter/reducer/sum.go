@@ -40,8 +40,46 @@ func (r *Sum) Reduce(doc *model.Document) {
 	}
 }
 
-// sumAdd handles int64+int64, int64+float64, float64+int64, float64+float64.
+// sumAdd handles scalar (int64/float64) and array element-wise addition.
+// Arrays are padded with zeros to match the longer array's length.
 func sumAdd(cur, add interface{}) interface{} {
+	curArr, curIsArr := toSlice(cur)
+	addArr, addIsArr := toSlice(add)
+
+	if curIsArr || addIsArr {
+		if !curIsArr {
+			curArr = []interface{}{cur}
+		}
+		if !addIsArr {
+			addArr = []interface{}{add}
+		}
+		n := len(curArr)
+		if len(addArr) > n {
+			n = len(addArr)
+		}
+		result := make([]interface{}, n)
+		for i := 0; i < n; i++ {
+			var a, b interface{}
+			if i < len(curArr) {
+				a = curArr[i]
+			} else {
+				a = int64(0)
+			}
+			if i < len(addArr) {
+				b = addArr[i]
+			} else {
+				b = int64(0)
+			}
+			result[i] = scalarAdd(a, b)
+		}
+		return result
+	}
+
+	return scalarAdd(cur, add)
+}
+
+// scalarAdd adds two numeric scalars (int64 or float64).
+func scalarAdd(cur, add interface{}) interface{} {
 	if ci, ok := cur.(int64); ok {
 		if ai, ok := add.(int64); ok {
 			return ci + ai
@@ -59,6 +97,14 @@ func sumAdd(cur, add interface{}) interface{} {
 		}
 	}
 	return cur
+}
+
+// toSlice checks if the value is a []interface{} slice.
+func toSlice(v interface{}) ([]interface{}, bool) {
+	if s, ok := v.([]interface{}); ok {
+		return s, true
+	}
+	return nil, false
 }
 
 func (r *Sum) Result() map[interface{}]interface{} {
