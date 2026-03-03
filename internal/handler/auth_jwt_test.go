@@ -499,8 +499,8 @@ func TestJWT_JWKS_ECKey(t *testing.T) {
 					"kty": "EC",
 					"kid": kid,
 					"crv": "P-256",
-					"x":   base64.RawURLEncoding.EncodeToString(key.PublicKey.X.Bytes()),
-					"y":   base64.RawURLEncoding.EncodeToString(key.PublicKey.Y.Bytes()),
+					"x":   base64.RawURLEncoding.EncodeToString(key.X.Bytes()),
+					"y":   base64.RawURLEncoding.EncodeToString(key.Y.Bytes()),
 				},
 			},
 		}

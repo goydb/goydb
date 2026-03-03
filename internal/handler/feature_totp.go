@@ -19,7 +19,7 @@ func init() {
 		}
 		ok, err := user.TOTP.VerifyTOTP(token)
 		if err != nil || !ok {
-			return errors.New("Invalid TOTP token")
+			return errors.New("invalid TOTP token")
 		}
 		return nil
 	})
