@@ -82,7 +82,7 @@ func (c *JWKSCache) FetchKeys() error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("jwks endpoint returned %d", resp.StatusCode)

@@ -313,8 +313,8 @@ func TestJWT_JWKS_RS256(t *testing.T) {
 					"kid": kid,
 					"alg": "RS256",
 					"use": "sig",
-					"n":   base64.RawURLEncoding.EncodeToString(key.PublicKey.N.Bytes()),
-					"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.PublicKey.E)).Bytes()),
+					"n":   base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
+					"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes()),
 				},
 			},
 		}
@@ -356,8 +356,8 @@ func TestJWT_JWKS_CacheTTL(t *testing.T) {
 				{
 					"kty": "RSA",
 					"kid": kid,
-					"n":   base64.RawURLEncoding.EncodeToString(key.PublicKey.N.Bytes()),
-					"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.PublicKey.E)).Bytes()),
+					"n":   base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
+					"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes()),
 				},
 			},
 		}
@@ -386,14 +386,14 @@ func TestJWT_JWKS_CacheTTL(t *testing.T) {
 	firstFetch := fetchCount
 
 	// Second call within TTL — uses cache.
-	s, ok = h.Authenticate(req)
+	_, ok = h.Authenticate(req)
 	require.True(t, ok)
 	assert.Equal(t, firstFetch, fetchCount, "should use cached keys")
 
 	// Wait for TTL to expire.
 	time.Sleep(1100 * time.Millisecond)
 
-	s, ok = h.Authenticate(req)
+	_, ok = h.Authenticate(req)
 	require.True(t, ok)
 	assert.Greater(t, fetchCount, firstFetch, "should have re-fetched after TTL")
 }
@@ -411,16 +411,16 @@ func TestJWT_JWKS_KeyRotation(t *testing.T) {
 			{
 				"kty": "RSA",
 				"kid": "kid1",
-				"n":   base64.RawURLEncoding.EncodeToString(key1.PublicKey.N.Bytes()),
-				"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key1.PublicKey.E)).Bytes()),
+				"n":   base64.RawURLEncoding.EncodeToString(key1.N.Bytes()),
+				"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key1.E)).Bytes()),
 			},
 		}
 		if serveKid2 {
 			keys = append(keys, map[string]interface{}{
 				"kty": "RSA",
 				"kid": "kid2",
-				"n":   base64.RawURLEncoding.EncodeToString(key2.PublicKey.N.Bytes()),
-				"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key2.PublicKey.E)).Bytes()),
+				"n":   base64.RawURLEncoding.EncodeToString(key2.N.Bytes()),
+				"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key2.E)).Bytes()),
 			})
 		}
 		jwks := map[string]interface{}{"keys": keys}

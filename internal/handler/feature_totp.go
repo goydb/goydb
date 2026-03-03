@@ -15,11 +15,11 @@ func init() {
 			return nil
 		}
 		if token == "" {
-			return errors.New("TOTP token required.")
+			return errors.New("TOTP token required")
 		}
 		ok, err := user.TOTP.VerifyTOTP(token)
 		if err != nil || !ok {
-			return errors.New("Invalid TOTP token.")
+			return errors.New("Invalid TOTP token")
 		}
 		return nil
 	})
