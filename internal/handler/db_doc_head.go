@@ -27,7 +27,12 @@ func (s *DBDocHead) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	revParam := r.URL.Query().Get("rev")
 
 	doc, err := db.GetDocument(r.Context(), docID)
-	if err != nil || doc == nil || doc.Deleted {
+	if err != nil || doc == nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	if doc.Deleted {
+		w.Header().Set("ETag", `"`+doc.Rev+`"`)
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}

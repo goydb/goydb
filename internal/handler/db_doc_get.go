@@ -128,6 +128,7 @@ func (s *DBDocGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if dbdoc.Deleted {
+		w.Header().Set("ETag", `"`+dbdoc.Rev+`"`)
 		WriteError(w, http.StatusNotFound, "deleted")
 		return
 	}
@@ -226,6 +227,7 @@ func (s *DBDocGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	default:
+		w.Header().Set("ETag", `"`+dbdoc.Rev+`"`)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(responseData) // nolint: errcheck
 	}
