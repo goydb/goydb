@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/gorilla/mux"
 )
 
 type DBCreate struct {
@@ -18,7 +17,7 @@ func (s *DBCreate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dbName := mux.Vars(r)["db"]
+	dbName := pathVar(r, "db")
 	db, _ := s.Storage.Database(r.Context(), dbName)
 	if db != nil {
 		WriteError(w, http.StatusConflict, "Database already exists.")

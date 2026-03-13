@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 )
@@ -25,7 +24,7 @@ func (s *DBIndexInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	docID := string(model.DesignDocPrefix) + mux.Vars(r)["docid"]
+	docID := string(model.DesignDocPrefix) + pathVar(r, "docid")
 	doc, err := db.GetDocument(r.Context(), docID)
 	if err != nil {
 		WriteError(w, http.StatusNotFound, err.Error())

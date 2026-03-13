@@ -12,7 +12,6 @@ import (
 	"net/textproto"
 	"strconv"
 
-	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 )
@@ -35,7 +34,7 @@ func (s *DBDocGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	docID := mux.Vars(r)["docid"]
+	docID := pathVar(r, "docid")
 	if s.Design {
 		docID = string(model.DesignDocPrefix) + docID
 	} else if s.Local {

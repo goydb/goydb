@@ -3,7 +3,6 @@ package handler
 import (
 	"net/http"
 
-	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/pkg/model"
 )
 
@@ -20,7 +19,7 @@ func (s *DBDocHead) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	docID := mux.Vars(r)["docid"]
+	docID := pathVar(r, "docid")
 	if s.Design {
 		docID = string(model.DesignDocPrefix) + docID
 	}

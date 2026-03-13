@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/pkg/model"
 )
 
@@ -29,13 +28,13 @@ func (s *DBDocAttachmentGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	docID := mux.Vars(r)["docid"]
+	docID := pathVar(r, "docid")
 	if s.Design {
 		docID = string(model.DesignDocPrefix) + docID
 	} else if s.Local {
 		docID = string(model.LocalDocPrefix) + docID
 	}
-	attachment := mux.Vars(r)["attachment"]
+	attachment := pathVar(r, "attachment")
 
 	// The rev query parameter is accepted for CouchDB compatibility.
 	// In this implementation attachments are content-addressed, so

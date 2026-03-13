@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
@@ -310,7 +309,7 @@ func (s *DBDocPut) handleMultipart(w http.ResponseWriter, r *http.Request, db po
 // resolveDocID extracts the document ID from the URL path variable (authoritative)
 // or falls back to the JSON body _id field.
 func resolveDocID(doc map[string]interface{}, r *http.Request) string {
-	if id, ok := mux.Vars(r)["docid"]; ok {
+	if id, ok := pathVarOk(r, "docid"); ok {
 		if strings.Contains(r.URL.Path, "/_design/") {
 			return string(model.DesignDocPrefix) + id
 		} else if strings.Contains(r.URL.Path, "/_local/") {

@@ -3,7 +3,6 @@ package handler
 import (
 	"net/http"
 
-	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/pkg/port"
 )
 
@@ -12,7 +11,7 @@ type Database struct {
 }
 
 func (c Database) Do(w http.ResponseWriter, r *http.Request) port.Database {
-	dbName := mux.Vars(r)["db"]
+	dbName := pathVar(r, "db")
 	db, err := c.Storage.Database(r.Context(), dbName)
 	if err != nil {
 		c.Logger.Warnf(r.Context(), "database not found", "dbName", dbName, "error", err)

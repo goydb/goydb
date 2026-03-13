@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/internal/adapter/storage"
 )
 
@@ -19,7 +18,7 @@ func (s *DBDelete) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dbName := mux.Vars(r)["db"]
+	dbName := pathVar(r, "db")
 
 	err := s.Storage.DeleteDatabase(r.Context(), dbName)
 	if errors.Is(err, storage.ErrUnknownDatabase) {

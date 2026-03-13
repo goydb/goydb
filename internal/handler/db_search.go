@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 )
@@ -30,8 +29,8 @@ func (s *DBSearch) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	docID := string(model.DesignDocPrefix) + mux.Vars(r)["docid"]
-	index := mux.Vars(r)["index"]
+	docID := string(model.DesignDocPrefix) + pathVar(r, "docid")
+	index := pathVar(r, "index")
 
 	_, err := db.GetDocument(r.Context(), docID)
 	if err != nil {

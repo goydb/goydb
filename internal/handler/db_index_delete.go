@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/internal/controller"
 )
 
@@ -24,9 +23,8 @@ func (s *DBIndexDelete) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vars := mux.Vars(r)
-	ddoc := vars["ddoc"]
-	name := vars["name"]
+	ddoc := pathVar(r, "ddoc")
+	name := pathVar(r, "name")
 
 	// Caller passes the design doc name without the "_design/" prefix in the URL.
 	// Strip it if it was included anyway.

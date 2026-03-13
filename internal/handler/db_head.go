@@ -3,7 +3,6 @@ package handler
 import (
 	"net/http"
 
-	"github.com/gorilla/mux"
 )
 
 type DBHead struct {
@@ -13,7 +12,7 @@ type DBHead struct {
 func (s *DBHead) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close() //nolint:errcheck
 
-	dbName := mux.Vars(r)["db"]
+	dbName := pathVar(r, "db")
 	_, err := s.Storage.Database(r.Context(), dbName)
 	if err != nil {
 		w.WriteHeader(http.StatusNotFound)

@@ -3,11 +3,12 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 
+	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
-	"github.com/gorilla/mux"
 )
 
 // partitionPrefix returns the start/end key range for a given partition.
@@ -34,8 +35,7 @@ func (s *PartitionInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vars := mux.Vars(r)
-	partition := vars["partition"]
+	partition := pathVar(r, "partition")
 	if partition == "" {
 		WriteError(w, http.StatusBadRequest, "partition is required")
 		return
@@ -54,7 +54,7 @@ func (s *PartitionInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dbName := vars["db"]
+	dbName := pathVar(r, "db")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
@@ -87,8 +87,7 @@ func (s *PartitionAllDocs) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vars := mux.Vars(r)
-	partition := vars["partition"]
+	partition := pathVar(r, "partition")
 	if partition == "" {
 		WriteError(w, http.StatusBadRequest, "partition is required")
 		return
@@ -147,8 +146,7 @@ func (s *PartitionFind) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vars := mux.Vars(r)
-	partition := vars["partition"]
+	partition := pathVar(r, "partition")
 	if partition == "" {
 		WriteError(w, http.StatusBadRequest, "partition is required")
 		return
@@ -212,8 +210,7 @@ func (s *PartitionExplain) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vars := mux.Vars(r)
-	partition := vars["partition"]
+	partition := pathVar(r, "partition")
 
 	var body struct {
 		Selector map[string]interface{} `json:"selector"`
@@ -231,7 +228,7 @@ func (s *PartitionExplain) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		body.Limit = 25
 	}
 
-	dbName := vars["db"]
+	dbName := pathVar(r, "db")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{ //nolint:errcheck
@@ -284,10 +281,9 @@ func (s *PartitionView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vars := mux.Vars(r)
-	partition := vars["partition"]
-	ddoc := vars["ddoc"]
-	view := vars["view"]
+	partition := pathVar(r, "partition")
+	ddoc := pathVar(r, "ddoc")
+	view := pathVar(r, "view")
 
 	if partition == "" || ddoc == "" || view == "" {
 		WriteError(w, http.StatusBadRequest, "partition, ddoc, and view are required")
@@ -305,10 +301,11 @@ func (s *PartitionView) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.URL.RawQuery = q.Encode()
 
 	// Set the mux vars to point to the design doc and view.
+	// Values must be percent-encoded because pathVar() will decode them.
 	r = mux.SetURLVars(r, map[string]string{
-		"db":    vars["db"],
-		"docid": ddoc,
-		"view":  view,
+		"db":    url.PathEscape(pathVar(r, "db")),
+		"docid": url.PathEscape(ddoc),
+		"view":  url.PathEscape(view),
 	})
 
 	// Delegate to the normal view handler.

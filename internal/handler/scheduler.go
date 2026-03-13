@@ -7,7 +7,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 )
@@ -207,7 +206,7 @@ func (s *SchedulerDocByID) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close() //nolint:errcheck
 
 	ctx := r.Context()
-	repID := mux.Vars(r)["repid"]
+	repID := pathVar(r, "repid")
 
 	db, err := s.Storage.Database(ctx, "_replicator")
 	if err != nil {

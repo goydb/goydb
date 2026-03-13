@@ -123,6 +123,7 @@ func (c *Config) BuildDatabase() (*Goydb, error) {
 	gdb.Config = cs
 
 	r := mux.NewRouter()
+	r.UseEncodedPath()
 	for _, c := range c.Containers {
 		err = public.MountContainer(r, c)
 		if err != nil {

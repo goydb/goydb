@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/pkg/model"
 )
 
@@ -27,13 +26,13 @@ func (s *DBDocAttachmentHead) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	docID := mux.Vars(r)["docid"]
+	docID := pathVar(r, "docid")
 	if s.Design {
 		docID = string(model.DesignDocPrefix) + docID
 	} else if s.Local {
 		docID = string(model.LocalDocPrefix) + docID
 	}
-	attachment := mux.Vars(r)["attachment"]
+	attachment := pathVar(r, "attachment")
 
 	a, err := db.GetAttachment(r.Context(), docID, attachment)
 	if err != nil {

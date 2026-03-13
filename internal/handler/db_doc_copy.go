@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/pkg/model"
 )
@@ -33,7 +32,7 @@ func (s *DBDocCopy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Resolve source document ID.
-	srcID := mux.Vars(r)["docid"]
+	srcID := pathVar(r, "docid")
 	if s.Design {
 		srcID = string(model.DesignDocPrefix) + srcID
 	} else if s.Local {

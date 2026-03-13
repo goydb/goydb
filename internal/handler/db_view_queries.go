@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/gorilla/mux"
 )
 
 // DBViewQueries handles POST /{db}/_design/{ddoc}/_view/{view}/queries.
@@ -37,10 +36,9 @@ func (s *DBViewQueries) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vars := mux.Vars(r)
-	dbName := vars["db"]
-	docID := vars["docid"]
-	viewName := vars["view"]
+	dbName := pathVar(r, "db")
+	docID := pathVar(r, "docid")
+	viewName := pathVar(r, "view")
 	basePath := "/" + dbName + "/_design/" + docID + "/_view/" + viewName
 
 	results := make([]json.RawMessage, 0, len(body.Queries))

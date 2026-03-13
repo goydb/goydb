@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 	uuid "github.com/satori/go.uuid"
@@ -26,10 +25,9 @@ func (s *DDUpdateFunction) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vars := mux.Vars(r)
-	ddocID := vars["docid"]
-	funcName := vars["func"]
-	updateDocID := vars["updatedocid"]
+	ddocID := pathVar(r, "docid")
+	funcName := pathVar(r, "func")
+	updateDocID := pathVar(r, "updatedocid")
 
 	ctx := r.Context()
 

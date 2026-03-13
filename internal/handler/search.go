@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/gorilla/mux"
 )
 
 // SearchCleanup handles POST /{db}/_search_cleanup and POST /{db}/_nouveau_cleanup.
@@ -84,9 +83,8 @@ func (s *SearchInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vars := mux.Vars(r)
-	ddocID := "_design/" + vars["docid"]
-	indexName := vars["index"]
+	ddocID := "_design/" + pathVar(r, "docid")
+	indexName := pathVar(r, "index")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{ // nolint: errcheck
@@ -137,9 +135,8 @@ func (s *NouveauInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vars := mux.Vars(r)
-	ddocID := "_design/" + vars["docid"]
-	indexName := vars["index"]
+	ddocID := "_design/" + pathVar(r, "docid")
+	indexName := pathVar(r, "index")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{ // nolint: errcheck

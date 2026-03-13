@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/gorilla/mux"
 )
 
 // ConfigAll handles GET /_config — returns all sections.
@@ -25,7 +24,7 @@ type ConfigSection struct {
 
 func (s *ConfigSection) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close() //nolint:errcheck
-	section := mux.Vars(r)["section"]
+	section := pathVar(r, "section")
 	kv, ok := s.Config.Section(section)
 	if !ok {
 		WriteError(w, http.StatusNotFound, "unknown_config_value")
@@ -42,8 +41,7 @@ type ConfigKey struct {
 
 func (s *ConfigKey) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close() //nolint:errcheck
-	vars := mux.Vars(r)
-	val, ok := s.Config.Get(vars["section"], vars["key"])
+	val, ok := s.Config.Get(pathVar(r, "section"), pathVar(r, "key"))
 	if !ok {
 		WriteError(w, http.StatusNotFound, "unknown_config_value")
 		return
@@ -60,15 +58,13 @@ type ConfigKeyPut struct {
 
 func (s *ConfigKeyPut) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close() //nolint:errcheck
-	vars := mux.Vars(r)
-
 	var value string
 	if err := json.NewDecoder(r.Body).Decode(&value); err != nil {
 		WriteError(w, http.StatusBadRequest, "bad_request")
 		return
 	}
 
-	old := s.Config.Set(vars["section"], vars["key"], value)
+	old := s.Config.Set(pathVar(r, "section"), pathVar(r, "key"), value)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(old) // nolint: errcheck
 }
@@ -92,8 +88,7 @@ type ConfigKeyDelete struct {
 
 func (s *ConfigKeyDelete) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close() //nolint:errcheck
-	vars := mux.Vars(r)
-	old, ok := s.Config.Delete(vars["section"], vars["key"])
+	old, ok := s.Config.Delete(pathVar(r, "section"), pathVar(r, "key"))
 	if !ok {
 		WriteError(w, http.StatusNotFound, "unknown_config_value")
 		return
