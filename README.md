@@ -76,10 +76,28 @@ cfg.Containers = []public.Container{
 
 ## Is this production-ready?
 
-No.
+goydb is under active development and hasn't seen the years of hardening that
+CouchDB has. It's used for embedding couchdb-like functionality directly into
+Go applications, not as a drop-in CouchDB replacement.
 
+Most of the CouchDB HTTP API is implemented, including document CRUD,
+attachments, views, Mango queries, full-text search, and replication with
+multi-revision conflict support. The main gaps are design document functions
+(`_show`, `_list`, `_update`, `_rewrite`) and CouchDB's newer Nouveau search
+engine — see the [compatibility matrix](docs/compatibility.md) for details.
+
+If you're relying on it for data you can't afford to lose, set up replication
+to a regular CouchDB instance as a durability backstop — goydb speaks the
+CouchDB replication protocol, so this works the same way multi-master
+CouchDB replication does.
 
 See another example at the `cmd/goydb/main.go`.
+
+## Documentation
+
+* [Configuration Reference](docs/config.md)
+* [CouchDB API Compatibility Matrix](docs/compatibility.md)
+* [Architecture](docs/architecture.md)
 
 ## But why?
 
