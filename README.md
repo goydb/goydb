@@ -7,7 +7,7 @@ goydb, a couchdb compatible embeddable database written in go
 ### Using docker
 
     mkdir data
-    docker run -e GOYDB_ADMINS=admin:test -v data:/usr/local/var/goydb -p 7070:7070 goydb/goydb:latest
+    docker run -e GOYDB_ADMINS=admin:test -v data:/usr/local/var/goydb -p 7070:7070 ghcr.io/goydb/goydb:latest
 
 ### From source (go get)
 

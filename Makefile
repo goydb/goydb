@@ -17,10 +17,10 @@ lint:
 	golangci-lint run
 
 build:
-	docker build -t goydb/goydb:latest .
+	docker build -t ghcr.io/goydb/goydb:latest .
 
 push:
-	docker push goydb/goydb:latest
+	docker push ghcr.io/goydb/goydb:latest
 
 public/favicon.ico: media/goydb.png
 	convert $< -resize 32x32 $@
