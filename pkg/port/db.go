@@ -26,6 +26,9 @@ type Database interface {
 	Name() string
 	Stats(ctx context.Context) (model.DatabaseStats, error)
 	Compact(ctx context.Context) error
+	// Sync forces any buffered writes to stable storage immediately. Backs
+	// POST /{db}/_ensure_full_commit.
+	Sync(ctx context.Context) error
 	Sequence(ctx context.Context) (string, error)
 
 	GetDocument(ctx context.Context, docID string) (*model.Document, error)
@@ -78,7 +81,13 @@ type Database interface {
 type Storage interface {
 	Databases(ctx context.Context) ([]string, error)
 	Database(ctx context.Context, name string) (Database, error)
-	CreateDatabase(ctx context.Context, name string) (Database, error)
+	// CreateDatabase creates a new database. args, if given, carries
+	// arbitrary creation arguments (e.g. forwarded PUT /{db} query
+	// parameters such as "engine") as a flat key/value map — a hashmap
+	// rather than named parameters so new options never require an
+	// interface/signature change. At most one map is read; args[0] is used,
+	// further elements are ignored.
+	CreateDatabase(ctx context.Context, name string, args ...map[string]string) (Database, error)
 	DeleteDatabase(ctx context.Context, name string) error
 	Close() error
 	Path() string

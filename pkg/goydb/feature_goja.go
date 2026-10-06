@@ -11,7 +11,7 @@ import (
 
 func init() {
 	handler.RegisterFeature("goja")
-	RegisterStorageOptionHook(func(logger port.Logger) []storage.StorageOption {
+	RegisterStorageOptionHook(func(logger port.Logger, cs *handler.ConfigStore) []storage.StorageOption {
 		return []storage.StorageOption{
 			storage.WithViewEngine("", gojaview.NewViewServer),
 			storage.WithViewEngine("javascript", gojaview.NewViewServer),

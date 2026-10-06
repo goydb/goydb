@@ -15,6 +15,12 @@ type DatabaseEngine interface {
 	WriteTransaction(logger Logger, fn func(tx EngineWriteTransaction) error) error
 	Compact() error
 	Close() error
+	// Delete closes the engine and permanently removes all files backing it.
+	Delete() error
+	// Sync forces any buffered writes to stable storage immediately, backing
+	// POST /{db}/_ensure_full_commit. A no-op for engines that are already
+	// fully durable on every commit (e.g. bbolt).
+	Sync() error
 }
 
 // KeyWithSeq should return a new key based on the given

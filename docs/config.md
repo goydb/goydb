@@ -54,6 +54,7 @@ Instance identity, size limits, and validation behaviour.
 | `max_attachment_size` | `0` | Maximum single attachment size in bytes. `0` = unlimited |
 | `max_db_size` | `0` | Maximum database file size in bytes. `0` = unlimited |
 | `validate_on_replication` | `false` | When `true`, run all `validate_doc_update` functions on replication writes (`new_edits=false`). When `false` (default), VDU functions only run on replication writes if the individual design document has `"validate_on_replication": true` |
+| `default_engine` | `` | Storage engine used by `PUT /{db}` when the request has no `?engine=` query parameter. Empty means "whatever this binary was built with as the base engine" (`bbolt`, unless overridden). Must name an engine this binary was actually built with (`bbolt` always; `sqlite` only with `-tags sqlite`) — an unknown name fails database creation with `400 Bad Request`, the same as an unknown `?engine=` value |
 
 When a limit is exceeded the server returns:
 - **413** for `max_document_size` and `max_attachment_size`
@@ -64,6 +65,16 @@ Example — set a 4 MB document size limit:
 ```bash
 curl -X PUT http://admin:secret@localhost:7070/_config/couchdb/max_document_size \
   -d '"4000000"'
+```
+
+### Choosing a storage engine per database
+
+`PUT /{db}` accepts an `engine` query parameter, same mechanism as CouchDB's own (undocumented/experimental) per-database engine selection — e.g. `PUT /mydb?engine=sqlite`. Every other query parameter on `PUT /{db}` (CouchDB's `q`, `n`, `partitioned`, or anything else) is forwarded internally as a plain string map alongside `engine`, so new creation options can be read by a future engine without changing the HTTP handler — goydb just doesn't act on them today, since it has no sharding/clustering/partitioning concept.
+
+An explicit `?engine=` always wins over `couchdb/default_engine`; both are validated against the engines this binary was actually built with. Once created, a database's engine is fixed for its lifetime — it's determined by which files exist on disk (`<name>` for bbolt, `<name>.sqlite3` for SQLite), not by anything persisted elsewhere, so reopening it later always uses the correct engine regardless of the current default.
+
+```bash
+curl -X PUT http://admin:secret@localhost:7070/mydb?engine=sqlite
 ```
 
 ---
@@ -263,6 +274,32 @@ curl -X PUT http://admin:secret@localhost:7070/_config/admins/alice \
 
 # Remove an admin
 curl -X DELETE http://admin:secret@localhost:7070/_config/admins/alice
+```
+
+---
+
+## Section `sqlite`
+
+Connection-pool tuning for the SQLite storage engine (`-tags sqlite`, see the [Build tags](../README.md#build-tags) section — this config section doesn't exist at all in a default bbolt build).
+
+| Key | Default | Description |
+|---|---|---|
+| `max_open_readers` | `0` | Hard cap on concurrent read-pool connections *per database*. `0` means unbounded. **Read the warning below before setting this above 0.** |
+| `max_idle_readers` | `5` | Steady-state warm read connections kept per database once load subsides. Always safe to change — only affects idle connections, never blocks an in-flight read. |
+| `reader_idle_timeout` | `5m` | How long an idle read connection is kept before being closed (Go duration string, e.g. `30s`, `10m`). `0` means never close it — useful if you'd rather keep every database's connections warm than reopen them under load. |
+| `writer_idle_timeout` | `5m` | Same, for the single write connection each database maintains. The write connection *count* is not configurable — exactly one per database, always — since that's the mechanism serializing writers, not a tuning knob. |
+
+**`max_open_readers` warning:** the read pool doesn't just serve plain reads — it also backs the internal "view phase" of every write transaction, and those nest (e.g. building a view walks existing documents via its own internal transaction, nested inside whatever transaction triggered the build). A cap set below the real concurrent-nesting depth for your workload can deadlock: every connection held by an outer operation waiting on an inner one that can never get a connection of its own. Leave this at `0` unless you specifically need to bound per-database connection count and understand that risk. Setting it to a positive value logs a startup warning as a reminder.
+
+These settings are read fresh each time a database is opened (so a newly created or newly reopened database picks up a change immediately), but an **already-open** database's pool is not reconfigured retroactively — changing a value only affects databases opened after the change.
+
+Example — never close idle connections (e.g. for a deployment with few, always-busy databases where you'd rather not pay reconnection overhead):
+
+```bash
+curl -X PUT http://admin:secret@localhost:7070/_config/sqlite/reader_idle_timeout \
+  -d '"0"'
+curl -X PUT http://admin:secret@localhost:7070/_config/sqlite/writer_idle_timeout \
+  -d '"0"'
 ```
 
 ---

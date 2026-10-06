@@ -52,7 +52,7 @@ func setupViewTest(t *testing.T) (*storage.Storage, *mux.Router, func()) {
 	require.NoError(t, err)
 
 	taskCtx, cancelTasks := context.WithCancel(context.Background())
-	tc := controller.Task{Storage: s}
+	tc := controller.Task{Storage: s, Logger: log}
 	go tc.Run(taskCtx)
 
 	return s, r, func() {

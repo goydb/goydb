@@ -7,7 +7,7 @@ test-pouchdb:
 	go test -v -race -run TestPouchDBCompat ./test/pouchdb/
 
 test-build-tags:
-	@for tags in "" "nogoja" "notengo" "nosearch" "nojwt" "nototp" "nogoja,nosearch,notengo,nojwt,nototp"; do \
+	@for tags in "" "nogoja" "notengo" "nosearch" "nojwt" "nototp" "nogoja,nosearch,notengo,nojwt,nototp" "sqlite"; do \
 		label=$${tags:-default}; \
 		echo "=== build-tags: $$label ==="; \
 		go test -tags "$$tags" -json -race -v ./... | gotestfmt || exit 1; \

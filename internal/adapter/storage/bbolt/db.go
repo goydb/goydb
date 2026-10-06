@@ -1,4 +1,4 @@
-package bbolt_engine
+package bbolt
 
 import (
 	"bytes"
@@ -13,7 +13,8 @@ import (
 var _ port.DatabaseEngine = (*DB)(nil)
 
 type DB struct {
-	db *bbolt.DB
+	path string
+	db   *bbolt.DB
 }
 
 func Open(path string) (*DB, error) {
@@ -22,12 +23,27 @@ func Open(path string) (*DB, error) {
 		return nil, err
 	}
 	return &DB{
-		db: db,
+		path: path,
+		db:   db,
 	}, nil
 }
 
 func (db *DB) Close() error {
 	return db.db.Close()
+}
+
+// Delete closes the database and removes its backing file.
+func (db *DB) Delete() error {
+	if err := db.Close(); err != nil {
+		return err
+	}
+	return os.Remove(db.path)
+}
+
+// Sync is a no-op: every bbolt Update transaction already fsyncs before
+// returning, so there is nothing additional to force to stable storage.
+func (db *DB) Sync() error {
+	return nil
 }
 
 func (db *DB) ReadTransaction(fn func(tx port.EngineReadTransaction) error) error {

@@ -1,4 +1,4 @@
-package bbolt_engine
+package bbolt
 
 import (
 	"context"

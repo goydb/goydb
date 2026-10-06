@@ -11,7 +11,7 @@ import (
 
 func init() {
 	handler.RegisterFeature("tengo")
-	RegisterStorageOptionHook(func(logger port.Logger) []storage.StorageOption {
+	RegisterStorageOptionHook(func(logger port.Logger, cs *handler.ConfigStore) []storage.StorageOption {
 		return []storage.StorageOption{
 			storage.WithViewEngine("tengo", tengoview.NewViewServer),
 			storage.WithFilterEngine("tengo", tengoview.NewFilterServer),

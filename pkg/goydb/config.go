@@ -98,7 +98,7 @@ func (c *Config) BuildDatabase() (*Goydb, error) {
 		storage.WithLogger(logger.With("component", "storage")),
 	}
 	for _, hook := range storageOptionHooks {
-		storageOpts = append(storageOpts, hook(logger)...)
+		storageOpts = append(storageOpts, hook(logger, cs)...)
 	}
 	s, err := storage.Open(c.DatabaseDir, storageOpts...)
 	if err != nil {
