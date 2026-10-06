@@ -110,6 +110,34 @@ func (doc *Document) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// MarshalJSON implements custom JSON marshaling for Document, mirroring
+// UnmarshalJSON: known fields are flattened back into the top-level object
+// alongside Data instead of nesting Data under a literal "data" key.
+func (doc Document) MarshalJSON() ([]byte, error) {
+	out := make(map[string]interface{}, len(doc.Data)+5)
+	for key, value := range doc.Data {
+		out[key] = value
+	}
+
+	if doc.ID != "" {
+		out["_id"] = doc.ID
+	}
+	if doc.Rev != "" {
+		out["_rev"] = doc.Rev
+	}
+	if doc.Deleted {
+		out["_deleted"] = doc.Deleted
+	}
+	if doc.LocalSeq != 0 {
+		out["_local_seq"] = doc.LocalSeq
+	}
+	if len(doc.Attachments) > 0 {
+		out["_attachments"] = doc.Attachments
+	}
+
+	return json.Marshal(out)
+}
+
 func (doc Document) ValidUpdateRevision(newDoc *Document) bool {
 	oldRev, ok := doc.Revision()
 	if ok {

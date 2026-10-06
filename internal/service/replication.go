@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	adapterreplication "github.com/goydb/goydb/internal/adapter/replication"
-	"github.com/goydb/goydb/internal/controller"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
+	"github.com/goydb/goydb/pkg/replication"
+	"github.com/goydb/goydb/pkg/replicator"
 )
 
 const replicatorDBName = "_replicator"
@@ -295,14 +295,14 @@ func (c *Replication) resetRetryCount(ctx context.Context, repDoc *model.Replica
 // authentication or other purposes.
 func (c *Replication) BuildPeer(addr string, customHeaders map[string]string) port.ReplicationPeer {
 	if strings.HasPrefix(addr, "http://") || strings.HasPrefix(addr, "https://") {
-		client, err := adapterreplication.NewRemoteClient(addr, customHeaders)
+		client, err := replication.NewRemoteClient(addr, customHeaders)
 		if err != nil {
 			c.Logger.Errorf(context.Background(), "failed to create remote peer", "address", addr, "error", err)
 			return nil
 		}
 		return client
 	}
-	return &adapterreplication.LocalDB{
+	return &replication.LocalDB{
 		Storage: c.Storage,
 		DBName:  addr,
 	}
@@ -316,7 +316,7 @@ func (c *Replication) RunSync(ctx context.Context, repDoc *model.ReplicationDoc)
 	if source == nil || target == nil {
 		return nil, fmt.Errorf("invalid source or target")
 	}
-	return controller.NewReplicator(source, target, repDoc, c.Logger).Run(ctx)
+	return replicator.NewReplicator(source, target, repDoc, c.Logger).Run(ctx)
 }
 
 // Submit starts an async replication goroutine for a _replicator-DB job.
@@ -330,7 +330,7 @@ func (c *Replication) Submit(ctx context.Context, repDoc *model.ReplicationDoc, 
 		return
 	}
 
-	replicator := controller.NewReplicator(source, target, repDoc, c.Logger)
+	rep := replicator.NewReplicator(source, target, repDoc, c.Logger)
 	repCtx, cancel := context.WithCancel(ctx)
 	repID := computeRepID(repDoc.Source, repDoc.Target)
 
@@ -352,7 +352,7 @@ func (c *Replication) Submit(ctx context.Context, repDoc *model.ReplicationDoc, 
 
 		onState(model.ReplicationStateRunning, "")
 
-		_, err := replicator.Run(repCtx)
+		_, err := rep.Run(repCtx)
 		if err != nil {
 			c.Logger.Errorf(repCtx, "replication failed", "docID", repDoc.ID, "repID", repID, "error", err)
 

@@ -1,9 +1,11 @@
 package model
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHasRevision_CurrentRev(t *testing.T) {
@@ -78,4 +80,49 @@ func TestNextLocalRevision_MigrationFromContentHash(t *testing.T) {
 	// should migrate to "0-1" on next write.
 	doc := Document{Rev: "1-abc123"}
 	assert.Equal(t, "0-1", doc.NextLocalRevision())
+}
+
+func TestMarshalJSON_FlattensDataAndMetaFields(t *testing.T) {
+	doc := Document{
+		ID:   "doc1",
+		Rev:  "2-abc",
+		Data: map[string]interface{}{"foo": "bar"},
+		Attachments: map[string]*Attachment{
+			"file.txt": {ContentType: "text/plain", Digest: "sha1-xyz", Stub: true},
+		},
+	}
+
+	b, err := json.Marshal(doc)
+	require.NoError(t, err)
+
+	var out map[string]interface{}
+	require.NoError(t, json.Unmarshal(b, &out))
+
+	assert.Equal(t, "doc1", out["_id"])
+	assert.Equal(t, "2-abc", out["_rev"])
+	assert.Equal(t, "bar", out["foo"])
+	assert.NotContains(t, out, "data")
+	assert.Contains(t, out, "_attachments")
+}
+
+func TestMarshalJSON_UnmarshalJSON_RoundTrip(t *testing.T) {
+	doc := Document{
+		ID:   "doc1",
+		Rev:  "3-def",
+		Data: map[string]interface{}{"value": float64(42)},
+		Attachments: map[string]*Attachment{
+			"file.txt": {ContentType: "text/plain", Digest: "sha1-xyz", Length: 10, Stub: true, Revpos: 1},
+		},
+	}
+
+	b, err := json.Marshal(doc)
+	require.NoError(t, err)
+
+	var roundTripped Document
+	require.NoError(t, json.Unmarshal(b, &roundTripped))
+
+	assert.Equal(t, doc.ID, roundTripped.ID)
+	assert.Equal(t, doc.Rev, roundTripped.Rev)
+	assert.Equal(t, doc.Data["value"], roundTripped.Data["value"])
+	assert.Equal(t, doc.Attachments["file.txt"].Digest, roundTripped.Attachments["file.txt"].Digest)
 }

@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/goydb/goydb/internal/adapter/logger"
-	adapterreplication "github.com/goydb/goydb/internal/adapter/replication"
 	"github.com/goydb/goydb/internal/adapter/storage"
-	"github.com/goydb/goydb/internal/controller"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
+	"github.com/goydb/goydb/pkg/replication"
+	"github.com/goydb/goydb/pkg/replicator"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -58,11 +58,11 @@ func TestE2E_PullReplication_OneShot(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	source := &adapterreplication.LocalDB{Storage: srcStorage, DBName: "sourcedb"}
-	target := &adapterreplication.LocalDB{Storage: tgtStorage, DBName: "targetdb"}
+	source := &replication.LocalDB{Storage: srcStorage, DBName: "sourcedb"}
+	target := &replication.LocalDB{Storage: tgtStorage, DBName: "targetdb"}
 
 	repDoc := &model.ReplicationDoc{Source: "sourcedb", Target: "targetdb"}
-	r := controller.NewReplicator(source, target, repDoc, logger.NewNoLog())
+	r := replicator.NewReplicator(source, target, repDoc, logger.NewNoLog())
 	result, err := r.Run(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 10, result.DocsWritten)
@@ -111,11 +111,11 @@ func TestE2E_PullReplication_WithDeletedDocs(t *testing.T) {
 	_, err = srcDB.DeleteDocument(ctx, "doc1", doc1.Rev)
 	require.NoError(t, err)
 
-	source := &adapterreplication.LocalDB{Storage: srcStorage, DBName: "sourcedb"}
-	target := &adapterreplication.LocalDB{Storage: tgtStorage, DBName: "targetdb"}
+	source := &replication.LocalDB{Storage: srcStorage, DBName: "sourcedb"}
+	target := &replication.LocalDB{Storage: tgtStorage, DBName: "targetdb"}
 
 	repDoc := &model.ReplicationDoc{Source: "sourcedb", Target: "targetdb"}
-	r := controller.NewReplicator(source, target, repDoc, logger.NewNoLog())
+	r := replicator.NewReplicator(source, target, repDoc, logger.NewNoLog())
 	result, err := r.Run(ctx)
 	require.NoError(t, err)
 	assert.True(t, result.DocsWritten >= 3, "should have written at least the non-deleted docs")
@@ -141,11 +141,11 @@ func TestE2E_ContinuousReplication_LiveUpdates(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	source := &adapterreplication.LocalDB{Storage: srcStorage, DBName: "sourcedb"}
-	target := &adapterreplication.LocalDB{Storage: tgtStorage, DBName: "targetdb"}
+	source := &replication.LocalDB{Storage: srcStorage, DBName: "sourcedb"}
+	target := &replication.LocalDB{Storage: tgtStorage, DBName: "targetdb"}
 
 	repDoc := &model.ReplicationDoc{Source: "sourcedb", Target: "targetdb", Continuous: true}
-	r := controller.NewReplicator(source, target, repDoc, logger.NewNoLog())
+	r := replicator.NewReplicator(source, target, repDoc, logger.NewNoLog())
 
 	repCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -217,18 +217,18 @@ func TestE2E_BidirectionalReplication(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	peerA := &adapterreplication.LocalDB{Storage: srcStorage, DBName: "dba"}
-	peerB := &adapterreplication.LocalDB{Storage: tgtStorage, DBName: "dbb"}
+	peerA := &replication.LocalDB{Storage: srcStorage, DBName: "dba"}
+	peerB := &replication.LocalDB{Storage: tgtStorage, DBName: "dbb"}
 
 	// A -> B
 	repDoc1 := &model.ReplicationDoc{Source: "dba", Target: "dbb"}
-	r1 := controller.NewReplicator(peerA, peerB, repDoc1, logger.NewNoLog())
+	r1 := replicator.NewReplicator(peerA, peerB, repDoc1, logger.NewNoLog())
 	_, err = r1.Run(ctx)
 	require.NoError(t, err)
 
 	// B -> A
 	repDoc2 := &model.ReplicationDoc{Source: "dbb", Target: "dba"}
-	r2 := controller.NewReplicator(peerB, peerA, repDoc2, logger.NewNoLog())
+	r2 := replicator.NewReplicator(peerB, peerA, repDoc2, logger.NewNoLog())
 	_, err = r2.Run(ctx)
 	require.NoError(t, err)
 
@@ -261,11 +261,11 @@ func TestE2E_CreateTarget(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	source := &adapterreplication.LocalDB{Storage: srcStorage, DBName: "sourcedb"}
-	target := &adapterreplication.LocalDB{Storage: tgtStorage, DBName: "targetdb"}
+	source := &replication.LocalDB{Storage: srcStorage, DBName: "sourcedb"}
+	target := &replication.LocalDB{Storage: tgtStorage, DBName: "targetdb"}
 
 	repDoc := &model.ReplicationDoc{Source: "sourcedb", Target: "targetdb", CreateTarget: true}
-	r := controller.NewReplicator(source, target, repDoc, logger.NewNoLog())
+	r := replicator.NewReplicator(source, target, repDoc, logger.NewNoLog())
 	result, err := r.Run(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 3, result.DocsWritten)
@@ -294,11 +294,11 @@ func TestE2E_LargeReplication(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	source := &adapterreplication.LocalDB{Storage: srcStorage, DBName: "sourcedb"}
-	target := &adapterreplication.LocalDB{Storage: tgtStorage, DBName: "targetdb"}
+	source := &replication.LocalDB{Storage: srcStorage, DBName: "sourcedb"}
+	target := &replication.LocalDB{Storage: tgtStorage, DBName: "targetdb"}
 
 	repDoc := &model.ReplicationDoc{Source: "sourcedb", Target: "targetdb"}
-	r := controller.NewReplicator(source, target, repDoc, logger.NewNoLog())
+	r := replicator.NewReplicator(source, target, repDoc, logger.NewNoLog())
 	result, err := r.Run(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 500, result.DocsWritten)
@@ -334,11 +334,11 @@ func TestE2E_ReplicationPreservesRevisions(t *testing.T) {
 	rev3, err := srcDB.PutDocument(ctx, doc)
 	require.NoError(t, err)
 
-	source := &adapterreplication.LocalDB{Storage: srcStorage, DBName: "sourcedb"}
-	target := &adapterreplication.LocalDB{Storage: tgtStorage, DBName: "targetdb"}
+	source := &replication.LocalDB{Storage: srcStorage, DBName: "sourcedb"}
+	target := &replication.LocalDB{Storage: tgtStorage, DBName: "targetdb"}
 
 	repDoc := &model.ReplicationDoc{Source: "sourcedb", Target: "targetdb"}
-	r := controller.NewReplicator(source, target, repDoc, logger.NewNoLog())
+	r := replicator.NewReplicator(source, target, repDoc, logger.NewNoLog())
 	_, err = r.Run(ctx)
 	require.NoError(t, err)
 
@@ -386,11 +386,11 @@ func TestE2E_Protocol_FauxtonScenario(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 4: Replicate sourcedb → targetdb
-	source := &adapterreplication.LocalDB{Storage: srcStorage, DBName: "sourcedb"}
-	target := &adapterreplication.LocalDB{Storage: tgtStorage, DBName: "targetdb"}
+	source := &replication.LocalDB{Storage: srcStorage, DBName: "sourcedb"}
+	target := &replication.LocalDB{Storage: tgtStorage, DBName: "targetdb"}
 
 	repDoc := &model.ReplicationDoc{Source: "sourcedb", Target: "targetdb"}
-	r := controller.NewReplicator(source, target, repDoc, logger.NewNoLog())
+	r := replicator.NewReplicator(source, target, repDoc, logger.NewNoLog())
 	_, err = r.Run(ctx)
 	require.NoError(t, err)
 
@@ -434,11 +434,11 @@ func TestE2E_Protocol_IncrementalCheckpoint(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	source := &adapterreplication.LocalDB{Storage: srcStorage, DBName: "sourcedb"}
-	target := &adapterreplication.LocalDB{Storage: tgtStorage, DBName: "targetdb"}
+	source := &replication.LocalDB{Storage: srcStorage, DBName: "sourcedb"}
+	target := &replication.LocalDB{Storage: tgtStorage, DBName: "targetdb"}
 
 	repDoc := &model.ReplicationDoc{Source: "sourcedb", Target: "targetdb"}
-	r := controller.NewReplicator(source, target, repDoc, logger.NewNoLog())
+	r := replicator.NewReplicator(source, target, repDoc, logger.NewNoLog())
 
 	// First run — should replicate all 5 docs
 	result1, err := r.Run(ctx)
@@ -502,11 +502,11 @@ func TestE2E_AttachmentReplication(t *testing.T) {
 	require.NoError(t, err)
 
 	// Replicate sourcedb → targetdb.
-	source := &adapterreplication.LocalDB{Storage: srcStorage, DBName: "sourcedb"}
-	target := &adapterreplication.LocalDB{Storage: tgtStorage, DBName: "targetdb"}
+	source := &replication.LocalDB{Storage: srcStorage, DBName: "sourcedb"}
+	target := &replication.LocalDB{Storage: tgtStorage, DBName: "targetdb"}
 
 	repDoc := &model.ReplicationDoc{Source: "sourcedb", Target: "targetdb"}
-	r := controller.NewReplicator(source, target, repDoc, logger.NewNoLog())
+	r := replicator.NewReplicator(source, target, repDoc, logger.NewNoLog())
 	result, err := r.Run(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.DocsWritten)
@@ -559,11 +559,11 @@ func TestE2E_Protocol_AllDocsTotal_ExcludesLocalAndDeleted(t *testing.T) {
 	require.NoError(t, err)
 
 	// Replicate — target receives 4 live docs + 1 tombstone + 1 _local checkpoint
-	source := &adapterreplication.LocalDB{Storage: srcStorage, DBName: "sourcedb"}
-	target := &adapterreplication.LocalDB{Storage: tgtStorage, DBName: "targetdb"}
+	source := &replication.LocalDB{Storage: srcStorage, DBName: "sourcedb"}
+	target := &replication.LocalDB{Storage: tgtStorage, DBName: "targetdb"}
 
 	repDoc := &model.ReplicationDoc{Source: "sourcedb", Target: "targetdb"}
-	r := controller.NewReplicator(source, target, repDoc, logger.NewNoLog())
+	r := replicator.NewReplicator(source, target, repDoc, logger.NewNoLog())
 	_, err = r.Run(ctx)
 	require.NoError(t, err)
 

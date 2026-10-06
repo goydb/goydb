@@ -13,8 +13,6 @@ import (
 )
 
 // LocalDB adapts a port.Storage/port.Database to the port.ReplicationPeer interface.
-// It lives here (adapter layer) rather than in the protocol package so that
-// internal/replication stays free of storage adapter imports.
 type LocalDB struct {
 	Storage port.Storage
 	DBName  string
