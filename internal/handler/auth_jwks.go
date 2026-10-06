@@ -162,9 +162,18 @@ func parseECKey(k JWK) (*ecdsa.PublicKey, error) {
 		return nil, fmt.Errorf("decode y: %w", err)
 	}
 
-	return &ecdsa.PublicKey{
-		Curve: curve,
-		X:     new(big.Int).SetBytes(xb),
-		Y:     new(big.Int).SetBytes(yb),
-	}, nil
+	// Build the SEC1 uncompressed point (0x04 || X || Y), left-padding X/Y to
+	// the curve's field size in case a shorter-than-expected encoding dropped
+	// leading zero bytes.
+	size := (curve.Params().BitSize + 7) / 8
+	point := make([]byte, 1+2*size)
+	point[0] = 4
+	copy(point[1+size-len(xb):1+size], xb)
+	copy(point[1+2*size-len(yb):], yb)
+
+	pub, err := ecdsa.ParseUncompressedPublicKey(curve, point)
+	if err != nil {
+		return nil, fmt.Errorf("parse EC point: %w", err)
+	}
+	return pub, nil
 }
