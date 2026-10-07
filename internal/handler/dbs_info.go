@@ -2,7 +2,10 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+
+	"github.com/goydb/goydb/internal/adapter/storage"
 )
 
 // DBsInfo handles POST /_dbs_info.
@@ -33,9 +36,13 @@ func (s *DBsInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for _, name := range body.Keys {
 		db, err := s.Storage.Database(ctx, name)
 		if err != nil {
+			reason := "not_found"
+			if errors.Is(err, storage.ErrDatabaseUnavailable) {
+				reason = "unavailable"
+			}
 			results = append(results, map[string]interface{}{
 				"key":   name,
-				"error": "not_found",
+				"error": reason,
 			})
 			continue
 		}

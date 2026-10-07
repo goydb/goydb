@@ -21,6 +21,11 @@ func (s *DBEnsureFullCommit) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := db.Sync(r.Context()); err != nil {
+		WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	resp := EnsureFullCommitResponse{
 		Ok:                true,
 		InstanceStartTime: "0",

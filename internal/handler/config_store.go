@@ -21,6 +21,7 @@ var defaultConfig = map[string]map[string]string{
 		"max_attachment_size":        "0",
 		"max_db_size":               "0",
 		"validate_on_replication":   "false",
+		"default_engine":            "",
 	},
 	"chttpd": {
 		"max_http_request_size": "4294967296",
