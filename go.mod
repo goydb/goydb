@@ -14,7 +14,7 @@ require (
 	github.com/gorilla/handlers v1.5.2
 	github.com/gorilla/mux v1.8.1
 	github.com/gorilla/sessions v1.4.0
-	github.com/goydb/utils v0.0.0-20260226213405-b106bdfa193e
+	github.com/goydb/utils v1.1.0
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/satori/go.uuid v1.2.0
 	github.com/stretchr/testify v1.11.1
