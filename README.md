@@ -105,6 +105,9 @@ an opt-in addition, enabled with `-tags sqlite`:
 
     go build -tags sqlite ./cmd/goydb
 
+The official `ghcr.io/goydb/goydb` Docker image is built with `-tags sqlite`,
+so both engines are available out of the box when using it.
+
 This doesn't replace bbolt — a `-tags sqlite` binary can open and create
 databases with either engine, chosen per database. `PUT /{db}` picks the
 engine via an `?engine=bbolt|sqlite` query parameter (same idea as CouchDB's

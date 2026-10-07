@@ -5,7 +5,7 @@ WORKDIR /app
 
 COPY . .
 
-RUN CGO_ENABLED=0 go build -a -ldflags '-extldflags "-static"' -o /usr/local/bin/goydb ./cmd/goydb
+RUN CGO_ENABLED=0 go build -tags sqlite -a -ldflags '-extldflags "-static"' -o /usr/local/bin/goydb ./cmd/goydb
 
 FROM alpine
 
