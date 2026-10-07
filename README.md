@@ -133,6 +133,36 @@ how long idle connections are kept) is tunable via the `sqlite` section of
 the [runtime config](docs/config.md#section-sqlite) — `GET`/`PUT
 /_config/sqlite/{key}`, same mechanism as every other `_config` section.
 
+## Replication
+
+Besides the built-in CouchDB-compatible `/_replicate` HTTP endpoint, the
+replication engine is also exposed as a standalone Go API via
+[`pkg/replication`](pkg/replication) and [`pkg/replicator`](pkg/replicator),
+so external code can drive goydb's checkpoint-based pull/push protocol
+directly, without going through HTTP:
+
+```go
+import (
+	"github.com/goydb/goydb/pkg/replication"
+	"github.com/goydb/goydb/pkg/replicator"
+)
+
+r := &replicator.Replicator{
+	Source:     &replication.LocalDB{Storage: storage, DBName: "source"},
+	Target:     &replication.LocalDB{Storage: storage, DBName: "target"},
+	Continuous: true, // keep polling and replicating until ctx is cancelled
+}
+_, err := r.Run(ctx)
+```
+
+Both `Source` and `Target` only need to satisfy `port.ReplicationPeer`, so a
+`replication.RemoteClient` (talking to any CouchDB-compatible server over
+HTTP) can be mixed with a `replication.LocalDB` on either side. With
+`Continuous: false` (the default), `Run` returns once the target has caught
+up; with `Continuous: true` it keeps polling for new changes and only
+returns when `ctx` is cancelled — same as CouchDB's own continuous
+replication mode.
+
 ## Documentation
 
 * [Configuration Reference](docs/config.md)
