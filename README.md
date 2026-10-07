@@ -143,16 +143,21 @@ directly, without going through HTTP:
 
 ```go
 import (
+	"github.com/goydb/goydb/pkg/goydb"
 	"github.com/goydb/goydb/pkg/replication"
 	"github.com/goydb/goydb/pkg/replicator"
 )
 
+cfg, err := goydb.NewConfig()
+// ...
+gdb, err := cfg.BuildDatabase() // *goydb.Goydb satisfies port.Storage
+
 r := &replicator.Replicator{
-	Source:     &replication.LocalDB{Storage: storage, DBName: "source"},
-	Target:     &replication.LocalDB{Storage: storage, DBName: "target"},
+	Source:     &replication.LocalDB{Storage: gdb, DBName: "source"},
+	Target:     &replication.LocalDB{Storage: gdb, DBName: "target"},
 	Continuous: true, // keep polling and replicating until ctx is cancelled
 }
-_, err := r.Run(ctx)
+_, err = r.Run(ctx)
 ```
 
 Both `Source` and `Target` only need to satisfy `port.ReplicationPeer`, so a
