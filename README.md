@@ -121,8 +121,12 @@ bbolt files (which have no extension), so both kinds of files can coexist in
 the same `dbs` directory — each is always reopened with the engine that
 actually wrote it, regardless of the current default. A binary built
 *without* `-tags sqlite` only has the `bbolt` engine available; it refuses
-`?engine=sqlite` (`400 Bad Request`) and fails to start if a `.sqlite3` file
-is present in its `dbs` directory, rather than silently ignoring it.
+`?engine=sqlite` (`400 Bad Request`), and a `.sqlite3` file present in its
+`dbs` directory doesn't stop the server from starting or affect any other
+database — that one database is reported as unavailable (it still appears
+in `_all_dbs`/Fauxton; any request against it gets a clear "database exists
+but could not be opened" error) until it's deleted or opened with a binary
+that has `-tags sqlite`.
 
 The SQLite engine's connection-pool behavior (how many concurrent readers,
 how long idle connections are kept) is tunable via the `sqlite` section of

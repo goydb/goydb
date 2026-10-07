@@ -18,6 +18,7 @@ const sqliteDBExt = ".sqlite3"
 type Storage struct {
 	path            string
 	dbs             map[string]*Database
+	brokenDBs       map[string]brokenDB // name -> why it couldn't be opened at load time
 	mu              sync.RWMutex
 	viewEngines     port.ViewEngines
 	filterEngines   port.FilterEngines
@@ -27,6 +28,15 @@ type Storage struct {
 	logger          port.Logger
 	engines         map[string]EngineFactory // engine name -> factory, e.g. "bbolt", "sqlite"
 	defaultEngine   string                   // engine used when CreateDatabase gets no "engine" arg
+}
+
+// brokenDB records a database file that exists on disk but could not be
+// opened (e.g. its engine isn't compiled into this binary, or the file is
+// corrupted). fileName is the raw directory entry name (e.g. "foo.sqlite3"),
+// kept so DeleteDatabase can remove it without a live engine handle.
+type brokenDB struct {
+	fileName string
+	err      error
 }
 
 type StorageOption func(s *Storage) error
@@ -89,6 +99,7 @@ func (s *Storage) ReloadDatabases(ctx context.Context) error {
 
 	s.mu.Lock()
 	s.dbs = make(map[string]*Database)
+	s.brokenDBs = make(map[string]brokenDB)
 	s.mu.Unlock()
 
 	for _, f := range files {
@@ -117,8 +128,17 @@ func (s *Storage) ReloadDatabases(ctx context.Context) error {
 		s.logger.Infof(ctx, "loading database", "name", name, "engine", engine)
 		database, err := s.CreateDatabase(ctx, name, map[string]string{"engine": engine})
 		if err != nil {
-			s.logger.Warnf(ctx, "database load failed", "name", f.Name(), "error", err)
-			return err
+			// Don't let one unreadable database (e.g. a .sqlite3 file left
+			// behind by a binary not built with -tags sqlite) take down the
+			// whole server. Record it as broken and keep loading the rest —
+			// it still shows up via Databases()/_all_dbs, matching the
+			// CouchDB/Fauxton behavior of reporting a database that exists
+			// even when it can't currently be opened.
+			s.logger.Warnf(ctx, "database unavailable, continuing startup", "name", f.Name(), "engine", engine, "error", err)
+			s.mu.Lock()
+			s.brokenDBs[name] = brokenDB{fileName: f.Name(), err: err}
+			s.mu.Unlock()
+			continue
 		}
 		s.logger.Infof(ctx, "database loaded", "name", database.Name())
 	}

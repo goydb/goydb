@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/goydb/goydb/internal/adapter/index"
@@ -180,33 +181,58 @@ func (s *Storage) DeleteDatabase(ctx context.Context, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	db, ok := s.dbs[name]
-	if !ok {
-		return fmt.Errorf("%w: %q", ErrUnknownDatabase, name)
+	if db, ok := s.dbs[name]; ok {
+		if err := db.db.Delete(); err != nil {
+			return err
+		}
+
+		if err := os.RemoveAll(db.databaseDir); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+
+		delete(s.dbs, name)
+		return nil
 	}
 
-	if err := db.db.Delete(); err != nil {
-		return err
+	if b, ok := s.brokenDBs[name]; ok {
+		// No live engine handle exists for a database that never opened
+		// successfully, so remove its on-disk files directly by name
+		// instead of going through the (nonexistent) engine. Covers the
+		// main file plus any sidecar files sharing its prefix (e.g. a
+		// SQLite engine's -wal/-shm/-journal files).
+		entries, err := os.ReadDir(s.path)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			n := e.Name()
+			if n == b.fileName || strings.HasPrefix(n, b.fileName+"-") {
+				if err := os.RemoveAll(path.Join(s.path, n)); err != nil {
+					return err
+				}
+			}
+		}
+		if err := os.RemoveAll(path.Join(s.path, name+".d")); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+
+		delete(s.brokenDBs, name)
+		return nil
 	}
 
-	if err := os.RemoveAll(db.databaseDir); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-
-	delete(s.dbs, name)
-
-	return nil
+	return fmt.Errorf("%w: %q", ErrUnknownDatabase, name)
 }
 
 func (s *Storage) Databases(ctx context.Context) ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	names := make([]string, len(s.dbs))
-	var i int
+	names := make([]string, 0, len(s.dbs)+len(s.brokenDBs))
 	for name := range s.dbs {
-		names[i] = name
-		i++
+		names = append(names, name)
+	}
+	for name := range s.brokenDBs {
+		names = append(names, name)
 	}
 
 	return names, nil
@@ -216,10 +242,13 @@ func (s *Storage) Database(ctx context.Context, name string) (port.Database, err
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	db, ok := s.dbs[name]
-	if !ok {
-		return nil, fmt.Errorf("database %q not found", name)
+	if db, ok := s.dbs[name]; ok {
+		return db, nil
 	}
 
-	return db, nil
+	if b, ok := s.brokenDBs[name]; ok {
+		return nil, fmt.Errorf("%w: %q: %w", ErrDatabaseUnavailable, name, b.err)
+	}
+
+	return nil, fmt.Errorf("database %q not found", name)
 }

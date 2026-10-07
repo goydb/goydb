@@ -20,8 +20,12 @@ func (s *DBCreate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dbName := pathVar(r, "db")
-	db, _ := s.Storage.Database(r.Context(), dbName)
-	if db != nil {
+	db, err := s.Storage.Database(r.Context(), dbName)
+	if db != nil || errors.Is(err, storage.ErrDatabaseUnavailable) {
+		// A broken database (e.g. a .sqlite3 file this binary can't open)
+		// still occupies the name on disk -- treat it the same as an
+		// existing database rather than letting CreateDatabase below write
+		// a second, colliding file under the same name.
 		WriteError(w, http.StatusConflict, "Database already exists.")
 		return
 	}
@@ -47,7 +51,7 @@ func (s *DBCreate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	_, err := s.Storage.CreateDatabase(r.Context(), dbName, args)
+	_, err = s.Storage.CreateDatabase(r.Context(), dbName, args)
 	if errors.Is(err, storage.ErrUnknownEngine) {
 		WriteError(w, http.StatusBadRequest, err.Error())
 		return
