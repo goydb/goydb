@@ -129,7 +129,16 @@ func TestChanges_SinceNowWakesUpOnlyWithTheNewDocument(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		docs, _, err := db.Changes(ctx, &model.ChangesOptions{Since: "now", Limit: 1000, Timeout: 5 * time.Second})
+		// Feed: "longpoll" matters here, not just for realism (the HTTP
+		// handler always sets Feed explicitly): it's what makes a spurious
+		// empty wake-up retry instead of returning early. A wake can be
+		// spurious even when correct -- NotifyDocumentUpdate dispatches to
+		// listeners from an async goroutine with no ordering guarantee
+		// against a listener registered moments after an earlier write
+		// (here, doc1's own notification can arrive after this listener
+		// registers), and the fix doesn't try to distinguish "real" wakes
+		// from that: it just re-snapshots and waits again.
+		docs, _, err := db.Changes(ctx, &model.ChangesOptions{Since: "now", Limit: 1000, Timeout: 5 * time.Second, Feed: "longpoll"})
 		done <- result{docs, err}
 	}()
 
