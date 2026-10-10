@@ -42,7 +42,18 @@ type Config struct {
 	// Containers are zip file based containers that should be mounted before the
 	// database application
 	Containers []public.Container
+	// RouteHooks let external code embedding goydb as a library register
+	// additional HTTP routes onto the same router/process goydb builds,
+	// without needing a reverse proxy or a second server. Hooks run after
+	// goydb's own CouchDB-compatible routes are registered, so they can add
+	// new paths without conflicting with goydb's own.
+	RouteHooks []RouteHook
 }
+
+// RouteHook registers additional routes onto goydb's own HTTP router. It is
+// given the router and the fully-built Goydb instance (Storage, Config,
+// Logger), so it can serve its own endpoints from the same process/port.
+type RouteHook func(r *mux.Router, gdb *Goydb) error
 
 // NewConfig will create a new configuration
 // based on the given environment values.
@@ -149,6 +160,12 @@ func (c *Config) BuildDatabase() (*Goydb, error) {
 	}.Build(r)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build router: %w", err)
+	}
+
+	for _, hook := range c.RouteHooks {
+		if err := hook(r, &gdb); err != nil {
+			return nil, fmt.Errorf("route hook failed: %w", err)
+		}
 	}
 
 	// Apply CORS middleware if configured.

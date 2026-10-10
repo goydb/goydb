@@ -74,6 +74,33 @@ cfg.Containers = []public.Container{
 ...
 ```
 
+## Adding custom HTTP routes
+
+`Config.RouteHooks` lets embedding applications register their own HTTP
+routes onto the same router/process `BuildDatabase` builds — no reverse
+proxy or second server needed to serve a custom endpoint alongside goydb's
+own CouchDB-compatible API. A hook receives the `*mux.Router` and the fully
+built `*goydb.Goydb` (storage, config, logger), and runs after goydb's own
+routes are registered, so it can't be shadowed by them.
+
+```go
+import (
+	"net/http"
+
+	"github.com/gorilla/mux"
+	"github.com/goydb/goydb/pkg/goydb"
+)
+
+...
+cfg.RouteHooks = append(cfg.RouteHooks, func(r *mux.Router, gdb *goydb.Goydb) error {
+	r.Methods("GET").Path("/_myapp/health").HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	return nil
+})
+...
+```
+
 ## Is this production-ready?
 
 goydb is under active development and hasn't seen the years of hardening that
