@@ -156,6 +156,9 @@ func (doc Document) Revision() (string, bool) {
 		return doc.Rev, true
 	}
 	rev, ok := doc.Data["_rev"].(string)
+	if rev == "" {
+		return "", false // an empty _rev is no revision at all
+	}
 	return rev, ok
 }
 
@@ -235,6 +238,9 @@ func (doc Document) NextSequenceRevision() int {
 	}
 
 	i := strings.Index(rev, "-")
+	if i < 0 {
+		return 1 // malformed revision, fall back to the first generation
+	}
 	val, err := strconv.ParseInt(rev[:i], 10, 64)
 	if err != nil {
 		return 1 // this should never happen, but if so fallback to 0

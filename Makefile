@@ -1,4 +1,4 @@
-PHONY: build push lint test test-pouchdb test-build-tags
+PHONY: build push lint test test-pouchdb test-couchdb test-build-tags
 
 test:
 	go test -json -race -v ./... | gotestfmt
@@ -27,3 +27,9 @@ public/favicon.ico: media/goydb.png
 
 media/goydb_no_back_small.png: media/goydb_no_back.png
 	convert $< -resize 50% $@
+
+# Conformance tests against a real CouchDB. Configure the server in
+# .env.couchdb (see .env.couchdb.example); without it the comparison is skipped.
+test-couchdb:
+	@if [ -f .env.couchdb ]; then set -a; . ./.env.couchdb; set +a; fi; \
+	go test -race -v -count=1 ./test/couchdb/
