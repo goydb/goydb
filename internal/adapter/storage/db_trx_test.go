@@ -3,6 +3,8 @@ package storage
 import (
 	"context"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/goydb/goydb/internal/adapter/logger"
@@ -241,8 +243,8 @@ func TestPutDocumentForReplication_HigherGenWins(t *testing.T) {
 	require.NoError(t, err)
 
 	err = db.PutDocumentForReplication(ctx, &model.Document{
-		ID:  "doc1",
-		Rev: "1-old",
+		ID:   "doc1",
+		Rev:  "1-old",
 		Data: map[string]interface{}{"_id": "doc1", "_rev": "1-old"},
 	})
 	require.NoError(t, err)
@@ -276,8 +278,8 @@ func TestPutDocumentForReplication_AncestorPruned(t *testing.T) {
 
 	// Simulate a prior leaf at "1-a".
 	err = db.PutDocumentForReplication(ctx, &model.Document{
-		ID:  "doc1",
-		Rev: "1-a",
+		ID:   "doc1",
+		Rev:  "1-a",
 		Data: map[string]interface{}{"_id": "doc1", "_rev": "1-a"},
 	})
 	require.NoError(t, err)
@@ -652,4 +654,144 @@ func TestDeleteDocument_WinningRev_StillWorks(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.True(t, got.Deleted)
+}
+
+// revGen returns the generation number of a revision string.
+func revGen(t *testing.T, rev string) int {
+	t.Helper()
+	gen, _, ok := strings.Cut(rev, "-")
+	require.True(t, ok, "malformed rev %q", rev)
+	n, err := strconv.Atoi(gen)
+	require.NoError(t, err)
+	return n
+}
+
+// Re-creating a deleted document without supplying a revision is accepted by
+// CouchDB and extends the tombstone instead of conflicting (issue #16).
+func TestPutDocument_RecreateDeletedWithoutRev(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	rev1, err := db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"x": 1},
+	})
+	require.NoError(t, err)
+
+	tombstone, err := db.DeleteDocument(ctx, "doc1", rev1)
+	require.NoError(t, err)
+	tombRev := tombstone.Rev
+
+	stats, err := db.Stats(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), stats.DocDelCount)
+
+	// PUT without a revision: accepted, continuing the generation count.
+	rev3, err := db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"x": 3},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, revGen(t, tombRev)+1, revGen(t, rev3))
+
+	doc, err := db.GetDocument(ctx, "doc1")
+	require.NoError(t, err)
+	require.NotNil(t, doc)
+	assert.False(t, doc.Deleted)
+	assert.Equal(t, rev3, doc.Rev)
+	assert.Equal(t, 3, doc.Data["x"])
+
+	// The revision history continues the chain, newest first.
+	require.Equal(t, []string{rev3, tombRev, rev1}, doc.RevHistory)
+
+	// The tombstone leaf has been replaced, not branched.
+	leaves, err := db.GetLeaves(ctx, "doc1")
+	require.NoError(t, err)
+	require.Len(t, leaves, 1)
+	assert.Equal(t, rev3, leaves[0].Rev)
+
+	stats, err = db.Stats(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(0), stats.DocDelCount)
+}
+
+// A write that does carry a revision must still match, even over a tombstone:
+// CouchDB only waives the check for rev-less writes.
+func TestPutDocument_RecreateDeletedWithStaleRevConflicts(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	rev1, err := db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"x": 1},
+	})
+	require.NoError(t, err)
+
+	_, err = db.DeleteDocument(ctx, "doc1", rev1)
+	require.NoError(t, err)
+
+	// The pre-delete revision is no longer a leaf.
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Rev:  rev1,
+		Data: map[string]interface{}{"x": 3},
+	})
+	assert.ErrorIs(t, err, ErrConflict)
+}
+
+// An empty _rev in the body is no revision at all, so it re-creates a deleted
+// document rather than conflicting (and must not panic on the way).
+func TestPutDocument_RecreateDeletedWithEmptyRev(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	rev1, err := db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"x": 1},
+	})
+	require.NoError(t, err)
+
+	tombstone, err := db.DeleteDocument(ctx, "doc1", rev1)
+	require.NoError(t, err)
+
+	rev3, err := db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"_rev": "", "x": 3},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, revGen(t, tombstone.Rev)+1, revGen(t, rev3))
+}
+
+// Guard against over-reach: a live document still requires a matching rev.
+func TestPutDocument_LiveDocWithoutRevConflicts(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"x": 1},
+	})
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"x": 2},
+	})
+	assert.ErrorIs(t, err, ErrConflict)
 }

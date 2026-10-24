@@ -9,3 +9,5 @@ testdbs
 
 .vscode/*
 /goydb
+
+.env.couchdb

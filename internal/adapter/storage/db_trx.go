@@ -119,8 +119,15 @@ func (tx *Transaction) getLeaf(docID, rev string) (*model.Document, error) {
 func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (rev string, err error) {
 	// verify that the transaction is valid for update
 	oldDoc, err := tx.GetDocument(ctx, doc.ID)
+	// CouchDB (couch_db:prep_and_validate_update) accepts a write that carries
+	// no revision when the stored document is a tombstone: the new edit extends
+	// the deleted leaf instead of conflicting. A write that does carry a
+	// revision must still match.
+	_, hasRev := doc.Revision()
+	var recreateDeleted bool
 	if err == nil && oldDoc != nil { // find if there is already a document
-		if !oldDoc.ValidUpdateRevision(doc) {
+		recreateDeleted = oldDoc.Deleted && !hasRev
+		if !recreateDeleted && !oldDoc.ValidUpdateRevision(doc) {
 			return "", ErrConflict
 		}
 	}
@@ -148,6 +155,11 @@ func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (re
 
 	// find next sequences (rev, changes)
 	revSeq := doc.NextSequenceRevision()
+	if recreateDeleted {
+		// Re-creating a deleted document continues the generation count from
+		// the tombstone, as CouchDB does; the incoming doc carries no rev.
+		revSeq = oldDoc.NextSequenceRevision()
+	}
 
 	hash := md5.New()
 	err = cbor.NewEncoder(hash).Encode(doc)
