@@ -472,6 +472,63 @@ func TestDBChanges_Since_LimitedEmptyPoll(t *testing.T) {
 	assert.Equal(t, since, result2.LastSeq)
 }
 
+// TestDBChanges_Since_RepeatedEmptyPollsStayStable guards against the
+// checkpoint-oscillation failure mode described in the original bug report:
+// a naive fix could still regress last_seq on, say, every *other* empty
+// poll, or after some number of repeats. Chain several genuinely-empty
+// polls in a row and assert last_seq never moves off since on any of them.
+func TestDBChanges_Since_RepeatedEmptyPollsStayStable(t *testing.T) {
+	s, c, cleanup := setupChangesTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{ID: "doc1", Data: map[string]interface{}{"value": 1}})
+	require.NoError(t, err)
+
+	result1, err := c.DB("testdb").Changes(ctx, &model.ChangesOptions{Feed: "normal"})
+	require.NoError(t, err)
+	since := result1.LastSeq
+
+	for i := 0; i < 5; i++ {
+		result, err := c.DB("testdb").Changes(ctx, &model.ChangesOptions{
+			Feed:  "normal",
+			Since: since,
+			Limit: 100,
+		})
+		require.NoError(t, err)
+		require.Empty(t, result.Results, "poll %d should have found nothing new", i)
+		require.Equal(t, since, result.LastSeq, "poll %d regressed last_seq", i)
+	}
+}
+
+// TestDBChanges_Since_ExplicitLimitZeroEmptyPoll covers the explicit
+// limit=0 query value specifically: the handler special-cases Limit==0 for
+// an extra blank line in the response body (CouchDB compatibility), so it's
+// worth confirming that formatting quirk doesn't interfere with last_seq
+// still correctly echoing since when nothing new is found.
+func TestDBChanges_Since_ExplicitLimitZeroEmptyPoll(t *testing.T) {
+	s, c, cleanup := setupChangesTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{ID: "doc1", Data: map[string]interface{}{"value": 1}})
+	require.NoError(t, err)
+
+	result := rawChangesGET(t, c, "testdb", "feed=normal&limit=0")
+	since := result.LastSeq
+	require.NotEmpty(t, since)
+
+	result2 := rawChangesGET(t, c, "testdb", "feed=normal&limit=0&since="+since)
+	assert.Empty(t, result2.Results)
+	assert.Equal(t, since, result2.LastSeq)
+}
+
 func TestDBChanges_Deleted(t *testing.T) {
 	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
