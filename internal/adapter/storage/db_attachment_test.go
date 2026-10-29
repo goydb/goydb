@@ -208,6 +208,7 @@ func TestPutAttachment_WakesUpWaitForChange(t *testing.T) {
 		seq, err := db.WaitForChange(ctx, since)
 		done <- result{seq, err}
 	}()
+	time.Sleep(100 * time.Millisecond) // let the goroutine above register its listener first
 
 	att := &model.Attachment{
 		Filename:    "file.txt",
@@ -253,6 +254,7 @@ func TestDeleteAttachment_WakesUpWaitForChange(t *testing.T) {
 		seq, err := db.WaitForChange(ctx, since)
 		done <- result{seq, err}
 	}()
+	time.Sleep(100 * time.Millisecond) // let the goroutine above register its listener first
 
 	_, err = db.DeleteAttachment(ctx, "doc1", "file.txt", doc1.Rev)
 	require.NoError(t, err)

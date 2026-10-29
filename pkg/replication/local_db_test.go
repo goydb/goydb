@@ -228,6 +228,13 @@ func TestLocalDB_BulkDocs_WakesUpWaitForChange(t *testing.T) {
 		done <- result{seq, err}
 	}()
 
+	// Give the goroutine above a chance to actually register its listener
+	// before writing: without this, on a slow enough runner the write (and
+	// its one-shot notification) can land before WaitForChange gets there,
+	// and since nothing else writes afterward, it would then wait forever
+	// (observed as a flaky timeout on CI's sqlite build-tag job).
+	time.Sleep(100 * time.Millisecond)
+
 	l := &LocalDB{Storage: s, DBName: "testdb"}
 	docs := []*model.Document{
 		{ID: "doc1", Rev: "1-abc", Data: map[string]interface{}{"_id": "doc1", "_rev": "1-abc", "v": 1}},
