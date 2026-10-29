@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -241,6 +242,43 @@ func TestLocalDB_BulkDocs_WakesUpWaitForChange(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("WaitForChange did not wake up for a document written via BulkDocs")
 	}
+}
+
+// TestLocalDB_BulkDocs_NotifiesForEveryDocument guards against a regression
+// where only the first (or last) document of a multi-document BulkDocs batch
+// gets tracked for notification instead of all of them.
+func TestLocalDB_BulkDocs_NotifiesForEveryDocument(t *testing.T) {
+	s, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	var mu sync.Mutex
+	seen := make(map[string]bool)
+	err = db.AddListener(ctx, port.ChangeListenerFunc(func(_ context.Context, doc *model.Document) error {
+		mu.Lock()
+		seen[doc.ID] = true
+		mu.Unlock()
+		return nil
+	}))
+	require.NoError(t, err)
+
+	l := &LocalDB{Storage: s, DBName: "testdb"}
+	docs := []*model.Document{
+		{ID: "doc1", Rev: "1-aaa", Data: map[string]interface{}{"_id": "doc1", "_rev": "1-aaa"}},
+		{ID: "doc2", Rev: "1-bbb", Data: map[string]interface{}{"_id": "doc2", "_rev": "1-bbb"}},
+		{ID: "doc3", Rev: "1-ccc", Data: map[string]interface{}{"_id": "doc3", "_rev": "1-ccc"}},
+	}
+	err = l.BulkDocs(ctx, docs, false)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return seen["doc1"] && seen["doc2"] && seen["doc3"]
+	}, 2*time.Second, 10*time.Millisecond, "every document in the batch should notify listeners, not just one")
 }
 
 func TestLocalDB_GetDoc(t *testing.T) {

@@ -275,6 +275,73 @@ func TestWaitForChange_WakesUpForRawTransactionWrite(t *testing.T) {
 	require.NotNil(t, doc)
 }
 
+// TestWaitForChange_WakesUpForConflictLeafDelete covers tx.DeleteDocument's
+// conflict-leaf branch specifically: deleting a non-winning leaf revision
+// builds a tombstone without delegating to tx.PutDocument (unlike deleting
+// the winning revision), so it needs its own notification tracking. This is
+// the one path the BulkDocs/attachment regression tests don't exercise. The
+// delete is made through a raw db.Transaction/port.DatabaseTx call -- not
+// the top-level Database.DeleteDocument, which already notified
+// unconditionally before this fix and so wouldn't catch a regression here.
+func TestWaitForChange_WakesUpForConflictLeafDelete(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	// Create two conflicting leaves for doc1 via PutDocumentForReplication
+	// (new_edits=false), mirroring how replication produces conflicts.
+	err = db.PutDocumentForReplication(ctx, &model.Document{
+		ID: "doc1", Rev: "1-aaa", Data: map[string]interface{}{"_id": "doc1", "_rev": "1-aaa"},
+	})
+	require.NoError(t, err)
+	err = db.PutDocumentForReplication(ctx, &model.Document{
+		ID: "doc1", Rev: "1-zzz", Data: map[string]interface{}{"_id": "doc1", "_rev": "1-zzz"},
+	})
+	require.NoError(t, err)
+
+	leaves, err := db.GetLeaves(ctx, "doc1")
+	require.NoError(t, err)
+	require.Len(t, leaves, 2, "test setup assumption: doc1 should have two conflicting leaves")
+
+	winner, err := db.GetDocument(ctx, "doc1")
+	require.NoError(t, err)
+	nonWinnerRev := "1-aaa"
+	if winner.Rev == nonWinnerRev {
+		nonWinnerRev = "1-zzz"
+	}
+
+	since, err := db.WaitForChange(ctx, "")
+	require.NoError(t, err)
+
+	type result struct {
+		seq string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		seq, err := db.WaitForChange(ctx, since)
+		done <- result{seq, err}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	err = db.Transaction(ctx, func(tx port.DatabaseTx) error {
+		_, err := tx.DeleteDocument(ctx, "doc1", nonWinnerRev)
+		return err
+	})
+	require.NoError(t, err)
+
+	select {
+	case r := <-done:
+		require.NoError(t, r.err)
+		require.NotEmpty(t, r.seq)
+	case <-time.After(2 * time.Second):
+		t.Fatal("WaitForChange did not wake up for a conflict-leaf delete made through a raw db.Transaction call")
+	}
+}
+
 // TestWaitForChange_ContextCancellationReturnsPromptly ensures cancelling
 // the caller's context unblocks a pending wait immediately with ctx.Err(),
 // rather than waiting for a change or a timeout.
