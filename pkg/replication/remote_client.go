@@ -8,11 +8,17 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 	"github.com/goydb/goydb/pkg/unixhttp"
 )
+
+// maxLongPollTimeout matches the server-side cap on _changes' feed=longpoll
+// timeout (internal/handler/db_changes.go's maxTimeout), so a request isn't
+// silently clamped to a shorter wait than the caller expects.
+const maxLongPollTimeout = 60 * time.Second
 
 // RemoteClient implements port.ReplicationPeer for HTTP-based remote CouchDB-compatible endpoints.
 type RemoteClient struct {
@@ -23,7 +29,10 @@ type RemoteClient struct {
 	client        *http.Client
 }
 
-var _ port.ReplicationPeer = (*RemoteClient)(nil)
+var (
+	_ port.ReplicationPeer = (*RemoteClient)(nil)
+	_ port.ChangeWaiter    = (*RemoteClient)(nil)
+)
 
 // NewRemoteClient creates an HTTP client for a remote replication endpoint.
 // rawURL is either a normal http(s):// URL, or a unixhttp.Scheme ("http+unix")
@@ -200,6 +209,34 @@ func (c *RemoteClient) GetChanges(ctx context.Context, since string, limit int) 
 		return nil, err
 	}
 	return &changesResp, nil
+}
+
+// WaitForChanges blocks (via the server's blocking feed=longpoll support)
+// until a change occurs after since, ctx is cancelled, or timeout elapses.
+// A timeout expiring is reported as nil, not an error, matching
+// port.ChangeWaiter's contract.
+func (c *RemoteClient) WaitForChanges(ctx context.Context, since string, timeout time.Duration) error {
+	if timeout > maxLongPollTimeout {
+		timeout = maxLongPollTimeout
+	}
+
+	path := fmt.Sprintf("/_changes?feed=longpoll&style=all_docs&limit=1&timeout=%d", timeout.Milliseconds())
+	if since != "" {
+		path += "&since=" + url.QueryEscape(since)
+	}
+
+	resp, err := c.do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("GET _changes (longpoll) returned status %d: %s", resp.StatusCode, body)
+	}
+
+	_, err = io.Copy(io.Discard, resp.Body)
+	return err
 }
 
 func (c *RemoteClient) RevsDiff(ctx context.Context, revs map[string][]string) (map[string]*model.RevsDiffResult, error) {

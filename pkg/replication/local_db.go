@@ -18,7 +18,10 @@ type LocalDB struct {
 	DBName  string
 }
 
-var _ port.ReplicationPeer = (*LocalDB)(nil)
+var (
+	_ port.ReplicationPeer = (*LocalDB)(nil)
+	_ port.ChangeWaiter    = (*LocalDB)(nil)
+)
 
 func (l *LocalDB) db(ctx context.Context) (port.Database, error) {
 	return l.Storage.Database(ctx, l.DBName)
@@ -244,4 +247,29 @@ func (l *LocalDB) BulkDocs(ctx context.Context, docs []*model.Document, newEdits
 func (l *LocalDB) CreateDB(ctx context.Context) error {
 	_, err := l.Storage.CreateDatabase(ctx, l.DBName)
 	return err
+}
+
+// WaitForChanges blocks until a document changes after since, the parent
+// ctx is cancelled, or timeout elapses. A timeout expiring is reported as
+// nil, not an error, matching port.ChangeWaiter's contract.
+func (l *LocalDB) WaitForChanges(ctx context.Context, since string, timeout time.Duration) error {
+	db, err := l.db(ctx)
+	if err != nil {
+		return err
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	_, err = db.WaitForChange(waitCtx, since)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err() // parent cancellation: propagate
+		}
+		if waitCtx.Err() != nil {
+			return nil // our own timeout: not an error
+		}
+		return err
+	}
+	return nil
 }

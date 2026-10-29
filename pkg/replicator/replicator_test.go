@@ -415,6 +415,137 @@ func TestReplicatorContinuous_CancelStopsCleanly(t *testing.T) {
 	}
 }
 
+// WaitableMockPeer wraps MockPeer with a port.ChangeWaiter implementation,
+// letting tests control exactly when WaitForChanges unblocks instead of
+// relying on polling timing.
+type WaitableMockPeer struct {
+	*MockPeer
+	notify chan struct{}
+
+	mu             sync.Mutex
+	waitCalls      int
+	timeoutsCalled int
+}
+
+var _ port.ChangeWaiter = (*WaitableMockPeer)(nil)
+
+func NewWaitableMockPeer(exists bool) *WaitableMockPeer {
+	return &WaitableMockPeer{
+		MockPeer: NewMockPeer(exists),
+		notify:   make(chan struct{}, 1),
+	}
+}
+
+// Signal unblocks a pending (or the next) WaitForChanges call.
+func (w *WaitableMockPeer) Signal() {
+	select {
+	case w.notify <- struct{}{}:
+	default:
+	}
+}
+
+func (w *WaitableMockPeer) WaitForChanges(ctx context.Context, since string, timeout time.Duration) error {
+	w.mu.Lock()
+	w.waitCalls++
+	w.mu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-w.notify:
+		return nil
+	case <-time.After(timeout):
+		w.mu.Lock()
+		w.timeoutsCalled++
+		w.mu.Unlock()
+		return nil
+	}
+}
+
+func (w *WaitableMockPeer) WaitCalls() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.waitCalls
+}
+
+// TestReplicatorContinuous_UsesChangeWaiter verifies that when the source
+// peer implements port.ChangeWaiter, Run blocks on WaitForChanges instead of
+// sleeping on the fixed pollInterval fallback, reacting to a new document
+// almost immediately rather than up to pollInterval later.
+func TestReplicatorContinuous_UsesChangeWaiter(t *testing.T) {
+	source := NewWaitableMockPeer(true)
+	target := NewMockPeer(true)
+
+	repDoc := &model.ReplicationDoc{Source: "source", Target: "target", Continuous: true}
+	r := NewReplicator(source, target, repDoc, logger.NewNoLog())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	go func() {
+		r.Run(ctx) // nolint: errcheck
+	}()
+
+	go func() {
+		// Give Run a moment to reach the wait, then signal a change.
+		// pollInterval is 1s, so arriving well before that proves the
+		// ChangeWaiter path (not the fallback poll) delivered the doc.
+		time.Sleep(50 * time.Millisecond)
+		source.AddDoc("doc0", "1-aaa", false, nil)
+		source.Signal()
+	}()
+
+	start := time.Now()
+	for target.DocCount() < 1 && time.Since(start) < 3*time.Second {
+		time.Sleep(10 * time.Millisecond)
+	}
+	elapsed := time.Since(start)
+	cancel()
+	<-ctx.Done()
+
+	assert.Equal(t, 1, target.DocCount())
+	assert.Less(t, elapsed, pollInterval, "doc should arrive via ChangeWaiter well before the poll fallback would fire")
+	assert.GreaterOrEqual(t, source.WaitCalls(), 1)
+}
+
+// TestReplicatorContinuous_FallsBackWithoutChangeWaiter verifies that a
+// source peer which does NOT implement port.ChangeWaiter still replicates
+// correctly via the pollInterval fallback (unchanged pre-existing behavior).
+func TestReplicatorContinuous_FallsBackWithoutChangeWaiter(t *testing.T) {
+	source := NewMockPeer(true) // plain MockPeer: no ChangeWaiter
+	target := NewMockPeer(true)
+
+	var _ port.ReplicationPeer = source
+	if _, ok := interface{}(source).(port.ChangeWaiter); ok {
+		t.Fatal("MockPeer must not implement port.ChangeWaiter for this test")
+	}
+
+	repDoc := &model.ReplicationDoc{Source: "source", Target: "target", Continuous: true}
+	r := NewReplicator(source, target, repDoc, logger.NewNoLog())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		source.AddDoc("doc0", "1-aaa", false, nil)
+	}()
+
+	go func() {
+		for {
+			if target.DocCount() >= 1 {
+				cancel()
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+
+	result, _ := r.Run(ctx)
+	assert.Equal(t, 1, target.DocCount())
+	assert.GreaterOrEqual(t, result.DocsWritten, 1)
+}
+
 func TestLoadCheckpoint_HistoryFallback(t *testing.T) {
 	source := NewMockPeer(true)
 	target := NewMockPeer(true)

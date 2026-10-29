@@ -182,7 +182,7 @@ gdb, err := cfg.BuildDatabase() // *goydb.Goydb satisfies port.Storage
 r := &replicator.Replicator{
 	Source:     &replication.LocalDB{Storage: gdb, DBName: "source"},
 	Target:     &replication.LocalDB{Storage: gdb, DBName: "target"},
-	Continuous: true, // keep polling and replicating until ctx is cancelled
+	Continuous: true, // keep watching for and replicating new changes until ctx is cancelled
 }
 _, err = r.Run(ctx)
 ```
@@ -191,9 +191,11 @@ Both `Source` and `Target` only need to satisfy `port.ReplicationPeer`, so a
 `replication.RemoteClient` (talking to any CouchDB-compatible server over
 HTTP) can be mixed with a `replication.LocalDB` on either side. With
 `Continuous: false` (the default), `Run` returns once the target has caught
-up; with `Continuous: true` it keeps polling for new changes and only
+up; with `Continuous: true` it keeps watching for new changes and only
 returns when `ctx` is cancelled — same as CouchDB's own continuous
-replication mode.
+replication mode. When a peer additionally implements `port.ChangeWaiter`
+(both `LocalDB` and `RemoteClient` do), `Run` blocks on it to react to new
+changes immediately instead of polling on a fixed interval.
 
 ## Documentation
 
