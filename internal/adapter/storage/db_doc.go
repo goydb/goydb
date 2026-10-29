@@ -18,11 +18,26 @@ func (d *Database) rawTx(fn func(tx *Transaction) error) error {
 	})
 }
 
-// Transaction implements port.Database.Transaction.
+// Transaction implements port.Database.Transaction. Every document written
+// or deleted through the port.DatabaseTx handed to fn -- however fn chooses
+// to use it -- is announced via NotifyDocumentUpdate once the transaction
+// commits successfully, so callers that open their own transaction (bulk
+// writes, attachment updates, replication, etc.) get the same change-
+// listener/WaitForChange notification guarantee as the top-level
+// PutDocument/PutDocumentForReplication/DeleteDocument convenience methods.
 func (d *Database) Transaction(ctx context.Context, fn func(tx port.DatabaseTx) error) error {
-	return d.rawTx(func(tx *Transaction) error {
-		return fn(tx)
+	var notifications []*model.Document
+	err := d.rawTx(func(tx *Transaction) error {
+		err := fn(tx)
+		notifications = tx.notifications
+		return err
 	})
+	if err == nil {
+		for _, doc := range notifications {
+			d.NotifyDocumentUpdate(doc)
+		}
+	}
+	return err
 }
 
 func (d *Database) PutDocument(ctx context.Context, doc *model.Document) (string, error) {
@@ -32,20 +47,13 @@ func (d *Database) PutDocument(ctx context.Context, doc *model.Document) (string
 		rev, err = tx.PutDocument(ctx, doc)
 		return err
 	})
-	if err == nil {
-		d.NotifyDocumentUpdate(doc)
-	}
 	return rev, err
 }
 
 func (d *Database) PutDocumentForReplication(ctx context.Context, doc *model.Document) error {
-	err := d.Transaction(ctx, func(tx port.DatabaseTx) error {
+	return d.Transaction(ctx, func(tx port.DatabaseTx) error {
 		return tx.PutDocumentForReplication(ctx, doc)
 	})
-	if err == nil {
-		d.NotifyDocumentUpdate(doc)
-	}
-	return err
 }
 
 func (d *Database) GetDocument(ctx context.Context, docID string) (*model.Document, error) {
@@ -72,7 +80,6 @@ func (d *Database) DeleteDocument(ctx context.Context, docID, rev string) (*mode
 	if err != nil {
 		return nil, err
 	}
-	d.NotifyDocumentUpdate(doc)
 	return doc, nil
 }
 

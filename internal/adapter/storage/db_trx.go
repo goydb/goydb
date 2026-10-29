@@ -31,6 +31,20 @@ type Transaction struct {
 	Database   *Database
 	BucketName []byte
 	port.EngineWriteTransaction
+
+	// notifications accumulates documents written/deleted through this
+	// transaction. Database.Transaction fires NotifyDocumentUpdate for each
+	// of them once the transaction commits successfully, so every write path
+	// that goes through port.DatabaseTx -- not just the top-level
+	// *Database.PutDocument/PutDocumentForReplication/DeleteDocument
+	// convenience methods -- notifies registered change listeners.
+	notifications []*model.Document
+}
+
+// trackNotify records doc to be announced via NotifyDocumentUpdate after the
+// enclosing transaction commits.
+func (tx *Transaction) trackNotify(doc *model.Document) {
+	tx.notifications = append(tx.notifications, doc)
 }
 
 func (tx *Transaction) SetBucketName(bucketName []byte) {
@@ -117,6 +131,12 @@ func (tx *Transaction) getLeaf(docID, rev string) (*model.Document, error) {
 }
 
 func (tx *Transaction) PutDocument(ctx context.Context, doc *model.Document) (rev string, err error) {
+	defer func() {
+		if err == nil {
+			tx.trackNotify(doc)
+		}
+	}()
+
 	// verify that the transaction is valid for update
 	oldDoc, err := tx.GetDocument(ctx, doc.ID)
 	// CouchDB (couch_db:prep_and_validate_update) accepts a write that carries
@@ -285,7 +305,13 @@ func (tx *Transaction) GetDocument(ctx context.Context, docID string) (*model.Do
 // when replicating with new_edits=false.  Concurrent leaf revisions (conflicts)
 // are tracked in the doc_leaves bucket; the CouchDB winning revision rule is
 // applied to decide which revision is stored in the authoritative docs bucket.
-func (tx *Transaction) PutDocumentForReplication(ctx context.Context, doc *model.Document) error {
+func (tx *Transaction) PutDocumentForReplication(ctx context.Context, doc *model.Document) (err error) {
+	defer func() {
+		if err == nil {
+			tx.trackNotify(doc)
+		}
+	}()
+
 	oldDoc, err := tx.GetDocument(ctx, doc.ID)
 	if err == nil && oldDoc != nil {
 		oldRev, _ := oldDoc.Revision()
@@ -453,7 +479,9 @@ func (tx *Transaction) DeleteDocument(ctx context.Context, docID, rev string) (*
 		return nil, ErrNotFound
 	}
 
-	// If rev matches the winning revision, delegate to PutDocument (existing behavior).
+	// If rev matches the winning revision, delegate to PutDocument (existing
+	// behavior). PutDocument tracks its own notification on success, so no
+	// separate trackNotify call is needed here.
 	if oldDoc.Rev == rev {
 		doc := &model.Document{
 			ID:      docID,
@@ -567,6 +595,7 @@ func (tx *Transaction) DeleteDocument(ctx context.Context, docID, rev string) (*
 		}
 	}
 
+	tx.trackNotify(tombstone)
 	return tombstone, nil
 }
 

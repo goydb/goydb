@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/goydb/goydb/internal/adapter/logger"
 	"github.com/goydb/goydb/internal/adapter/storage"
@@ -201,6 +202,45 @@ func TestLocalDB_BulkDocs_NewEditsFalse(t *testing.T) {
 	doc, err := l.GetDoc(ctx, "doc1", false, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "1-abc", doc.Rev)
+}
+
+// TestLocalDB_BulkDocs_WakesUpWaitForChange covers the bug where BulkDocs
+// writes documents through a raw db.Transaction/port.DatabaseTx call,
+// persisting them correctly but never announcing them to registered change
+// listeners -- so a concurrent db.WaitForChange call would never wake up for
+// a BulkDocs-written document, even though GetDocument sees it immediately.
+func TestLocalDB_BulkDocs_WakesUpWaitForChange(t *testing.T) {
+	s, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	type result struct {
+		seq string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		seq, err := db.WaitForChange(ctx, "")
+		done <- result{seq, err}
+	}()
+
+	l := &LocalDB{Storage: s, DBName: "testdb"}
+	docs := []*model.Document{
+		{ID: "doc1", Rev: "1-abc", Data: map[string]interface{}{"_id": "doc1", "_rev": "1-abc", "v": 1}},
+	}
+	err = l.BulkDocs(ctx, docs, false)
+	require.NoError(t, err)
+
+	select {
+	case r := <-done:
+		require.NoError(t, r.err)
+		require.NotEmpty(t, r.seq)
+	case <-time.After(2 * time.Second):
+		t.Fatal("WaitForChange did not wake up for a document written via BulkDocs")
+	}
 }
 
 func TestLocalDB_GetDoc(t *testing.T) {

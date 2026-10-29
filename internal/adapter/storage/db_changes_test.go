@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/port"
 	"github.com/stretchr/testify/require"
 )
 
@@ -226,6 +227,52 @@ func TestWaitForChange_WakesUpOnlyWithTheNewDocument(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("WaitForChange did not return after a document was created")
 	}
+}
+
+// TestWaitForChange_WakesUpForRawTransactionWrite covers writes made through
+// a caller-opened db.Transaction/port.DatabaseTx (as pkg/replication.LocalDB
+// .BulkDocs and the attachment write paths do) rather than through the
+// top-level PutDocument convenience method. Database.Transaction must
+// announce every document written this way too, or a concurrent
+// WaitForChange caller never wakes up even though the write is fully
+// persisted and visible to ordinary reads.
+func TestWaitForChange_WakesUpForRawTransactionWrite(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	type result struct {
+		seq string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		seq, err := db.WaitForChange(ctx, "")
+		done <- result{seq, err}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	err = db.Transaction(ctx, func(tx port.DatabaseTx) error {
+		_, err := tx.PutDocument(ctx, &model.Document{ID: "doc1", Data: map[string]interface{}{"n": 1}})
+		return err
+	})
+	require.NoError(t, err)
+
+	select {
+	case r := <-done:
+		require.NoError(t, r.err)
+		require.NotEmpty(t, r.seq)
+	case <-time.After(2 * time.Second):
+		t.Fatal("WaitForChange did not wake up for a document written through a raw db.Transaction/port.DatabaseTx call")
+	}
+
+	// GetDocument must agree: the write landed regardless of notification.
+	doc, err := db.GetDocument(ctx, "doc1")
+	require.NoError(t, err)
+	require.NotNil(t, doc)
 }
 
 // TestWaitForChange_ContextCancellationReturnsPromptly ensures cancelling

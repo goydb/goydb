@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/goydb/goydb/internal/adapter/logger"
 	"github.com/goydb/goydb/pkg/model"
@@ -180,6 +181,89 @@ func TestDeleteAttachment_LastRefRemovesBlob(t *testing.T) {
 
 	_, err = os.Stat(blobPath)
 	assert.True(t, os.IsNotExist(err), "blob should be removed when the last reference is deleted")
+}
+
+// TestPutAttachment_WakesUpWaitForChange covers the bug where PutAttachment
+// writes the document through a raw db.Transaction/port.DatabaseTx call
+// (tx.PutDocument), persisting the attachment correctly but never announcing
+// the change to registered listeners -- so a concurrent WaitForChange call
+// never woke up for it.
+func TestPutAttachment_WakesUpWaitForChange(t *testing.T) {
+	_, _, db, cleanup := openAttStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	_, err := db.PutDocument(ctx, &model.Document{ID: "doc1", Data: map[string]interface{}{"x": 1}})
+	require.NoError(t, err)
+
+	since, err := db.WaitForChange(ctx, "")
+	require.NoError(t, err)
+
+	type result struct {
+		seq string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		seq, err := db.WaitForChange(ctx, since)
+		done <- result{seq, err}
+	}()
+
+	att := &model.Attachment{
+		Filename:    "file.txt",
+		ContentType: "text/plain",
+		Reader:      io.NopCloser(strings.NewReader("hello")),
+	}
+	_, err = db.PutAttachment(ctx, "doc1", att)
+	require.NoError(t, err)
+
+	select {
+	case r := <-done:
+		require.NoError(t, r.err)
+		require.NotEmpty(t, r.seq)
+	case <-time.After(2 * time.Second):
+		t.Fatal("WaitForChange did not wake up for a document updated via PutAttachment")
+	}
+}
+
+// TestDeleteAttachment_WakesUpWaitForChange is the DeleteAttachment analog of
+// TestPutAttachment_WakesUpWaitForChange: tx.PutDocument is also used
+// internally by DeleteAttachment to persist the attachment removal, and that
+// write must notify listeners too.
+func TestDeleteAttachment_WakesUpWaitForChange(t *testing.T) {
+	_, _, db, cleanup := openAttStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	_, digest := putDocAndAtt(t, db, "doc1", "file.txt", "hello")
+	_ = digest
+
+	doc1, err := db.GetDocument(ctx, "doc1")
+	require.NoError(t, err)
+
+	since, err := db.WaitForChange(ctx, "")
+	require.NoError(t, err)
+
+	type result struct {
+		seq string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		seq, err := db.WaitForChange(ctx, since)
+		done <- result{seq, err}
+	}()
+
+	_, err = db.DeleteAttachment(ctx, "doc1", "file.txt", doc1.Rev)
+	require.NoError(t, err)
+
+	select {
+	case r := <-done:
+		require.NoError(t, r.err)
+		require.NotEmpty(t, r.seq)
+	case <-time.After(2 * time.Second):
+		t.Fatal("WaitForChange did not wake up for a document updated via DeleteAttachment")
+	}
 }
 
 func TestPutAttachment_ReplaceContent(t *testing.T) {
