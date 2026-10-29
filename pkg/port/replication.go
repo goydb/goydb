@@ -2,6 +2,7 @@ package port
 
 import (
 	"context"
+	"time"
 
 	"github.com/goydb/goydb/pkg/model"
 )
@@ -60,4 +61,15 @@ type ReplicationPeer interface {
 	// storage. Called after each BulkDocs batch for CouchDB protocol compliance.
 	// Local peers implement this as a no-op; remote peers call _ensure_full_commit.
 	EnsureFullCommit(ctx context.Context) error
+}
+
+// ChangeWaiter is an optional capability a ReplicationPeer may implement to
+// let the Replicator block efficiently for new changes instead of polling
+// GetChanges on a fixed interval. Callers should type-assert for it and fall
+// back to polling when a peer doesn't implement it.
+type ChangeWaiter interface {
+	// WaitForChanges blocks until a change occurs after since, ctx is
+	// cancelled, or timeout elapses, whichever happens first. A timeout
+	// expiring is not an error: callers should just retry GetChanges.
+	WaitForChanges(ctx context.Context, since string, timeout time.Duration) error
 }

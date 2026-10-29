@@ -14,7 +14,18 @@ import (
 	"github.com/goydb/goydb/pkg/port"
 )
 
-const changesBatchSize = 100
+const (
+	changesBatchSize = 100
+
+	// pollInterval is the fallback wait between GetChanges calls in
+	// continuous mode, used only when the source peer doesn't implement
+	// port.ChangeWaiter (e.g. a custom ReplicationPeer that can't block).
+	pollInterval = time.Second
+
+	// longPollTimeout bounds how long a port.ChangeWaiter-capable source
+	// is allowed to block per wait before the loop re-checks ctx and retries.
+	longPollTimeout = 25 * time.Second
+)
 
 // Replicator performs replication between a source and target ReplicationPeer
 type Replicator struct {
@@ -148,13 +159,30 @@ func (r *Replicator) Run(ctx context.Context) (*model.ReplicationResult, error) 
 			continue
 		}
 
-		// Continuous mode: if no changes, poll
+		// Continuous mode: if no changes, wait for the next one.
 		if len(batchResult.changes) == 0 || pending == 0 {
+			if w, ok := r.Source.(port.ChangeWaiter); ok {
+				if err := w.WaitForChanges(ctx, since, longPollTimeout); err != nil {
+					if ctx.Err() != nil {
+						result.EndTime = time.Now()
+						return result, nil
+					}
+					r.Logger.Warnf(ctx, "wait for changes failed, falling back to poll", "error", err)
+					select {
+					case <-ctx.Done():
+						result.EndTime = time.Now()
+						return result, nil
+					case <-time.After(pollInterval):
+					}
+				}
+				continue
+			}
+
 			select {
 			case <-ctx.Done():
 				result.EndTime = time.Now()
 				return result, nil
-			case <-time.After(time.Second):
+			case <-time.After(pollInterval):
 				continue
 			}
 		}
