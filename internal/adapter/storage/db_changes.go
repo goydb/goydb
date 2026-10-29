@@ -26,21 +26,14 @@ start:
 		// which never has LocalSeq populated (that's only set when a
 		// document is read back out through the changes index) -- so
 		// doc.LocalSeq is always 0 there, not the document's real sequence.
-		var sinceSnapshot string
-		_ = d.rawTx(func(tx *Transaction) error {
-			cursor := tx.Cursor([]byte(index.ChangesIndexName))
-			if cursor == nil {
-				return nil
-			}
-			if k, _ := cursor.Last(); k != nil {
-				sinceSnapshot = strconv.FormatUint(binary.BigEndian.Uint64(k), 10)
-			}
-			return nil
-		})
+		sinceSnapshot, err := d.latestChangeSeq()
+		if err != nil {
+			return nil, 0, err
+		}
 
 		wait := make(chan struct{}, 1) // buffered: both timer and listener may send; no close to avoid send-on-closed panic
 		t := time.AfterFunc(options.Timeout, func() { wait <- struct{}{} })
-		err := d.AddListener(ctx, port.ChangeListenerFunc(func(ctx context.Context, doc *model.Document) error {
+		err = d.AddListener(ctx, port.ChangeListenerFunc(func(ctx context.Context, doc *model.Document) error {
 			wait <- struct{}{}
 			return context.Canceled // only wait for the next document
 		}))
@@ -125,4 +118,75 @@ start:
 	}
 
 	return docs, pending, nil
+}
+
+// latestChangeSeq returns the current high-water mark of the changes index,
+// i.e. the sequence of the most recent document change, or "" if the
+// database has no changes yet.
+func (d *Database) latestChangeSeq() (string, error) {
+	var seq string
+	err := d.rawTx(func(tx *Transaction) error {
+		cursor := tx.Cursor([]byte(index.ChangesIndexName))
+		if cursor == nil {
+			return nil
+		}
+		if k, _ := cursor.Last(); k != nil {
+			seq = strconv.FormatUint(binary.BigEndian.Uint64(k), 10)
+		}
+		return nil
+	})
+	return seq, err
+}
+
+// seqGreater reports whether a is a strictly greater sequence than b.
+// Sequences are decimal-string-encoded uint64s; an empty string is treated
+// as 0.
+func seqGreater(a, b string) bool {
+	if a == "" {
+		return false
+	}
+	av, _ := strconv.ParseUint(a, 10, 64)
+	bv, _ := strconv.ParseUint(b, 10, 64)
+	return av > bv
+}
+
+// WaitForChange blocks until the database has at least one document change
+// with a sequence greater than since, then returns the new sequence to
+// resume from. If since is "" it returns as soon as there is any change at
+// all. It blocks until ctx is cancelled or a qualifying change occurs; ctx
+// cancellation returns ctx.Err().
+func (d *Database) WaitForChange(ctx context.Context, since string) (string, error) {
+	if since == "" {
+		since = "0"
+	}
+
+	latest, err := d.latestChangeSeq()
+	if err != nil {
+		return "", err
+	}
+	if seqGreater(latest, since) {
+		return latest, nil
+	}
+
+	wait := make(chan struct{}, 1)
+	err = d.AddListener(ctx, port.ChangeListenerFunc(func(ctx context.Context, doc *model.Document) error {
+		select {
+		case wait <- struct{}{}:
+		default:
+		}
+		return context.Canceled // one-shot
+	}))
+	if err != nil {
+		return "", err
+	}
+
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-wait:
+	}
+
+	// Recheck rather than trusting the single waking document: multiple
+	// changes can coalesce between the wakeup and this point.
+	return d.latestChangeSeq()
 }

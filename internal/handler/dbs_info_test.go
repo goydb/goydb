@@ -1,69 +1,63 @@
 package handler
 
 import (
-	"encoding/json"
 	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
+	"github.com/goydb/goydb/pkg/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestDBsInfo_AdminOnly_Default(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, baseURL, cleanup := setupMultiAuthTest(t)
 	defer cleanup()
 
-	createRegularUser(t, router, "bob", "bobpass")
+	admin, err := client.New(baseURL, client.WithBasicAuth("admin", "secret"))
+	require.NoError(t, err)
+	createRegularUser(t, admin, "bob", "bobpass")
 
 	// Unauthenticated request should get 401.
-	body := strings.NewReader(`{"keys":["_users"]}`)
-	req := httptest.NewRequest("POST", "/_dbs_info", body)
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	anon, err := client.New(baseURL)
+	require.NoError(t, err)
+	_, err = anon.DBsInfo(t.Context(), []string{"_users"})
+	require.Error(t, err)
+	assert.Equal(t, http.StatusUnauthorized, statusCode(t, err, http.StatusOK))
 
 	// Regular user should get 401 (not a server admin).
-	body = strings.NewReader(`{"keys":["_users"]}`)
-	req = httptest.NewRequest("POST", "/_dbs_info", body)
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("bob", "bobpass")
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	bob, err := client.New(baseURL, client.WithBasicAuth("bob", "bobpass"))
+	require.NoError(t, err)
+	_, err = bob.DBsInfo(t.Context(), []string{"_users"})
+	require.Error(t, err)
+	assert.Equal(t, http.StatusUnauthorized, statusCode(t, err, http.StatusOK))
 }
 
 func TestDBsInfo_AdminOnly_False(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, baseURL, cleanup := setupMultiAuthTest(t)
 	defer cleanup()
 
-	createRegularUser(t, router, "bob", "bobpass")
-	_, err := s.CreateDatabase(t.Context(), "mydb")
+	admin, err := client.New(baseURL, client.WithBasicAuth("admin", "secret"))
+	require.NoError(t, err)
+	createRegularUser(t, admin, "bob", "bobpass")
+	_, err = s.CreateDatabase(t.Context(), "mydb")
 	require.NoError(t, err)
 
 	// Set admin_only_all_dbs to false.
-	setConfig(t, router, "chttpd", "admin_only_all_dbs", "false")
+	setConfig(t, admin, "chttpd", "admin_only_all_dbs", "false")
 
 	// Regular user should now be able to access _dbs_info.
-	body := strings.NewReader(`{"keys":["mydb"]}`)
-	req := httptest.NewRequest("POST", "/_dbs_info", body)
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("bob", "bobpass")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
+	bob, err := client.New(baseURL, client.WithBasicAuth("bob", "bobpass"))
+	require.NoError(t, err)
+	results, err := bob.DBsInfo(t.Context(), []string{"mydb"})
+	require.NoError(t, err)
 
-	var results []map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&results))
 	require.Len(t, results, 1)
 	assert.Equal(t, "mydb", results[0]["key"])
 	assert.NotNil(t, results[0]["info"])
 }
 
 func TestDBsInfo_ExistingDatabases(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -72,17 +66,8 @@ func TestDBsInfo_ExistingDatabases(t *testing.T) {
 	_, err = s.CreateDatabase(ctx, "db2")
 	require.NoError(t, err)
 
-	body := strings.NewReader(`{"keys":["db1","db2"]}`)
-	req := httptest.NewRequest("POST", "/_dbs_info", body)
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var results []map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&results))
+	results, err := c.DBsInfo(ctx, []string{"db1", "db2"})
+	require.NoError(t, err)
 	require.Len(t, results, 2)
 
 	assert.Equal(t, "db1", results[0]["key"])
@@ -97,23 +82,14 @@ func TestDBsInfo_ExistingDatabases(t *testing.T) {
 }
 
 func TestDBsInfo_MixedExistingAndMissing(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "existing")
 	require.NoError(t, err)
 
-	body := strings.NewReader(`{"keys":["existing","nonexistent"]}`)
-	req := httptest.NewRequest("POST", "/_dbs_info", body)
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var results []map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&results))
+	results, err := c.DBsInfo(t.Context(), []string{"existing", "nonexistent"})
+	require.NoError(t, err)
 	require.Len(t, results, 2)
 
 	// First should have info
@@ -126,19 +102,10 @@ func TestDBsInfo_MixedExistingAndMissing(t *testing.T) {
 }
 
 func TestDBsInfo_EmptyKeys(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
-	body := strings.NewReader(`{"keys":[]}`)
-	req := httptest.NewRequest("POST", "/_dbs_info", body)
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var results []map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&results))
+	results, err := c.DBsInfo(t.Context(), []string{})
+	require.NoError(t, err)
 	assert.Empty(t, results)
 }

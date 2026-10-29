@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
+	"github.com/goydb/goydb/pkg/unixhttp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -316,4 +319,50 @@ func TestRemoteClientPutLocalDoc(t *testing.T) {
 		Data: map[string]interface{}{"seq": "42"},
 	}
 	assert.NoError(t, c.PutLocalDoc(context.Background(), doc))
+}
+
+// startUnixServer spins up handler behind a real Unix domain socket, using
+// the standard Go idiom (httptest.NewServer only supports TCP).
+func startUnixServer(t *testing.T, handler http.Handler) (sockPath string, stop func()) {
+	t.Helper()
+	sockPath = filepath.Join(t.TempDir(), "goydb.sock")
+
+	ts := httptest.NewUnstartedServer(handler)
+	require.NoError(t, ts.Listener.Close())
+	ln, err := net.Listen("unix", sockPath)
+	require.NoError(t, err)
+	ts.Listener = ln
+	ts.Start()
+
+	return sockPath, ts.Close
+}
+
+func TestRemoteClient_OverUnixSocket_Head(t *testing.T) {
+	sockPath, stop := startUnixServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodHead, r.Method)
+		assert.Equal(t, "/testdb", r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer stop()
+
+	c, err := NewRemoteClient(unixhttp.EncodeURL(sockPath, "/testdb"), nil)
+	require.NoError(t, err)
+	assert.NoError(t, c.Head(context.Background()))
+}
+
+func TestRemoteClient_OverUnixSocket_GetDBInfo(t *testing.T) {
+	sockPath, stop := startUnixServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/testdb", r.URL.Path)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"db_name":    "testdb",
+			"update_seq": "7",
+		})
+	}))
+	defer stop()
+
+	c, err := NewRemoteClient(unixhttp.EncodeURL(sockPath, "/testdb"), nil)
+	require.NoError(t, err)
+	info, err := c.GetDBInfo(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "7", info.UpdateSeq)
 }

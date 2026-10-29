@@ -4,94 +4,61 @@ package handler
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
-	"net/http/httptest"
-	"os"
 	"testing"
 
-	"github.com/gorilla/mux"
-	"github.com/gorilla/sessions"
-	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/internal/adapter/logger"
+	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/internal/adapter/view/gojaview"
-	"github.com/goydb/goydb/internal/controller"
-	"github.com/goydb/goydb/internal/service"
+	"github.com/goydb/goydb/pkg/client"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func setupViewTest(t *testing.T) (*storage.Storage, *mux.Router, func()) {
+func setupViewTest(t *testing.T) (*storage.Storage, *client.Client, func()) {
 	t.Helper()
 
-	dir, err := os.MkdirTemp(os.TempDir(), "goydb-view-test-*")
-	require.NoError(t, err)
-
 	log := logger.NewNoLog()
-	s, err := storage.Open(dir,
-		storage.WithLogger(log),
+	c, s, cleanup := setupClientTest(t,
 		storage.WithViewEngine("", gojaview.NewViewServer),
 		storage.WithViewEngine("javascript", gojaview.NewViewServer),
 		storage.WithReducerEngine("", gojaview.NewReducerBuilder(log)),
 		storage.WithReducerEngine("javascript", gojaview.NewReducerBuilder(log)),
 	)
-	require.NoError(t, err)
 
-	store := sessions.NewCookieStore([]byte("test-secret-32-bytes-long-enough"))
-
-	r := mux.NewRouter()
-	err = Router{
-		Storage:            s,
-		SessionStore:       store,
-		Admins:             model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}},
-		Replication: &service.Replication{Storage: s, Logger: logger.NewNoLog()}, Logger: logger.NewNoLog(),
-	}.Build(r)
-	require.NoError(t, err)
-
-	taskCtx, cancelTasks := context.WithCancel(context.Background())
-	tc := controller.Task{Storage: s, Logger: log}
-	go tc.Run(taskCtx)
-
-	return s, r, func() {
-		cancelTasks()
-		_ = s.Close()
-		_ = os.RemoveAll(dir)
-	}
+	return s, c, cleanup
 }
 
-func putDesignDoc(t *testing.T, router *mux.Router, dbName, docID string, body interface{}) {
+func putDesignDoc(t *testing.T, c *client.Client, dbName, docID string, body interface{}) {
 	t.Helper()
-	b, err := json.Marshal(body)
+	data, ok := body.(map[string]interface{})
+	require.True(t, ok, "putDesignDoc body must be map[string]interface{}")
+	_, err := c.DB(dbName).Put(t.Context(), &model.Document{ID: "_design/" + docID, Data: data})
 	require.NoError(t, err)
-	req := httptest.NewRequest("PUT", "/"+dbName+"/_design/"+docID, bytes.NewReader(b))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusCreated, w.Code)
 }
 
-func queryView(t *testing.T, router *mux.Router, dbName, docID, viewName, query string) (AllDocsResponse, int) {
+func queryView(t *testing.T, c *client.Client, dbName, docID, viewName, query string) (AllDocsResponse, int) {
 	t.Helper()
-	url := "/" + dbName + "/_design/" + docID + "/_view/" + viewName
+	path := "/" + dbName + "/_design/" + docID + "/_view/" + viewName
 	if query != "" {
-		url += "?" + query
+		path += "?" + query
 	}
-	req := httptest.NewRequest("GET", url, nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(t.Context(), http.MethodGet, path, nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
 	var result AllDocsResponse
-	if w.Code == http.StatusOK {
-		require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	if resp.StatusCode == http.StatusOK {
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	}
-	return result, w.Code
+	return result, resp.StatusCode
 }
 
 func TestView_MapOnly_ReduceFalse(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -109,7 +76,7 @@ func TestView_MapOnly_ReduceFalse(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	putDesignDoc(t, router, "testdb", "users", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "users", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_name": map[string]interface{}{
 				"map": `function(doc) { if (doc.type === "user") { emit(doc.name, null); } }`,
@@ -117,7 +84,7 @@ func TestView_MapOnly_ReduceFalse(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "users", "by_name", "reduce=false")
+	result, code := queryView(t, c, "testdb", "users", "by_name", "reduce=false")
 	require.Equal(t, http.StatusOK, code)
 	assert.Equal(t, 2, result.TotalRows)
 
@@ -129,7 +96,7 @@ func TestView_MapOnly_ReduceFalse(t *testing.T) {
 }
 
 func TestView_MapOnly_DefaultReduce(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -147,7 +114,7 @@ func TestView_MapOnly_DefaultReduce(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	putDesignDoc(t, router, "testdb", "users", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "users", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_name": map[string]interface{}{
 				"map": `function(doc) { if (doc.type === "user") { emit(doc.name, null); } }`,
@@ -156,7 +123,7 @@ func TestView_MapOnly_DefaultReduce(t *testing.T) {
 	})
 
 	// No reduce param — defaults to true, goes through None reducer path
-	result, code := queryView(t, router, "testdb", "users", "by_name", "")
+	result, code := queryView(t, c, "testdb", "users", "by_name", "")
 	require.Equal(t, http.StatusOK, code)
 	assert.Equal(t, 2, result.TotalRows)
 
@@ -168,13 +135,13 @@ func TestView_MapOnly_DefaultReduce(t *testing.T) {
 }
 
 func TestView_EmptyDatabase(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
-	putDesignDoc(t, router, "testdb", "users", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "users", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_name": map[string]interface{}{
 				"map": `function(doc) { emit(doc.name, null); }`,
@@ -182,21 +149,21 @@ func TestView_EmptyDatabase(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "users", "by_name", "reduce=false")
+	result, code := queryView(t, c, "testdb", "users", "by_name", "reduce=false")
 	require.Equal(t, http.StatusOK, code)
 	assert.Equal(t, 0, result.TotalRows)
 	assert.Empty(t, result.Rows)
 }
 
 func TestView_DocsAddedAfterDesignDoc(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
-	putDesignDoc(t, router, "testdb", "users", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "users", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_name": map[string]interface{}{
 				"map": `function(doc) { if (doc.type === "user") { emit(doc.name, null); } }`,
@@ -210,7 +177,7 @@ func TestView_DocsAddedAfterDesignDoc(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	result, code := queryView(t, router, "testdb", "users", "by_name", "reduce=false")
+	result, code := queryView(t, c, "testdb", "users", "by_name", "reduce=false")
 	require.Equal(t, http.StatusOK, code)
 	assert.Equal(t, 1, result.TotalRows)
 	require.Len(t, result.Rows, 1)
@@ -218,7 +185,7 @@ func TestView_DocsAddedAfterDesignDoc(t *testing.T) {
 }
 
 func TestView_ReduceCount(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -233,7 +200,7 @@ func TestView_ReduceCount(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "users", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "users", map[string]interface{}{
 		"views": map[string]interface{}{
 			"count_by_type": map[string]interface{}{
 				"map":    `function(doc) { if (doc.type) { emit(doc.type, 1); } }`,
@@ -242,7 +209,7 @@ func TestView_ReduceCount(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "users", "count_by_type", "group=0")
+	result, code := queryView(t, c, "testdb", "users", "count_by_type", "group=0")
 	require.Equal(t, http.StatusOK, code)
 	assert.Equal(t, 3, result.TotalRows)
 	require.Len(t, result.Rows, 1)
@@ -250,7 +217,7 @@ func TestView_ReduceCount(t *testing.T) {
 }
 
 func TestView_ReduceSum_DefaultCollapsed(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -265,7 +232,7 @@ func TestView_ReduceSum_DefaultCollapsed(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "view_check", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "view_check", map[string]interface{}{
 		"views": map[string]interface{}{
 			"testview": map[string]interface{}{
 				"map":    `function(doc) { emit(doc._id, doc.a); }`,
@@ -275,7 +242,7 @@ func TestView_ReduceSum_DefaultCollapsed(t *testing.T) {
 	})
 
 	// No reduce param — default is reduce=true, group=false → single row with total
-	result, code := queryView(t, router, "testdb", "view_check", "testview", "")
+	result, code := queryView(t, c, "testdb", "view_check", "testview", "")
 	require.Equal(t, http.StatusOK, code)
 	assert.Equal(t, 3, result.TotalRows)
 	require.Len(t, result.Rows, 1)
@@ -284,7 +251,7 @@ func TestView_ReduceSum_DefaultCollapsed(t *testing.T) {
 }
 
 func TestView_ReduceSum_GroupTrue(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -299,7 +266,7 @@ func TestView_ReduceSum_GroupTrue(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "view_check", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "view_check", map[string]interface{}{
 		"views": map[string]interface{}{
 			"testview": map[string]interface{}{
 				"map":    `function(doc) { emit(doc._id, doc.a); }`,
@@ -309,7 +276,7 @@ func TestView_ReduceSum_GroupTrue(t *testing.T) {
 	})
 
 	// group=true → one row per unique key, each value is the per-key sum
-	result, code := queryView(t, router, "testdb", "view_check", "testview", "group=true")
+	result, code := queryView(t, c, "testdb", "view_check", "testview", "group=true")
 	require.Equal(t, http.StatusOK, code)
 	assert.Equal(t, 3, result.TotalRows)
 	assert.Len(t, result.Rows, 3)
@@ -323,7 +290,7 @@ func TestView_ReduceSum_GroupTrue(t *testing.T) {
 }
 
 func TestView_ArrayKeyStartEndKey(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -341,8 +308,8 @@ func TestView_ArrayKeyStartEndKey(t *testing.T) {
 	}{
 		{"h1", "freebsd", "apps", "alpha"},
 		{"h2", "freebsd", "apps", "beta"},
-		{"h3", "freebsd", "db", "gamma"},   // different category — must be excluded
-		{"h4", "linux", "apps", "delta"},   // different os — must be excluded
+		{"h3", "freebsd", "db", "gamma"}, // different category — must be excluded
+		{"h4", "linux", "apps", "delta"}, // different os — must be excluded
 		{"h5", "freebsd", "apps", "zeta"},
 	}
 	for _, d := range docs {
@@ -353,7 +320,7 @@ func TestView_ArrayKeyStartEndKey(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "cfg", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "cfg", map[string]interface{}{
 		"views": map[string]interface{}{
 			"host_config": map[string]interface{}{
 				"map": `function(doc) { emit([doc.os, doc.category, doc.host], null); }`,
@@ -362,7 +329,7 @@ func TestView_ArrayKeyStartEndKey(t *testing.T) {
 	})
 
 	// URL-encode: startkey=["freebsd","apps"]  endkey=["freebsd","apps",{}]
-	result, code := queryView(t, router, "testdb", "cfg", "host_config",
+	result, code := queryView(t, c, "testdb", "cfg", "host_config",
 		`reduce=false&startkey=%5B%22freebsd%22%2C%22apps%22%5D&endkey=%5B%22freebsd%22%2C%22apps%22%2C%7B%7D%5D`)
 	require.Equal(t, http.StatusOK, code)
 
@@ -377,7 +344,7 @@ func TestView_ArrayKeyStartEndKey(t *testing.T) {
 }
 
 func TestView_ArrayKeyExactKey(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -392,7 +359,7 @@ func TestView_ArrayKeyExactKey(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "cfg", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "cfg", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_os": map[string]interface{}{
 				"map": `function(doc) { emit([doc.os, doc.host], null); }`,
@@ -401,7 +368,7 @@ func TestView_ArrayKeyExactKey(t *testing.T) {
 	})
 
 	// key=["freebsd","alpha"] should return exactly one row.
-	result, code := queryView(t, router, "testdb", "cfg", "by_os",
+	result, code := queryView(t, c, "testdb", "cfg", "by_os",
 		`reduce=false&key=%5B%22freebsd%22%2C%22alpha%22%5D`)
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 1)
@@ -412,7 +379,7 @@ func TestView_ArrayKeyExactKey(t *testing.T) {
 }
 
 func TestView_ArrayKeyWithNumbers(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -433,7 +400,7 @@ func TestView_ArrayKeyWithNumbers(t *testing.T) {
 		{"a1", "2026-01-29", "de", "article"},
 		{"a2", "2026-01-29", "de", "article"},
 		{"np2", "2026-01-29", "en", "newspaper"}, // different lang — excluded
-		{"a3", "2026-01-30", "de", "article"},     // different date — excluded
+		{"a3", "2026-01-30", "de", "article"},    // different date — excluded
 	}
 	for _, d := range docs {
 		_, err = db.PutDocument(ctx, &model.Document{
@@ -443,7 +410,7 @@ func TestView_ArrayKeyWithNumbers(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "by_date_lang", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "by_date_lang", map[string]interface{}{
 		"views": map[string]interface{}{
 			"docs": map[string]interface{}{
 				"map": `function(doc) {
@@ -455,7 +422,7 @@ func TestView_ArrayKeyWithNumbers(t *testing.T) {
 	})
 
 	// startkey=["2026-01-29","de",0]  endkey=["2026-01-29","de",1]
-	result, code := queryView(t, router, "testdb", "by_date_lang", "docs",
+	result, code := queryView(t, c, "testdb", "by_date_lang", "docs",
 		`reduce=false&startkey=%5B%222026-01-29%22%2C%22de%22%2C0%5D&endkey=%5B%222026-01-29%22%2C%22de%22%2C1%5D`)
 	require.Equal(t, http.StatusOK, code)
 
@@ -463,7 +430,7 @@ func TestView_ArrayKeyWithNumbers(t *testing.T) {
 }
 
 func TestView_MultiEmitPerDocument(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -477,7 +444,7 @@ func TestView_MultiEmitPerDocument(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	putDesignDoc(t, router, "testdb", "tags", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "tags", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_tag": map[string]interface{}{
 				"map": `function(doc) {
@@ -491,7 +458,7 @@ func TestView_MultiEmitPerDocument(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "tags", "by_tag", "reduce=false")
+	result, code := queryView(t, c, "testdb", "tags", "by_tag", "reduce=false")
 	require.Equal(t, http.StatusOK, code)
 
 	// All three emitted rows must survive — previously only the last was returned.
@@ -506,18 +473,18 @@ func TestView_MultiEmitPerDocument(t *testing.T) {
 }
 
 func TestView_NonexistentView(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
-	_, code := queryView(t, router, "testdb", "users", "by_name", "")
+	_, code := queryView(t, c, "testdb", "users", "by_name", "")
 	assert.Equal(t, http.StatusNotFound, code)
 }
 
 func TestView_IncludeDocs(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -535,7 +502,7 @@ func TestView_IncludeDocs(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	putDesignDoc(t, router, "testdb", "users", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "users", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_name": map[string]interface{}{
 				"map": `function(doc) { if (doc.type === "user") { emit(doc.name, doc.age); } }`,
@@ -544,7 +511,7 @@ func TestView_IncludeDocs(t *testing.T) {
 	})
 
 	// Query without include_docs
-	result, code := queryView(t, router, "testdb", "users", "by_name", "reduce=false")
+	result, code := queryView(t, c, "testdb", "users", "by_name", "reduce=false")
 	require.Equal(t, http.StatusOK, code)
 	assert.Equal(t, 2, result.TotalRows)
 	assert.Len(t, result.Rows, 2)
@@ -557,7 +524,7 @@ func TestView_IncludeDocs(t *testing.T) {
 	}
 
 	// Query with include_docs=true
-	result, code = queryView(t, router, "testdb", "users", "by_name", "reduce=false&include_docs=true")
+	result, code = queryView(t, c, "testdb", "users", "by_name", "reduce=false&include_docs=true")
 	require.Equal(t, http.StatusOK, code)
 	assert.Equal(t, 2, result.TotalRows)
 	assert.Len(t, result.Rows, 2)
@@ -582,7 +549,7 @@ func TestView_IncludeDocs(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestReduce_Count_GroupFalse(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -597,7 +564,7 @@ func TestReduce_Count_GroupFalse(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "stats", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "stats", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_type": map[string]interface{}{
 				"map":    `function(doc) { emit(doc.type, null); }`,
@@ -606,7 +573,7 @@ func TestReduce_Count_GroupFalse(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "stats", "by_type", "")
+	result, code := queryView(t, c, "testdb", "stats", "by_type", "")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 1)
 	assert.Nil(t, result.Rows[0].Key)
@@ -614,7 +581,7 @@ func TestReduce_Count_GroupFalse(t *testing.T) {
 }
 
 func TestReduce_Count_GroupTrue_StringKeys(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -632,7 +599,7 @@ func TestReduce_Count_GroupTrue_StringKeys(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "stats", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "stats", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_type": map[string]interface{}{
 				"map":    `function(doc) { emit(doc.type, null); }`,
@@ -641,7 +608,7 @@ func TestReduce_Count_GroupTrue_StringKeys(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "stats", "by_type", "group=true")
+	result, code := queryView(t, c, "testdb", "stats", "by_type", "group=true")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 2)
 	// sorted by key: "admin" < "user"
@@ -653,7 +620,7 @@ func TestReduce_Count_GroupTrue_StringKeys(t *testing.T) {
 
 func TestReduce_Count_GroupTrue_ArrayKeys(t *testing.T) {
 	// Bug 1 regression: array keys must not panic in the Count reducer.
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -674,7 +641,7 @@ func TestReduce_Count_GroupTrue_ArrayKeys(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "cfg", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "cfg", map[string]interface{}{
 		"views": map[string]interface{}{
 			"host_count": map[string]interface{}{
 				"map":    `function(doc) { emit([doc.os, doc.category], null); }`,
@@ -683,7 +650,7 @@ func TestReduce_Count_GroupTrue_ArrayKeys(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "cfg", "host_count", "group=true")
+	result, code := queryView(t, c, "testdb", "cfg", "host_count", "group=true")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 3)
 	// sorted by CouchDB collation: ["freebsd","apps"] < ["linux","apps"] < ["linux","db"]
@@ -696,7 +663,7 @@ func TestReduce_Count_GroupTrue_ArrayKeys(t *testing.T) {
 }
 
 func TestReduce_Sum_GroupFalse(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -714,7 +681,7 @@ func TestReduce_Sum_GroupFalse(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "sums", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "sums", map[string]interface{}{
 		"views": map[string]interface{}{
 			"total": map[string]interface{}{
 				"map":    `function(doc) { emit(null, doc.v); }`,
@@ -723,7 +690,7 @@ func TestReduce_Sum_GroupFalse(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "sums", "total", "")
+	result, code := queryView(t, c, "testdb", "sums", "total", "")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 1)
 	assert.Nil(t, result.Rows[0].Key)
@@ -732,7 +699,7 @@ func TestReduce_Sum_GroupFalse(t *testing.T) {
 
 func TestReduce_Sum_GroupTrue(t *testing.T) {
 	// Verifies rows are returned sorted in CouchDB collation order.
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -750,7 +717,7 @@ func TestReduce_Sum_GroupTrue(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "sums", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "sums", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_k": map[string]interface{}{
 				"map":    `function(doc) { emit(doc.k, doc.v); }`,
@@ -759,7 +726,7 @@ func TestReduce_Sum_GroupTrue(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "sums", "by_k", "group=true")
+	result, code := queryView(t, c, "testdb", "sums", "by_k", "group=true")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 3)
 	// must be sorted: "a" < "b" < "c"
@@ -772,7 +739,7 @@ func TestReduce_Sum_GroupTrue(t *testing.T) {
 }
 
 func TestReduce_Sum_FloatValues(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -790,7 +757,7 @@ func TestReduce_Sum_FloatValues(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "scores", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "scores", map[string]interface{}{
 		"views": map[string]interface{}{
 			"total": map[string]interface{}{
 				"map":    `function(doc) { emit("total", doc.score); }`,
@@ -799,7 +766,7 @@ func TestReduce_Sum_FloatValues(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "scores", "total", "group=true")
+	result, code := queryView(t, c, "testdb", "scores", "total", "group=true")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 1)
 	assert.Equal(t, "total", result.Rows[0].Key)
@@ -807,7 +774,7 @@ func TestReduce_Sum_FloatValues(t *testing.T) {
 }
 
 func TestReduce_GroupLevel1(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -828,7 +795,7 @@ func TestReduce_GroupLevel1(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "cfg", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "cfg", map[string]interface{}{
 		"views": map[string]interface{}{
 			"host_count": map[string]interface{}{
 				"map":    `function(doc) { emit([doc.os, doc.cat, doc.host], null); }`,
@@ -837,7 +804,7 @@ func TestReduce_GroupLevel1(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "cfg", "host_count", "group_level=1")
+	result, code := queryView(t, c, "testdb", "cfg", "host_count", "group_level=1")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 2)
 	// sorted: ["freebsd"] < ["linux"]
@@ -848,7 +815,7 @@ func TestReduce_GroupLevel1(t *testing.T) {
 }
 
 func TestReduce_GroupLevel2(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -869,7 +836,7 @@ func TestReduce_GroupLevel2(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "cfg", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "cfg", map[string]interface{}{
 		"views": map[string]interface{}{
 			"host_count": map[string]interface{}{
 				"map":    `function(doc) { emit([doc.os, doc.cat, doc.host], null); }`,
@@ -878,7 +845,7 @@ func TestReduce_GroupLevel2(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "cfg", "host_count", "group_level=2")
+	result, code := queryView(t, c, "testdb", "cfg", "host_count", "group_level=2")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 3)
 	// sorted: ["freebsd","apps"] < ["linux","apps"] < ["linux","db"]
@@ -892,7 +859,7 @@ func TestReduce_GroupLevel2(t *testing.T) {
 
 func TestReduce_GroupLevel_NonArray(t *testing.T) {
 	// group_level with non-array keys should keep the full key (like group=true).
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -909,7 +876,7 @@ func TestReduce_GroupLevel_NonArray(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "stats", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "stats", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_type": map[string]interface{}{
 				"map":    `function(doc) { emit(doc.t, null); }`,
@@ -918,7 +885,7 @@ func TestReduce_GroupLevel_NonArray(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "stats", "by_type", "group_level=1")
+	result, code := queryView(t, c, "testdb", "stats", "by_type", "group_level=1")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 2)
 	assert.Equal(t, "a", result.Rows[0].Key)
@@ -928,7 +895,7 @@ func TestReduce_GroupLevel_NonArray(t *testing.T) {
 }
 
 func TestReduce_Stats_Basic(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -946,7 +913,7 @@ func TestReduce_Stats_Basic(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "stats", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "stats", map[string]interface{}{
 		"views": map[string]interface{}{
 			"numbers": map[string]interface{}{
 				"map":    `function(doc) { emit(null, doc.v); }`,
@@ -955,7 +922,7 @@ func TestReduce_Stats_Basic(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "stats", "numbers", "")
+	result, code := queryView(t, c, "testdb", "stats", "numbers", "")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 1)
 	stats, ok := result.Rows[0].Value.(map[string]interface{})
@@ -968,7 +935,7 @@ func TestReduce_Stats_Basic(t *testing.T) {
 }
 
 func TestReduce_Stats_GroupTrue(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -986,7 +953,7 @@ func TestReduce_Stats_GroupTrue(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "stats", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "stats", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_group": map[string]interface{}{
 				"map":    `function(doc) { emit(doc.grp, doc.v); }`,
@@ -995,7 +962,7 @@ func TestReduce_Stats_GroupTrue(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "stats", "by_group", "group=true")
+	result, code := queryView(t, c, "testdb", "stats", "by_group", "group=true")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 2)
 	// sorted: "a" < "b"
@@ -1012,7 +979,7 @@ func TestReduce_Stats_GroupTrue(t *testing.T) {
 }
 
 func TestReduce_CustomJS_Sum(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -1030,7 +997,7 @@ func TestReduce_CustomJS_Sum(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "custom", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "custom", map[string]interface{}{
 		"views": map[string]interface{}{
 			"total": map[string]interface{}{
 				"map":    `function(doc) { emit(null, doc.v); }`,
@@ -1039,7 +1006,7 @@ func TestReduce_CustomJS_Sum(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "custom", "total", "")
+	result, code := queryView(t, c, "testdb", "custom", "total", "")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 1)
 	assert.Nil(t, result.Rows[0].Key)
@@ -1048,7 +1015,7 @@ func TestReduce_CustomJS_Sum(t *testing.T) {
 
 func TestReduce_CustomJS_GroupTrue_ArrayKeys(t *testing.T) {
 	// Bug 2 regression: array keys must not panic in gojaview reducer Result().
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -1071,7 +1038,7 @@ func TestReduce_CustomJS_GroupTrue_ArrayKeys(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "custom", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "custom", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_os_cat": map[string]interface{}{
 				"map":    `function(doc) { emit([doc.os, doc.cat], doc.v); }`,
@@ -1080,7 +1047,7 @@ func TestReduce_CustomJS_GroupTrue_ArrayKeys(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "custom", "by_os_cat", "group=true")
+	result, code := queryView(t, c, "testdb", "custom", "by_os_cat", "group=true")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 2)
 	// sorted: ["freebsd","db"] < ["linux","apps"]
@@ -1091,7 +1058,7 @@ func TestReduce_CustomJS_GroupTrue_ArrayKeys(t *testing.T) {
 }
 
 func TestReduce_CustomJS_GroupLevel(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -1114,7 +1081,7 @@ func TestReduce_CustomJS_GroupLevel(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "custom", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "custom", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_os_cat": map[string]interface{}{
 				"map":    `function(doc) { emit([doc.os, doc.cat], doc.v); }`,
@@ -1123,7 +1090,7 @@ func TestReduce_CustomJS_GroupLevel(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "custom", "by_os_cat", "group_level=1")
+	result, code := queryView(t, c, "testdb", "custom", "by_os_cat", "group_level=1")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 2)
 	// sorted: ["freebsd"] < ["linux"]
@@ -1138,7 +1105,7 @@ func TestReduce_ResponseOrdering(t *testing.T) {
 	// CouchDB collation (lexicographic).
 	// CBOR order: "z"(1B) < "aa"(2B) < "bbb"(3B)
 	// CouchDB order: "aa" < "bbb" < "z"
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -1153,7 +1120,7 @@ func TestReduce_ResponseOrdering(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "ord", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "ord", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_k": map[string]interface{}{
 				"map": `function(doc) { emit(doc.k, null); }`,
@@ -1161,7 +1128,7 @@ func TestReduce_ResponseOrdering(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "ord", "by_k", "reduce=false")
+	result, code := queryView(t, c, "testdb", "ord", "by_k", "reduce=false")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 3)
 	assert.Equal(t, "aa", result.Rows[0].Key)
@@ -1178,7 +1145,7 @@ func TestReduce_Rereduce_Correctness(t *testing.T) {
 	// regardless of which path is taken — what matters is that the result is
 	// not empty/null (which would happen if rereduce were called spuriously
 	// and the JS runtime handed the function stale intermediate state).
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -1193,7 +1160,7 @@ func TestReduce_Rereduce_Correctness(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "custom", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "custom", map[string]interface{}{
 		"views": map[string]interface{}{
 			"count": map[string]interface{}{
 				"map": `function(doc) { emit(null, 1); }`,
@@ -1207,7 +1174,7 @@ func TestReduce_Rereduce_Correctness(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "custom", "count", "")
+	result, code := queryView(t, c, "testdb", "custom", "count", "")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 1)
 	assert.Nil(t, result.Rows[0].Key)
@@ -1219,7 +1186,7 @@ func TestReduce_CustomJS_KeysPairsFormat(t *testing.T) {
 	// pairs as its keys argument (first pass), not raw keys.
 	// Reducers that use keys[i][1] to retrieve the doc ID will break if goydb
 	// passes bare keys instead of [key, id] pairs.
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -1236,7 +1203,7 @@ func TestReduce_CustomJS_KeysPairsFormat(t *testing.T) {
 
 	// Reducer uses keys[i][1] to collect doc IDs — only works if keys is
 	// [[key, id], ...] (CouchDB format), not [key, ...] (wrong format).
-	putDesignDoc(t, router, "testdb", "custom", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "custom", map[string]interface{}{
 		"views": map[string]interface{}{
 			"ids": map[string]interface{}{
 				"map": `function(doc) { emit(null, 1); }`,
@@ -1250,7 +1217,7 @@ func TestReduce_CustomJS_KeysPairsFormat(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "custom", "ids", "")
+	result, code := queryView(t, c, "testdb", "custom", "ids", "")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 1)
 	ids, ok := result.Rows[0].Value.([]interface{})
@@ -1271,43 +1238,40 @@ type ViewTestResponse struct {
 	Rows      []Rows           `json:"rows"`
 }
 
-func postView(t *testing.T, router *mux.Router, dbName, docID, viewName string, body interface{}) (ViewTestResponse, int) {
+func postView(t *testing.T, c *client.Client, dbName, docID, viewName string, body interface{}) (ViewTestResponse, int) {
 	t.Helper()
 	b, err := json.Marshal(body)
 	require.NoError(t, err)
-	req := httptest.NewRequest("POST", "/"+dbName+"/_design/"+docID+"/_view/"+viewName, bytes.NewReader(b))
-	req.SetBasicAuth("admin", "secret")
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	var resp ViewTestResponse
-	if w.Code == http.StatusOK {
-		require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	resp, err := c.Raw(t.Context(), http.MethodPost, "/"+dbName+"/_design/"+docID+"/_view/"+viewName, bytes.NewReader(b), map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+	var result ViewTestResponse
+	if resp.StatusCode == http.StatusOK {
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	}
-	return resp, w.Code
+	return result, resp.StatusCode
 }
 
-func queryViewFull(t *testing.T, router *mux.Router, dbName, docID, viewName, query string) (ViewTestResponse, int) {
+func queryViewFull(t *testing.T, c *client.Client, dbName, docID, viewName, query string) (ViewTestResponse, int) {
 	t.Helper()
 	u := "/" + dbName + "/_design/" + docID + "/_view/" + viewName
 	if query != "" {
 		u += "?" + query
 	}
-	req := httptest.NewRequest("GET", u, nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	var resp ViewTestResponse
-	if w.Code == http.StatusOK {
-		require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	resp, err := c.Raw(t.Context(), http.MethodGet, u, nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+	var result ViewTestResponse
+	if resp.StatusCode == http.StatusOK {
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	}
-	return resp, w.Code
+	return result, resp.StatusCode
 }
 
 // setupSimpleViewDB creates a database named dbName with docs emitting
 // (doc.name, null) from a "by_name" map view under design doc "users".
 // Also adds a count reduce view "count_by_name".
-func setupSimpleViewDB(t *testing.T, s *storage.Storage, router *mux.Router, dbName string, names []string) {
+func setupSimpleViewDB(t *testing.T, s *storage.Storage, c *client.Client, dbName string, names []string) {
 	t.Helper()
 	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, dbName)
@@ -1319,7 +1283,7 @@ func setupSimpleViewDB(t *testing.T, s *storage.Storage, router *mux.Router, dbN
 		})
 		require.NoError(t, err)
 	}
-	putDesignDoc(t, router, dbName, "users", map[string]interface{}{
+	putDesignDoc(t, c, dbName, "users", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_name": map[string]interface{}{
 				"map": `function(doc) { if (doc.type === "user") { emit(doc.name, null); } }`,
@@ -1337,12 +1301,12 @@ func setupSimpleViewDB(t *testing.T, s *storage.Storage, router *mux.Router, dbN
 // ---------------------------------------------------------------------------
 
 func TestView_POST_BasicParams(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSimpleViewDB(t, s, router, "testdb", []string{"alice", "bob", "carol"})
+	setupSimpleViewDB(t, s, c, "testdb", []string{"alice", "bob", "carol"})
 
-	resp, code := postView(t, router, "testdb", "users", "by_name", map[string]interface{}{
+	resp, code := postView(t, c, "testdb", "users", "by_name", map[string]interface{}{
 		"reduce": false,
 		"limit":  2,
 	})
@@ -1351,13 +1315,13 @@ func TestView_POST_BasicParams(t *testing.T) {
 }
 
 func TestView_POST_AllQueryParams(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSimpleViewDB(t, s, router, "testdb", []string{"alice", "bob", "carol", "dave"})
+	setupSimpleViewDB(t, s, c, "testdb", []string{"alice", "bob", "carol", "dave"})
 
 	// POST body: skip=1, reduce=false, include_docs=true
-	resp, code := postView(t, router, "testdb", "users", "by_name", map[string]interface{}{
+	resp, code := postView(t, c, "testdb", "users", "by_name", map[string]interface{}{
 		"reduce":       false,
 		"skip":         1,
 		"include_docs": true,
@@ -1375,12 +1339,12 @@ func TestView_POST_AllQueryParams(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestView_POST_KeysParam_MapOnly(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSimpleViewDB(t, s, router, "testdb", []string{"alice", "bob", "carol"})
+	setupSimpleViewDB(t, s, c, "testdb", []string{"alice", "bob", "carol"})
 
-	resp, code := postView(t, router, "testdb", "users", "by_name", map[string]interface{}{
+	resp, code := postView(t, c, "testdb", "users", "by_name", map[string]interface{}{
 		"reduce": false,
 		"keys":   []string{"bob", "alice"},
 	})
@@ -1392,12 +1356,12 @@ func TestView_POST_KeysParam_MapOnly(t *testing.T) {
 }
 
 func TestView_POST_KeysParam_MissingKey(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSimpleViewDB(t, s, router, "testdb", []string{"alice", "bob"})
+	setupSimpleViewDB(t, s, c, "testdb", []string{"alice", "bob"})
 
-	resp, code := postView(t, router, "testdb", "users", "by_name", map[string]interface{}{
+	resp, code := postView(t, c, "testdb", "users", "by_name", map[string]interface{}{
 		"reduce": false,
 		"keys":   []string{"alice", "nonexistent"},
 	})
@@ -1408,12 +1372,12 @@ func TestView_POST_KeysParam_MissingKey(t *testing.T) {
 }
 
 func TestView_GET_KeysParam(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSimpleViewDB(t, s, router, "testdb", []string{"alice", "bob", "carol"})
+	setupSimpleViewDB(t, s, c, "testdb", []string{"alice", "bob", "carol"})
 
-	resp, code := queryViewFull(t, router, "testdb", "users", "by_name",
+	resp, code := queryViewFull(t, c, "testdb", "users", "by_name",
 		`reduce=false&keys=%5B%22bob%22%2C%22alice%22%5D`)
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, resp.Rows, 2)
@@ -1423,17 +1387,17 @@ func TestView_GET_KeysParam(t *testing.T) {
 }
 
 func TestView_POST_KeysParam_Reduce_Group(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSimpleViewDB(t, s, router, "testdb", []string{"alice", "alice", "bob", "carol"})
+	setupSimpleViewDB(t, s, c, "testdb", []string{"alice", "alice", "bob", "carol"})
 	// Two docs with name "alice" (via two separate docs) — but wait, setupSimpleViewDB
 	// uses doc IDs doc1, doc2, etc. Two "alice" docs won't happen with unique IDs
 	// unless we specifically set names. Let's use a separate setup.
 	// Actually the above already creates "alice" twice — but PutDocument with
 	// different IDs is fine. Actually setupSimpleViewDB creates doc1=alice, doc2=alice, doc3=bob, doc4=carol.
 
-	resp, code := postView(t, router, "testdb", "users", "count_by_name", map[string]interface{}{
+	resp, code := postView(t, c, "testdb", "users", "count_by_name", map[string]interface{}{
 		"group": true,
 		"keys":  []string{"alice", "bob"},
 	})
@@ -1450,12 +1414,12 @@ func TestView_POST_KeysParam_Reduce_Group(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestView_Descending_MapOnly(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSimpleViewDB(t, s, router, "testdb", []string{"alice", "bob", "carol"})
+	setupSimpleViewDB(t, s, c, "testdb", []string{"alice", "bob", "carol"})
 
-	resp, code := queryViewFull(t, router, "testdb", "users", "by_name", "reduce=false&descending=true")
+	resp, code := queryViewFull(t, c, "testdb", "users", "by_name", "reduce=false&descending=true")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, resp.Rows, 3)
 	// Keys must be in descending CouchDB collation order.
@@ -1465,14 +1429,14 @@ func TestView_Descending_MapOnly(t *testing.T) {
 }
 
 func TestView_Descending_WithRange(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	// Use keys that are all the same byte-length to avoid CBOR collation issues.
-	setupSimpleViewDB(t, s, router, "testdb", []string{"aaa", "bbb", "ccc", "ddd", "eee"})
+	setupSimpleViewDB(t, s, c, "testdb", []string{"aaa", "bbb", "ccc", "ddd", "eee"})
 
 	// startkey="ddd" endkey="bbb" descending=true → bbb, ccc, ddd (in descending order)
-	resp, code := queryViewFull(t, router, "testdb", "users", "by_name",
+	resp, code := queryViewFull(t, c, "testdb", "users", "by_name",
 		`reduce=false&descending=true&startkey=%22ddd%22&endkey=%22bbb%22`)
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, resp.Rows, 3, "expected 3 rows in [bbb,ddd] descending")
@@ -1482,12 +1446,12 @@ func TestView_Descending_WithRange(t *testing.T) {
 }
 
 func TestView_Descending_Reduce_Group(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSimpleViewDB(t, s, router, "testdb", []string{"alice", "bob", "carol"})
+	setupSimpleViewDB(t, s, c, "testdb", []string{"alice", "bob", "carol"})
 
-	resp, code := queryViewFull(t, router, "testdb", "users", "count_by_name",
+	resp, code := queryViewFull(t, c, "testdb", "users", "count_by_name",
 		"group=true&descending=true")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, resp.Rows, 3)
@@ -1502,22 +1466,22 @@ func TestView_Descending_Reduce_Group(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestView_Stale_OK(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSimpleViewDB(t, s, router, "testdb", []string{"alice", "bob"})
+	setupSimpleViewDB(t, s, c, "testdb", []string{"alice", "bob"})
 
-	_, code := queryViewFull(t, router, "testdb", "users", "by_name", "reduce=false&stale=ok")
+	_, code := queryViewFull(t, c, "testdb", "users", "by_name", "reduce=false&stale=ok")
 	assert.Equal(t, http.StatusOK, code)
 }
 
 func TestView_Stable(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSimpleViewDB(t, s, router, "testdb", []string{"alice", "bob"})
+	setupSimpleViewDB(t, s, c, "testdb", []string{"alice", "bob"})
 
-	_, code := queryViewFull(t, router, "testdb", "users", "by_name", "reduce=false&stable=true")
+	_, code := queryViewFull(t, c, "testdb", "users", "by_name", "reduce=false&stable=true")
 	assert.Equal(t, http.StatusOK, code)
 }
 
@@ -1526,12 +1490,12 @@ func TestView_Stable(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestView_Sorted_False(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSimpleViewDB(t, s, router, "testdb", []string{"alice", "bob"})
+	setupSimpleViewDB(t, s, c, "testdb", []string{"alice", "bob"})
 
-	resp, code := queryViewFull(t, router, "testdb", "users", "by_name", "reduce=false&sorted=false")
+	resp, code := queryViewFull(t, c, "testdb", "users", "by_name", "reduce=false&sorted=false")
 	require.Equal(t, http.StatusOK, code)
 	// total_rows and offset must be absent from the response.
 	assert.Nil(t, resp.TotalRows, "total_rows should be absent when sorted=false")
@@ -1540,12 +1504,12 @@ func TestView_Sorted_False(t *testing.T) {
 }
 
 func TestView_Sorted_True(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSimpleViewDB(t, s, router, "testdb", []string{"alice", "bob"})
+	setupSimpleViewDB(t, s, c, "testdb", []string{"alice", "bob"})
 
-	resp, code := queryViewFull(t, router, "testdb", "users", "by_name", "reduce=false&sorted=true")
+	resp, code := queryViewFull(t, c, "testdb", "users", "by_name", "reduce=false&sorted=true")
 	require.Equal(t, http.StatusOK, code)
 	// total_rows and offset must be present.
 	assert.NotNil(t, resp.TotalRows, "total_rows should be present when sorted=true")
@@ -1557,12 +1521,12 @@ func TestView_Sorted_True(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestView_UpdateSeq_True(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSimpleViewDB(t, s, router, "testdb", []string{"alice", "bob"})
+	setupSimpleViewDB(t, s, c, "testdb", []string{"alice", "bob"})
 
-	resp, code := queryViewFull(t, router, "testdb", "users", "by_name", "reduce=false&update_seq=true")
+	resp, code := queryViewFull(t, c, "testdb", "users", "by_name", "reduce=false&update_seq=true")
 	require.Equal(t, http.StatusOK, code)
 	require.NotNil(t, resp.UpdateSeq, "update_seq should be present when update_seq=true")
 	// Must be a numeric value > 0.
@@ -1572,13 +1536,13 @@ func TestView_UpdateSeq_True(t *testing.T) {
 }
 
 func TestView_UpdateSeq_False(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSimpleViewDB(t, s, router, "testdb", []string{"alice", "bob"})
+	setupSimpleViewDB(t, s, c, "testdb", []string{"alice", "bob"})
 
 	// Default (no update_seq param) should not include update_seq field.
-	resp, code := queryViewFull(t, router, "testdb", "users", "by_name", "reduce=false")
+	resp, code := queryViewFull(t, c, "testdb", "users", "by_name", "reduce=false")
 	require.Equal(t, http.StatusOK, code)
 	assert.Nil(t, resp.UpdateSeq, "update_seq should be absent by default")
 }
@@ -1592,7 +1556,7 @@ func TestView_StringKeys_DifferentLengths_StartEndKey(t *testing.T) {
 	// sort by length first ("a" < "bb" < "cat" in CBOR), not lexicographically.
 	// CouchDB sorts lexicographically: "a" < "bb" < "cat" < "d" < "elephant".
 	// A range query startkey="bb"&endkey="d" must return "bb", "cat", "d".
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -1607,7 +1571,7 @@ func TestView_StringKeys_DifferentLengths_StartEndKey(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "users", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "users", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_name": map[string]interface{}{
 				"map": `function(doc) { if (doc.type === "user") { emit(doc.name, null); } }`,
@@ -1615,7 +1579,7 @@ func TestView_StringKeys_DifferentLengths_StartEndKey(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "users", "by_name",
+	result, code := queryView(t, c, "testdb", "users", "by_name",
 		`reduce=false&startkey=%22bb%22&endkey=%22d%22`)
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 3, "expected bb, cat, d")
@@ -1625,7 +1589,7 @@ func TestView_StringKeys_DifferentLengths_StartEndKey(t *testing.T) {
 }
 
 func TestView_StartEndKey_WithLimit(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -1640,7 +1604,7 @@ func TestView_StartEndKey_WithLimit(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "users", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "users", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_name": map[string]interface{}{
 				"map": `function(doc) { if (doc.type === "user") { emit(doc.name, null); } }`,
@@ -1649,7 +1613,7 @@ func TestView_StartEndKey_WithLimit(t *testing.T) {
 	})
 
 	// Range bb..d has 3 rows; limit=2 should return first 2.
-	result, code := queryView(t, router, "testdb", "users", "by_name",
+	result, code := queryView(t, c, "testdb", "users", "by_name",
 		`reduce=false&startkey=%22bb%22&endkey=%22d%22&limit=2`)
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 2, "limit=2 should cap results")
@@ -1658,7 +1622,7 @@ func TestView_StartEndKey_WithLimit(t *testing.T) {
 }
 
 func TestView_StartEndKey_WithSkip(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -1673,7 +1637,7 @@ func TestView_StartEndKey_WithSkip(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "users", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "users", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_name": map[string]interface{}{
 				"map": `function(doc) { if (doc.type === "user") { emit(doc.name, null); } }`,
@@ -1682,7 +1646,7 @@ func TestView_StartEndKey_WithSkip(t *testing.T) {
 	})
 
 	// Range bb..d has 3 rows (bb, cat, d); skip=1 should return cat, d.
-	result, code := queryView(t, router, "testdb", "users", "by_name",
+	result, code := queryView(t, c, "testdb", "users", "by_name",
 		`reduce=false&startkey=%22bb%22&endkey=%22d%22&skip=1`)
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 2, "skip=1 should skip first result")
@@ -1691,7 +1655,7 @@ func TestView_StartEndKey_WithSkip(t *testing.T) {
 }
 
 func TestView_Reduce_StartEndKey_Descending(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -1706,7 +1670,7 @@ func TestView_Reduce_StartEndKey_Descending(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "users", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "users", map[string]interface{}{
 		"views": map[string]interface{}{
 			"count_by_name": map[string]interface{}{
 				"map":    `function(doc) { if (doc.type === "user") { emit(doc.name, null); } }`,
@@ -1716,7 +1680,7 @@ func TestView_Reduce_StartEndKey_Descending(t *testing.T) {
 	})
 
 	// descending=true with startkey="d"&endkey="bb" → should return d, cat, bb in descending order.
-	resp, code := queryViewFull(t, router, "testdb", "users", "count_by_name",
+	resp, code := queryViewFull(t, c, "testdb", "users", "count_by_name",
 		`group=true&descending=true&startkey=%22d%22&endkey=%22bb%22`)
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, resp.Rows, 3, "expected d, cat, bb in descending order")
@@ -1730,7 +1694,7 @@ func TestView_Reduce_StartEndKey_Descending(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestView_IncludeDocs_DefaultReduce(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -1748,7 +1712,7 @@ func TestView_IncludeDocs_DefaultReduce(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	putDesignDoc(t, router, "testdb", "users", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "users", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_name": map[string]interface{}{
 				"map": `function(doc) { if (doc.type === "user") { emit(doc.name, null); } }`,
@@ -1758,7 +1722,7 @@ func TestView_IncludeDocs_DefaultReduce(t *testing.T) {
 
 	// Query with include_docs=true but WITHOUT reduce=false.
 	// The default reduce=true path uses the None reducer for map-only views.
-	result, code := queryView(t, router, "testdb", "users", "by_name", "include_docs=true")
+	result, code := queryView(t, c, "testdb", "users", "by_name", "include_docs=true")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 2)
 
@@ -1775,7 +1739,7 @@ func TestView_IncludeDocs_DefaultReduce(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestView_NullValue_Present(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -1788,7 +1752,7 @@ func TestView_NullValue_Present(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	putDesignDoc(t, router, "testdb", "users", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "users", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_name": map[string]interface{}{
 				"map": `function(doc) { if (doc.type === "user") { emit(doc.name, null); } }`,
@@ -1797,19 +1761,18 @@ func TestView_NullValue_Present(t *testing.T) {
 	})
 
 	// Query the view and check the raw JSON for "value": null.
-	url := "/testdb/_design/users/_view/by_name?reduce=false"
-	req := httptest.NewRequest("GET", url, nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
+	resp, err := c.Raw(t.Context(), http.MethodGet, "/testdb/_design/users/_view/by_name?reduce=false", nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	body := w.Body.String()
-	assert.Contains(t, body, `"value":null`, "JSON must contain \"value\":null, not omit the field")
+	bodyBytes, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(bodyBytes), `"value":null`, "JSON must contain \"value\":null, not omit the field")
 }
 
 func TestReduce_ApproxCountDistinct_Basic(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -1825,7 +1788,7 @@ func TestReduce_ApproxCountDistinct_Basic(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "acd", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "acd", map[string]interface{}{
 		"views": map[string]interface{}{
 			"distinct": map[string]interface{}{
 				"map":    `function(doc) { emit(doc.k, 1); }`,
@@ -1834,7 +1797,7 @@ func TestReduce_ApproxCountDistinct_Basic(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "acd", "distinct", "")
+	result, code := queryView(t, c, "testdb", "acd", "distinct", "")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 1)
 	assert.Nil(t, result.Rows[0].Key)
@@ -1844,7 +1807,7 @@ func TestReduce_ApproxCountDistinct_Basic(t *testing.T) {
 }
 
 func TestReduce_Sum_ArrayValues(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -1863,7 +1826,7 @@ func TestReduce_Sum_ArrayValues(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "arrsum", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "arrsum", map[string]interface{}{
 		"views": map[string]interface{}{
 			"totals": map[string]interface{}{
 				"map":    `function(doc) { emit(null, [doc.a, doc.b]); }`,
@@ -1872,7 +1835,7 @@ func TestReduce_Sum_ArrayValues(t *testing.T) {
 		},
 	})
 
-	result, code := queryView(t, router, "testdb", "arrsum", "totals", "")
+	result, code := queryView(t, c, "testdb", "arrsum", "totals", "")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 1)
 	arr, ok := result.Rows[0].Value.([]interface{})

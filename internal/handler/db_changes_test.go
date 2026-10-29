@@ -8,33 +8,24 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/gorilla/mux"
-	"github.com/gorilla/sessions"
 	"github.com/goydb/goydb/internal/adapter/logger"
 	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/internal/adapter/view/gojaview"
-	"github.com/goydb/goydb/internal/service"
+	"github.com/goydb/goydb/pkg/client"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func setupChangesTest(t *testing.T) (*storage.Storage, *mux.Router, func()) {
-	dir, err := os.MkdirTemp(os.TempDir(), "goydb-changes-test-*")
-	require.NoError(t, err)
-
+func setupChangesTest(t *testing.T) (*storage.Storage, *client.Client, func()) {
+	t.Helper()
 	log := logger.NewNoLog()
-	s, err := storage.Open(
-		dir,
-		storage.WithLogger(log),
+	c, s, cleanup := setupClientTest(t,
 		storage.WithViewEngine("", gojaview.NewViewServer),
 		storage.WithViewEngine("javascript", gojaview.NewViewServer),
 		storage.WithFilterEngine("", gojaview.NewFilterServer),
@@ -42,24 +33,7 @@ func setupChangesTest(t *testing.T) (*storage.Storage, *mux.Router, func()) {
 		storage.WithReducerEngine("", gojaview.NewReducerBuilder(log)),
 		storage.WithReducerEngine("javascript", gojaview.NewReducerBuilder(log)),
 	)
-	require.NoError(t, err)
-
-	store := sessions.NewCookieStore([]byte("test-secret-32-bytes-long-enough"))
-
-	r := mux.NewRouter()
-	err = Router{
-		Storage:      s,
-		SessionStore: store,
-		Admins:       model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}},
-		Replication:  &service.Replication{Storage: s, Logger: logger.NewNoLog()},
-		Logger:       logger.NewNoLog(),
-	}.Build(r)
-	require.NoError(t, err)
-
-	return s, r, func() {
-		_ = s.Close()
-		_ = os.RemoveAll(dir)
-	}
+	return s, c, cleanup
 }
 
 type ChangesResponse struct {
@@ -68,11 +42,40 @@ type ChangesResponse struct {
 	Pending int         `json:"pending"`
 }
 
+// rawChangesGET issues a GET _changes request via Raw and decodes the full
+// batch response, for request shapes (extra query params like "view" or
+// "minPriority") that *client.Database's typed Changes doesn't model.
+func rawChangesGET(t *testing.T, c *client.Client, dbName, query string) ChangesResponse {
+	t.Helper()
+	resp, err := c.Raw(t.Context(), http.MethodGet, "/"+dbName+"/_changes?"+query, nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var result ChangesResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	return result
+}
+
+// rawChangesPOST is rawChangesGET for a POST body (doc_ids / selector
+// filters), which the typed Changes method doesn't support either.
+func rawChangesPOST(t *testing.T, c *client.Client, dbName, query string, body interface{}) ChangesResponse {
+	t.Helper()
+	b, err := json.Marshal(body)
+	require.NoError(t, err)
+	resp, err := c.Raw(t.Context(), http.MethodPost, "/"+dbName+"/_changes?"+query, bytes.NewReader(b), map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var result ChangesResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	return result
+}
+
 func TestDBChanges_FeedNormal(t *testing.T) {
-	s, router, cleanup := setupChangesTest(t)
+	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
@@ -90,15 +93,8 @@ func TestDBChanges_FeedNormal(t *testing.T) {
 	require.NoError(t, err)
 
 	// Get changes with normal feed
-	req := httptest.NewRequest("GET", "/testdb/_changes?feed=normal", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var result ChangesResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	result, err := c.DB("testdb").Changes(ctx, &model.ChangesOptions{Feed: "normal"})
+	require.NoError(t, err)
 
 	assert.Len(t, result.Results, 2)
 	assert.Equal(t, "doc1", result.Results[0].ID)
@@ -107,10 +103,10 @@ func TestDBChanges_FeedNormal(t *testing.T) {
 }
 
 func TestDBChanges_FeedNormal_IncludeDocs(t *testing.T) {
-	s, router, cleanup := setupChangesTest(t)
+	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
@@ -120,16 +116,10 @@ func TestDBChanges_FeedNormal_IncludeDocs(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Get changes with include_docs
-	req := httptest.NewRequest("GET", "/testdb/_changes?feed=normal&include_docs=true", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var result ChangesResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	// include_docs isn't modeled by *client.Database's typed Changes (its
+	// model.ChangeResult.Doc field is json:"-"), so fetch raw and decode
+	// into the local ChangeDoc shape instead.
+	result := rawChangesGET(t, c, "testdb", "feed=normal&include_docs=true")
 
 	require.Len(t, result.Results, 1)
 	require.NotNil(t, result.Results[0].Doc)
@@ -137,10 +127,10 @@ func TestDBChanges_FeedNormal_IncludeDocs(t *testing.T) {
 }
 
 func TestDBChanges_FeedLongpoll(t *testing.T) {
-	s, router, cleanup := setupChangesTest(t)
+	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
@@ -152,13 +142,18 @@ func TestDBChanges_FeedLongpoll(t *testing.T) {
 	require.NoError(t, err)
 
 	// Start longpoll request with since=now (waits for new changes)
-	responseChan := make(chan *httptest.ResponseRecorder)
+	type longpollResult struct {
+		resp *model.ChangesResponse
+		err  error
+	}
+	responseChan := make(chan longpollResult, 1)
 	go func() {
-		req := httptest.NewRequest("GET", "/testdb/_changes?feed=longpoll&since=now&timeout=5000", nil)
-		req.SetBasicAuth("admin", "secret")
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-		responseChan <- w
+		resp, err := c.DB("testdb").Changes(ctx, &model.ChangesOptions{
+			Feed:    "longpoll",
+			Since:   "now",
+			Timeout: 5000 * time.Millisecond,
+		})
+		responseChan <- longpollResult{resp: resp, err: err}
 	}()
 
 	// Wait a bit to ensure longpoll is waiting
@@ -173,15 +168,12 @@ func TestDBChanges_FeedLongpoll(t *testing.T) {
 
 	// Should receive response relatively quickly
 	select {
-	case w := <-responseChan:
-		require.Equal(t, http.StatusOK, w.Code)
-
-		var result ChangesResponse
-		require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	case r := <-responseChan:
+		require.NoError(t, r.err)
 
 		// Should receive the new document
-		assert.Len(t, result.Results, 1)
-		assert.Equal(t, "doc2", result.Results[0].ID)
+		assert.Len(t, r.resp.Results, 1)
+		assert.Equal(t, "doc2", r.resp.Results[0].ID)
 
 	case <-time.After(2 * time.Second):
 		t.Fatal("longpoll did not return after document was created")
@@ -189,10 +181,10 @@ func TestDBChanges_FeedLongpoll(t *testing.T) {
 }
 
 func TestDBChanges_FeedContinuous(t *testing.T) {
-	s, router, cleanup := setupChangesTest(t)
+	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
@@ -204,25 +196,27 @@ func TestDBChanges_FeedContinuous(t *testing.T) {
 	require.NoError(t, err)
 
 	// Start continuous feed WITHOUT include_docs.
-	pr, pw := NewPipeRecorder()
-	defer func() { _ = pw.Close() }()
-
-	reqCtx, cancel := context.WithCancel(ctx)
+	streamCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	req := httptest.NewRequest("GET", "/testdb/_changes?feed=continuous&timeout=3000", nil)
-	req = req.WithContext(reqCtx)
-	req.SetBasicAuth("admin", "secret")
 
+	received := make(chan model.ChangeResult, 10)
 	go func() {
-		router.ServeHTTP(pw, req)
+		_ = c.DB("testdb").ChangesContinuous(streamCtx, &model.ChangesOptions{Timeout: 3000 * time.Millisecond}, func(change model.ChangeResult) error {
+			select {
+			case received <- change:
+			case <-streamCtx.Done():
+			}
+			return nil
+		})
 	}()
 
-	scanner := bufio.NewScanner(pr)
-
 	// Read initial change (doc1).
-	require.True(t, scanner.Scan(), "should receive initial change")
-	var initial ChangeDoc
-	require.NoError(t, json.Unmarshal(scanner.Bytes(), &initial))
+	var initial model.ChangeResult
+	select {
+	case initial = <-received:
+	case <-time.After(3 * time.Second):
+		t.Fatal("should receive initial change")
+	}
 	assert.Equal(t, "doc1", initial.ID)
 	assert.Nil(t, initial.Doc, "doc should be nil without include_docs")
 	assert.NotEqual(t, "0", initial.Seq, "seq should not be 0")
@@ -236,41 +230,29 @@ func TestDBChanges_FeedContinuous(t *testing.T) {
 	require.NoError(t, err)
 
 	// Read the live change.
-	liveDone := make(chan ChangeDoc, 1)
-	go func() {
-		for scanner.Scan() {
-			line := scanner.Text()
-			if line == "" {
+	for {
+		select {
+		case change := <-received:
+			if change.ID != "doc2" {
 				continue
 			}
-			var change ChangeDoc
-			if err := json.Unmarshal([]byte(line), &change); err == nil && change.ID == "doc2" {
-				liveDone <- change
-				return
-			}
+			assert.Nil(t, change.Doc, "doc should be nil without include_docs")
+			assert.NotEqual(t, "0", change.Seq, "live change seq should not be 0")
+			return
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for live change — live changes may be dropped")
 		}
-	}()
-
-	select {
-	case change := <-liveDone:
-		assert.Equal(t, "doc2", change.ID)
-		assert.Nil(t, change.Doc, "doc should be nil without include_docs")
-		assert.NotEqual(t, "0", change.Seq, "live change seq should not be 0")
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for live change — live changes may be dropped")
 	}
-
-	cancel()
 }
 
 // TestDBChanges_FeedContinuous_IncludeDocs verifies that live changes in
 // the continuous feed include the document body when include_docs=true
 // and that the seq field is a real sequence number (not "0").
 func TestDBChanges_FeedContinuous_IncludeDocs(t *testing.T) {
-	s, router, cleanup := setupChangesTest(t)
+	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
@@ -281,21 +263,17 @@ func TestDBChanges_FeedContinuous_IncludeDocs(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Start continuous feed with include_docs=true.
-	pr, pw := NewPipeRecorder()
-	defer func() { _ = pw.Close() }()
-
-	reqCtx, cancel := context.WithCancel(ctx)
+	// include_docs isn't modeled by *client.Database's typed
+	// ChangesContinuous (its model.ChangeResult.Doc field is json:"-"), so
+	// stream raw and decode into the local ChangeDoc shape instead.
+	reqCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	req := httptest.NewRequest("GET", "/testdb/_changes?feed=continuous&include_docs=true&timeout=3000", nil)
-	req = req.WithContext(reqCtx)
-	req.SetBasicAuth("admin", "secret")
 
-	go func() {
-		router.ServeHTTP(pw, req)
-	}()
+	resp, err := c.Raw(reqCtx, http.MethodGet, "/testdb/_changes?feed=continuous&include_docs=true&timeout=3000", nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
 
-	scanner := bufio.NewScanner(pr)
+	scanner := bufio.NewScanner(resp.Body)
 
 	// Read initial change (doc1).
 	require.True(t, scanner.Scan(), "should receive initial change")
@@ -340,15 +318,13 @@ func TestDBChanges_FeedContinuous_IncludeDocs(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for live change — live changes may be dropped")
 	}
-
-	cancel()
 }
 
 func TestDBChanges_Heartbeat(t *testing.T) {
-	s, router, cleanup := setupChangesTest(t)
+	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
@@ -359,20 +335,14 @@ func TestDBChanges_Heartbeat(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Test that heartbeat parameter is accepted and doesn't break normal operation
-	// Note: httptest.ResponseRecorder doesn't implement http.Flusher, so actual
-	// heartbeat sending won't happen in this test. This just verifies the parameter
-	// is parsed and doesn't cause errors.
-
-	req := httptest.NewRequest("GET", "/testdb/_changes?feed=normal&heartbeat=1000", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var result ChangesResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	// Test that heartbeat parameter is accepted and doesn't break normal
+	// operation (feed=normal doesn't actually send heartbeats; this just
+	// verifies the parameter is parsed and doesn't cause errors).
+	result, err := c.DB("testdb").Changes(ctx, &model.ChangesOptions{
+		Feed:      "normal",
+		Heartbeat: 1000 * time.Millisecond,
+	})
+	require.NoError(t, err)
 
 	// Should receive the document
 	require.Len(t, result.Results, 1)
@@ -380,40 +350,37 @@ func TestDBChanges_Heartbeat(t *testing.T) {
 }
 
 func TestDBChanges_Timeout(t *testing.T) {
-	s, router, cleanup := setupChangesTest(t)
+	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
 	// Start longpoll with short timeout and no new changes
 	start := time.Now()
-	req := httptest.NewRequest("GET", "/testdb/_changes?feed=longpoll&since=now&timeout=1000", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	result, err := c.DB("testdb").Changes(ctx, &model.ChangesOptions{
+		Feed:    "longpoll",
+		Since:   "now",
+		Timeout: 1000 * time.Millisecond,
+	})
 	elapsed := time.Since(start)
-
-	require.Equal(t, http.StatusOK, w.Code)
+	require.NoError(t, err)
 
 	// Should have waited approximately 1 second (timeout)
-	// Allow some margin for test execution time
+	// Allow some margin for test execution time (and real socket round trips).
 	assert.Greater(t, elapsed, 800*time.Millisecond, "should wait at least 800ms")
 	assert.Less(t, elapsed, 3*time.Second, "should not wait more than 3s")
-
-	var result ChangesResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
 
 	// Should return empty results after timeout
 	assert.Empty(t, result.Results)
 }
 
 func TestDBChanges_DocIDsFilter(t *testing.T) {
-	s, router, cleanup := setupChangesTest(t)
+	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
@@ -427,20 +394,9 @@ func TestDBChanges_DocIDsFilter(t *testing.T) {
 	}
 
 	// Filter for only doc2 and doc4 using POST with doc_ids
-	bodyData := map[string]interface{}{
+	result := rawChangesPOST(t, c, "testdb", "feed=normal", map[string]interface{}{
 		"doc_ids": []string{"doc2", "doc4"},
-	}
-	body, _ := json.Marshal(bodyData)
-
-	req := httptest.NewRequest("POST", "/testdb/_changes?feed=normal", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var result ChangesResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	})
 
 	// Should only receive doc2 and doc4
 	require.Len(t, result.Results, 2)
@@ -450,10 +406,10 @@ func TestDBChanges_DocIDsFilter(t *testing.T) {
 }
 
 func TestDBChanges_Since(t *testing.T) {
-	s, router, cleanup := setupChangesTest(t)
+	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
@@ -465,13 +421,8 @@ func TestDBChanges_Since(t *testing.T) {
 	require.NoError(t, err)
 
 	// Get current sequence
-	req := httptest.NewRequest("GET", "/testdb/_changes?feed=normal", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	var result1 ChangesResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result1))
+	result1, err := c.DB("testdb").Changes(ctx, &model.ChangesOptions{Feed: "normal"})
+	require.NoError(t, err)
 	firstSeq := result1.LastSeq
 
 	// Create second document
@@ -482,13 +433,8 @@ func TestDBChanges_Since(t *testing.T) {
 	require.NoError(t, err)
 
 	// Get changes since first sequence
-	req = httptest.NewRequest("GET", fmt.Sprintf("/testdb/_changes?feed=normal&since=%s", firstSeq), nil)
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	var result2 ChangesResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result2))
+	result2, err := c.DB("testdb").Changes(ctx, &model.ChangesOptions{Feed: "normal", Since: firstSeq})
+	require.NoError(t, err)
 
 	// Should only receive doc2
 	require.Len(t, result2.Results, 1)
@@ -496,10 +442,10 @@ func TestDBChanges_Since(t *testing.T) {
 }
 
 func TestDBChanges_Deleted(t *testing.T) {
-	s, router, cleanup := setupChangesTest(t)
+	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
@@ -514,19 +460,14 @@ func TestDBChanges_Deleted(t *testing.T) {
 	require.NoError(t, err)
 
 	// Get changes
-	req := httptest.NewRequest("GET", "/testdb/_changes?feed=normal", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	var result ChangesResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	result, err := c.DB("testdb").Changes(ctx, &model.ChangesOptions{Feed: "normal"})
+	require.NoError(t, err)
 
 	// Should receive both create and delete changes
 	require.GreaterOrEqual(t, len(result.Results), 1)
 
 	// Find the latest change for doc1
-	var doc1Change *ChangeDoc
+	var doc1Change *model.ChangeResult
 	for i := range result.Results {
 		if result.Results[i].ID == "doc1" {
 			doc1Change = &result.Results[i]
@@ -537,42 +478,11 @@ func TestDBChanges_Deleted(t *testing.T) {
 	assert.True(t, doc1Change.Deleted, "document should be marked as deleted")
 }
 
-// PipeRecorder is a custom ResponseRecorder that supports streaming
-type PipeRecorder struct {
-	*httptest.ResponseRecorder
-	pipe       *io.PipeReader
-	pipeWriter *io.PipeWriter
-}
-
-func NewPipeRecorder() (*io.PipeReader, *PipeRecorder) {
-	pr, pw := io.Pipe()
-	rec := &PipeRecorder{
-		ResponseRecorder: httptest.NewRecorder(),
-		pipe:             pr,
-		pipeWriter:       pw,
-	}
-	return pr, rec
-}
-
-func (pr *PipeRecorder) Write(buf []byte) (int, error) {
-	// Write to both the underlying recorder and the pipe
-	_, _ = pr.ResponseRecorder.Write(buf)
-	return pr.pipeWriter.Write(buf)
-}
-
-func (pr *PipeRecorder) Flush() {
-	// Implement Flusher interface - no-op for pipe recorder
-}
-
-func (pr *PipeRecorder) Close() error {
-	return pr.pipeWriter.Close()
-}
-
 func TestDBChanges_FeedEventSource(t *testing.T) {
-	s, router, cleanup := setupChangesTest(t)
+	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
@@ -583,47 +493,33 @@ func TestDBChanges_FeedEventSource(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Get changes with eventsource feed
-	req := httptest.NewRequest("GET", "/testdb/_changes?feed=eventsource", nil)
-	req.SetBasicAuth("admin", "secret")
-
-	// Use pipe recorder for streaming
-	pr, pw := NewPipeRecorder()
-	defer func() { _ = pw.Close() }()
-
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	streamCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	req = req.WithContext(ctx)
 
-	// Start the request
+	received := make(chan model.ChangeResult, 1)
 	go func() {
-		router.ServeHTTP(pw, req)
+		_ = c.DB("testdb").ChangesEventSource(streamCtx, &model.ChangesOptions{}, func(change model.ChangeResult) error {
+			select {
+			case received <- change:
+			default:
+			}
+			return nil
+		})
 	}()
 
-	// Read SSE formatted output
-	scanner := bufio.NewScanner(pr)
-	var receivedData bool
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "data: ") {
-			receivedData = true
-			jsonData := strings.TrimPrefix(line, "data: ")
-			var change ChangeDoc
-			err := json.Unmarshal([]byte(jsonData), &change)
-			require.NoError(t, err)
-			assert.Equal(t, "doc1", change.ID)
-			break
-		}
+	select {
+	case change := <-received:
+		assert.Equal(t, "doc1", change.ID)
+	case <-time.After(2 * time.Second):
+		t.Fatal("should receive SSE formatted data")
 	}
-
-	assert.True(t, receivedData, "should receive SSE formatted data")
 }
 
 func TestDBChanges_FilterSelector(t *testing.T) {
-	s, router, cleanup := setupChangesTest(t)
+	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
@@ -647,22 +543,11 @@ func TestDBChanges_FilterSelector(t *testing.T) {
 	require.NoError(t, err)
 
 	// Filter by type=post using selector
-	bodyData := map[string]interface{}{
+	result := rawChangesPOST(t, c, "testdb", "filter=_selector", map[string]interface{}{
 		"selector": map[string]interface{}{
 			"type": "post",
 		},
-	}
-	body, _ := json.Marshal(bodyData)
-
-	req := httptest.NewRequest("POST", "/testdb/_changes?filter=_selector", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var result ChangesResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	})
 
 	// Should only receive posts
 	require.Len(t, result.Results, 2)
@@ -673,10 +558,10 @@ func TestDBChanges_FilterSelector(t *testing.T) {
 }
 
 func TestDBChanges_FilterView(t *testing.T) {
-	s, router, cleanup := setupChangesTest(t)
+	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
@@ -707,15 +592,7 @@ func TestDBChanges_FilterView(t *testing.T) {
 	require.NoError(t, err)
 
 	// Filter using view (CouchDB format: no _design/ prefix)
-	req := httptest.NewRequest("GET", "/testdb/_changes?filter=_view&view=blog/published", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var result ChangesResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	result := rawChangesGET(t, c, "testdb", "filter=_view&view=blog/published")
 
 	// Should only receive published posts (not design doc, not draft)
 	require.Len(t, result.Results, 1)
@@ -723,10 +600,10 @@ func TestDBChanges_FilterView(t *testing.T) {
 }
 
 func TestDBChanges_FilterCustom(t *testing.T) {
-	s, router, cleanup := setupChangesTest(t)
+	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
@@ -761,15 +638,7 @@ func TestDBChanges_FilterCustom(t *testing.T) {
 	require.NoError(t, err)
 
 	// Filter by priority >= 3 (CouchDB format: no _design/ prefix)
-	req := httptest.NewRequest("GET", "/testdb/_changes?filter=app/important&minPriority=3", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var result ChangesResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	result := rawChangesGET(t, c, "testdb", "filter=app/important&minPriority=3")
 
 	// Should only receive task1 and task3 (priority >= 3)
 	require.Len(t, result.Results, 2)
@@ -780,10 +649,10 @@ func TestDBChanges_FilterCustom(t *testing.T) {
 }
 
 func TestDBChanges_FilterCombinations(t *testing.T) {
-	s, router, cleanup := setupChangesTest(t)
+	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
@@ -800,25 +669,14 @@ func TestDBChanges_FilterCombinations(t *testing.T) {
 	}
 
 	// Test combining doc_ids with selector filter
-	bodyData := map[string]interface{}{
+	result := rawChangesPOST(t, c, "testdb", "filter=_selector", map[string]interface{}{
 		"doc_ids": []string{"doc2", "doc3", "doc4"},
 		"selector": map[string]interface{}{
 			"value": map[string]interface{}{
 				"$gte": 3, // value >= 3
 			},
 		},
-	}
-	body, _ := json.Marshal(bodyData)
-
-	req := httptest.NewRequest("POST", "/testdb/_changes?filter=_selector", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var result ChangesResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	})
 
 	// Should only receive doc3 and doc4 (in doc_ids AND value >= 3)
 	require.Len(t, result.Results, 2)
@@ -829,10 +687,10 @@ func TestDBChanges_FilterCombinations(t *testing.T) {
 }
 
 func TestDBChanges_EventSourceWithFilter(t *testing.T) {
-	s, router, cleanup := setupChangesTest(t)
+	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
@@ -849,7 +707,9 @@ func TestDBChanges_EventSourceWithFilter(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Test EventSource with selector filter
+	// Test EventSource with selector filter -- needs a POST body, which
+	// *client.Database's typed ChangesEventSource (always GET) doesn't
+	// support, so stream raw instead.
 	bodyData := map[string]interface{}{
 		"selector": map[string]interface{}{
 			"type": "post",
@@ -857,22 +717,15 @@ func TestDBChanges_EventSourceWithFilter(t *testing.T) {
 	}
 	body, _ := json.Marshal(bodyData)
 
-	req := httptest.NewRequest("POST", "/testdb/_changes?feed=eventsource&filter=_selector", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-
-	pr, pw := NewPipeRecorder()
-	defer func() { _ = pw.Close() }()
-
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	req = req.WithContext(ctx)
 
-	go func() {
-		router.ServeHTTP(pw, req)
-	}()
+	resp, err := c.Raw(reqCtx, http.MethodPost, "/testdb/_changes?feed=eventsource&filter=_selector", bytes.NewReader(body), map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
 
 	// Read SSE formatted output
-	scanner := bufio.NewScanner(pr)
+	scanner := bufio.NewScanner(resp.Body)
 	var receivedChanges []string
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -894,10 +747,10 @@ func TestDBChanges_EventSourceWithFilter(t *testing.T) {
 }
 
 func TestDBChanges_FilterCustom_DesignPrefix(t *testing.T) {
-	s, router, cleanup := setupChangesTest(t)
+	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
@@ -925,15 +778,7 @@ func TestDBChanges_FilterCustom_DesignPrefix(t *testing.T) {
 	require.NoError(t, err)
 
 	// Use _design/ prefix format (backwards compatibility)
-	req := httptest.NewRequest("GET", "/testdb/_changes?filter=_design/app/important&minPriority=3", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var result ChangesResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	result := rawChangesGET(t, c, "testdb", "filter=_design/app/important&minPriority=3")
 
 	// Should only receive task1 (priority >= 3)
 	require.Len(t, result.Results, 1)
@@ -941,10 +786,10 @@ func TestDBChanges_FilterCustom_DesignPrefix(t *testing.T) {
 }
 
 func TestDBChanges_FilterDesign(t *testing.T) {
-	s, router, cleanup := setupChangesTest(t)
+	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
@@ -975,15 +820,8 @@ func TestDBChanges_FilterDesign(t *testing.T) {
 	require.NoError(t, err)
 
 	// Filter to only design documents
-	req := httptest.NewRequest("GET", "/testdb/_changes?filter=_design", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var result ChangesResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	result, err := c.DB("testdb").Changes(ctx, &model.ChangesOptions{Feed: "normal", Filter: "_design"})
+	require.NoError(t, err)
 
 	// Should only receive the design document
 	require.Len(t, result.Results, 1)
@@ -991,10 +829,10 @@ func TestDBChanges_FilterDesign(t *testing.T) {
 }
 
 func TestDBChanges_FilterView_DesignPrefix(t *testing.T) {
-	s, router, cleanup := setupChangesTest(t)
+	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
@@ -1024,15 +862,7 @@ func TestDBChanges_FilterView_DesignPrefix(t *testing.T) {
 	require.NoError(t, err)
 
 	// Use _design/ prefix format (backwards compatibility)
-	req := httptest.NewRequest("GET", "/testdb/_changes?filter=_view&view=_design/blog/published", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var result ChangesResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	result := rawChangesGET(t, c, "testdb", "filter=_view&view=_design/blog/published")
 
 	// Should only receive published posts
 	require.Len(t, result.Results, 1)
@@ -1040,10 +870,10 @@ func TestDBChanges_FilterView_DesignPrefix(t *testing.T) {
 }
 
 func TestDBChanges_FilterCustom_UserCtx(t *testing.T) {
-	s, router, cleanup := setupChangesTest(t)
+	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
@@ -1072,15 +902,8 @@ func TestDBChanges_FilterCustom_UserCtx(t *testing.T) {
 	require.NoError(t, err)
 
 	// Filter using custom filter that checks userCtx.name (authenticated as "admin")
-	req := httptest.NewRequest("GET", "/testdb/_changes?filter=app/by_user", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var result ChangesResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	result, err := c.DB("testdb").Changes(ctx, &model.ChangesOptions{Feed: "normal", Filter: "app/by_user"})
+	require.NoError(t, err)
 
 	// Should only receive doc1 (authored by "admin")
 	require.Len(t, result.Results, 1)
@@ -1088,10 +911,10 @@ func TestDBChanges_FilterCustom_UserCtx(t *testing.T) {
 }
 
 func TestDBChanges_FilterDocIDs_ExplicitFilter(t *testing.T) {
-	s, router, cleanup := setupChangesTest(t)
+	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
@@ -1104,20 +927,9 @@ func TestDBChanges_FilterDocIDs_ExplicitFilter(t *testing.T) {
 	}
 
 	// Use filter=_doc_ids with doc_ids in POST body
-	bodyData := map[string]interface{}{
+	result := rawChangesPOST(t, c, "testdb", "filter=_doc_ids", map[string]interface{}{
 		"doc_ids": []string{"doc1", "doc3"},
-	}
-	body, _ := json.Marshal(bodyData)
-
-	req := httptest.NewRequest("POST", "/testdb/_changes?filter=_doc_ids", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var result ChangesResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	})
 
 	require.Len(t, result.Results, 2)
 	docIDs := []string{result.Results[0].ID, result.Results[1].ID}

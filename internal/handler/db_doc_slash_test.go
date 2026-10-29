@@ -1,12 +1,9 @@
 package handler
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"net/http"
+	"io"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -15,496 +12,227 @@ import (
 	"github.com/goydb/goydb/internal/adapter/logger"
 	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/internal/service"
+	"github.com/goydb/goydb/pkg/client"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// setupSlashTest creates a router with UseEncodedPath() enabled (required for
-// %2F-in-path handling), a storage backend, and a test database named "testdb".
-// Returns the storage, router, and a cleanup function.
-func setupSlashTest(t *testing.T) (*storage.Storage, *mux.Router, func()) {
+// setupSlashTest spins up a real in-process goydb HTTP server with a test
+// database named "testdb". Returns the storage, client, and a cleanup
+// function. Unlike setupClientTest, the router here has UseEncodedPath()
+// enabled, which gorilla/mux requires to match routes against raw,
+// still-escaped paths instead of decoding "%2F" back to "/" before
+// matching -- required for this file's slash-in-document-ID tests.
+func setupSlashTest(t *testing.T) (*storage.Storage, *client.Client, func()) {
 	t.Helper()
-	dir, err := os.MkdirTemp(os.TempDir(), "goydb-slash-*")
+	log := logger.NewNoLog()
+	s, err := storage.Open(t.TempDir(), storage.WithLogger(log))
 	require.NoError(t, err)
-
-	s, err := storage.Open(dir, storage.WithLogger(logger.NewNoLog()))
-	require.NoError(t, err)
-
-	store := sessions.NewCookieStore([]byte("test-secret-32-bytes-long-enough"))
 
 	r := mux.NewRouter()
 	r.UseEncodedPath()
 	err = Router{
 		Storage:      s,
-		SessionStore: store,
+		SessionStore: sessions.NewCookieStore([]byte("test-secret-32-bytes-long-enough")),
 		Admins:       model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}},
-		Replication:  &service.Replication{Storage: s, Logger: logger.NewNoLog()},
-		Logger:       logger.NewNoLog(),
+		Replication:  &service.Replication{Storage: s, Logger: log},
+		Logger:       log,
 	}.Build(r)
 	require.NoError(t, err)
 
 	_, err = s.CreateDatabase(context.Background(), "testdb")
 	require.NoError(t, err)
 
-	return s, r, func() {
+	ts := httptest.NewServer(r)
+	c, err := client.New(ts.URL, client.WithBasicAuth("admin", "secret"))
+	require.NoError(t, err)
+
+	return s, c, func() {
+		ts.Close()
 		_ = s.Close()
-		_ = os.RemoveAll(dir)
 	}
 }
 
-// TestDocIDWithSlashes verifies that document IDs containing slashes
-// work correctly when percent-encoded as %2F in the URL path.
+// TestDocIDWithSlashes verifies that document IDs containing slashes work
+// correctly (pkg/client percent-encodes each path segment internally).
 func TestDocIDWithSlashes(t *testing.T) {
-	dir, err := os.MkdirTemp(os.TempDir(), "goydb-slash-test-*")
-	require.NoError(t, err)
-	defer os.RemoveAll(dir)
-
-	s, err := storage.Open(dir, storage.WithLogger(logger.NewNoLog()))
-	require.NoError(t, err)
-	defer s.Close()
-
-	store := sessions.NewCookieStore([]byte("test-secret-32-bytes-long-enough"))
-
-	r := mux.NewRouter()
-	r.UseEncodedPath()
-	err = Router{
-		Storage:      s,
-		SessionStore: store,
-		Admins:       model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}},
-		Replication:  &service.Replication{Storage: s, Logger: logger.NewNoLog()},
-		Logger:       logger.NewNoLog(),
-	}.Build(r)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	_, err = s.CreateDatabase(ctx, "testdb")
-	require.NoError(t, err)
+	_, c, cleanup := setupSlashTest(t)
+	defer cleanup()
+	db := c.DB("testdb")
 
 	docID := "a660cdf/8989400/64b2a743/fcc105/3aca"
-	encodedDocID := "a660cdf%2F8989400%2F64b2a743%2Ffcc105%2F3aca"
 
-	// PUT a document with slashes in the ID.
-	body := map[string]interface{}{"hello": "world"}
-	bodyBytes, _ := json.Marshal(body)
-
-	req := httptest.NewRequest("PUT", "/testdb/"+encodedDocID, bytes.NewReader(bodyBytes))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusCreated, w.Code, "PUT response: %s", w.Body.String())
-
-	var putResp map[string]interface{}
-	err = json.Unmarshal(w.Body.Bytes(), &putResp)
+	rev, err := db.Put(t.Context(), &model.Document{ID: docID, Data: map[string]interface{}{"hello": "world"}})
 	require.NoError(t, err)
-	assert.Equal(t, docID, putResp["id"])
-	assert.Equal(t, true, putResp["ok"])
+	require.NotEmpty(t, rev)
 
-	// GET the document back using the percent-encoded ID.
-	req = httptest.NewRequest("GET", "/testdb/"+encodedDocID, nil)
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code, "GET response: %s", w.Body.String())
-
-	var getResp map[string]interface{}
-	err = json.Unmarshal(w.Body.Bytes(), &getResp)
+	doc, err := db.Get(t.Context(), docID)
 	require.NoError(t, err)
-	assert.Equal(t, docID, getResp["_id"])
-	assert.Equal(t, "world", getResp["hello"])
+	assert.Equal(t, docID, doc.ID)
+	assert.Equal(t, "world", doc.Data["hello"])
 
-	// HEAD should also work.
-	req = httptest.NewRequest("HEAD", "/testdb/"+encodedDocID, nil)
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	headRev, err := db.Head(t.Context(), docID)
+	require.NoError(t, err)
+	assert.NotEmpty(t, headRev)
 
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.NotEmpty(t, w.Header().Get("ETag"))
+	newRev, err := db.Delete(t.Context(), docID, rev)
+	require.NoError(t, err)
+	require.NotEmpty(t, newRev)
 
-	// DELETE the document.
-	rev := putResp["rev"].(string)
-	req = httptest.NewRequest("DELETE", "/testdb/"+encodedDocID+"?rev="+rev, nil)
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code, "DELETE response: %s", w.Body.String())
-
-	// Confirm it's gone.
-	req = httptest.NewRequest("GET", "/testdb/"+encodedDocID, nil)
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	_, err = db.Get(t.Context(), docID)
+	assert.True(t, client.IsNotFound(err))
 }
 
 // TestAllDocsWithEncodedSlashKeys verifies that _all_docs startkey/endkey
-// query parameters correctly handle %2F-encoded slashes.
+// query parameters correctly handle slash-containing keys.
 func TestAllDocsWithEncodedSlashKeys(t *testing.T) {
-	dir, err := os.MkdirTemp(os.TempDir(), "goydb-slash-alldocs-*")
-	require.NoError(t, err)
-	defer os.RemoveAll(dir)
+	_, c, cleanup := setupSlashTest(t)
+	defer cleanup()
+	db := c.DB("testdb")
 
-	s, err := storage.Open(dir, storage.WithLogger(logger.NewNoLog()))
-	require.NoError(t, err)
-	defer s.Close()
-
-	store := sessions.NewCookieStore([]byte("test-secret-32-bytes-long-enough"))
-
-	r := mux.NewRouter()
-	r.UseEncodedPath()
-	err = Router{
-		Storage:      s,
-		SessionStore: store,
-		Admins:       model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}},
-		Replication:  &service.Replication{Storage: s, Logger: logger.NewNoLog()},
-		Logger:       logger.NewNoLog(),
-	}.Build(r)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	_, err = s.CreateDatabase(ctx, "testdb")
-	require.NoError(t, err)
-
-	// PUT a document with slashes in the ID.
 	docID := "a660cdf/8989400/64b2a743/fcc105/3aca"
-	encodedDocID := "a660cdf%2F8989400%2F64b2a743%2Ffcc105%2F3aca"
-
-	body := map[string]interface{}{"hello": "world"}
-	bodyBytes, _ := json.Marshal(body)
-
-	req := httptest.NewRequest("PUT", "/testdb/"+encodedDocID, bytes.NewReader(bodyBytes))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusCreated, w.Code, "PUT response: %s", w.Body.String())
-
-	// Query _all_docs with %2F-encoded startkey/endkey.
-	req = httptest.NewRequest("GET",
-		`/testdb/_all_docs?startkey="a660cdf%2F8989400%2F64b2a743%2Ffcc105%2F3aca"&endkey="a660cdf%2F8989400%2F64b2a743%2Ffcc105%2F3aca"`,
-		nil)
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code, "_all_docs encoded response: %s", w.Body.String())
-
-	var encodedResp struct {
-		TotalRows int `json:"total_rows"`
-		Rows      []struct {
-			ID string `json:"id"`
-		} `json:"rows"`
-	}
-	err = json.Unmarshal(w.Body.Bytes(), &encodedResp)
+	_, err := db.Put(t.Context(), &model.Document{ID: docID, Data: map[string]interface{}{"hello": "world"}})
 	require.NoError(t, err)
-	require.Len(t, encodedResp.Rows, 1, "_all_docs with %%2F-encoded keys should return the document")
-	assert.Equal(t, docID, encodedResp.Rows[0].ID)
 
-	// Query _all_docs with literal slashes in startkey/endkey (for comparison).
-	req = httptest.NewRequest("GET",
-		`/testdb/_all_docs?startkey="a660cdf/8989400/64b2a743/fcc105/3aca"&endkey="a660cdf/8989400/64b2a743/fcc105/3aca"`,
-		nil)
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code, "_all_docs literal response: %s", w.Body.String())
-
-	var literalResp struct {
-		TotalRows int `json:"total_rows"`
-		Rows      []struct {
-			ID string `json:"id"`
-		} `json:"rows"`
-	}
-	err = json.Unmarshal(w.Body.Bytes(), &literalResp)
+	resp, err := db.AllDocs(t.Context(), client.AllDocsQuery{StartKey: docID, EndKey: docID})
 	require.NoError(t, err)
-	require.Len(t, literalResp.Rows, 1, "_all_docs with literal slash keys should return the document")
-	assert.Equal(t, docID, literalResp.Rows[0].ID)
+	require.Len(t, resp.Rows, 1, "_all_docs with slash-containing keys should return the document")
+	assert.Equal(t, docID, resp.Rows[0].ID)
 }
 
-// TestCopyWithSlashIDs verifies that the COPY method works when both the source
-// document ID and the Destination header contain slashes.
+// TestCopyWithSlashIDs verifies that COPY works when both the source
+// document ID and the Destination contain slashes.
 func TestCopyWithSlashIDs(t *testing.T) {
-	_, r, cleanup := setupSlashTest(t)
+	_, c, cleanup := setupSlashTest(t)
 	defer cleanup()
+	db := c.DB("testdb")
 
 	srcID := "src/doc/one"
-	srcEncoded := "src%2Fdoc%2Fone"
 	dstID := "dst/doc/two"
 
-	// PUT source document.
-	bodyBytes, _ := json.Marshal(map[string]interface{}{"payload": "data"})
-	req := httptest.NewRequest("PUT", "/testdb/"+srcEncoded, bytes.NewReader(bodyBytes))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusCreated, w.Code, "PUT src: %s", w.Body.String())
+	_, err := db.Put(t.Context(), &model.Document{ID: srcID, Data: map[string]interface{}{"payload": "data"}})
+	require.NoError(t, err)
 
-	// COPY to a slash-containing destination.
-	req = httptest.NewRequest("COPY", "/testdb/"+srcEncoded, nil)
-	req.Header.Set("Destination", dstID)
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusCreated, w.Code, "COPY response: %s", w.Body.String())
+	newRev, err := db.Copy(t.Context(), srcID, "", dstID, "")
+	require.NoError(t, err)
+	require.NotEmpty(t, newRev)
 
-	var copyResp map[string]interface{}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &copyResp))
-	assert.Equal(t, true, copyResp["ok"])
-	assert.Equal(t, dstID, copyResp["id"])
+	dstDoc, err := db.Get(t.Context(), dstID)
+	require.NoError(t, err)
+	assert.Equal(t, dstID, dstDoc.ID)
+	assert.Equal(t, "data", dstDoc.Data["payload"])
 
-	// GET destination doc and verify _id.
-	dstEncoded := "dst%2Fdoc%2Ftwo"
-	req = httptest.NewRequest("GET", "/testdb/"+dstEncoded, nil)
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code, "GET dst: %s", w.Body.String())
-
-	var dstDoc map[string]interface{}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &dstDoc))
-	assert.Equal(t, dstID, dstDoc["_id"])
-	assert.Equal(t, "data", dstDoc["payload"])
-
-	// Source doc is still intact.
-	req = httptest.NewRequest("GET", "/testdb/"+srcEncoded, nil)
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var srcDoc map[string]interface{}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &srcDoc))
-	assert.Equal(t, srcID, srcDoc["_id"])
+	srcDoc, err := db.Get(t.Context(), srcID)
+	require.NoError(t, err)
+	assert.Equal(t, srcID, srcDoc.ID)
 }
 
 // TestAttachmentCRUDWithSlashDocID verifies PUT/GET/DELETE of an attachment
 // on a document whose ID contains slashes.
 func TestAttachmentCRUDWithSlashDocID(t *testing.T) {
-	_, r, cleanup := setupSlashTest(t)
+	_, c, cleanup := setupSlashTest(t)
 	defer cleanup()
+	db := c.DB("testdb")
 
 	docID := "my/slash/doc"
-	docEncoded := "my%2Fslash%2Fdoc"
 
-	// Create the document.
-	bodyBytes, _ := json.Marshal(map[string]interface{}{"kind": "test"})
-	req := httptest.NewRequest("PUT", "/testdb/"+docEncoded, bytes.NewReader(bodyBytes))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusCreated, w.Code, "PUT doc: %s", w.Body.String())
+	rev, err := db.Put(t.Context(), &model.Document{ID: docID, Data: map[string]interface{}{"kind": "test"}})
+	require.NoError(t, err)
 
-	var putResp map[string]interface{}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &putResp))
-	rev := putResp["rev"].(string)
+	attRev, err := db.PutAttachment(t.Context(), docID, "readme.txt", rev, "text/plain", strings.NewReader("attachment content"))
+	require.NoError(t, err)
+	require.NotEmpty(t, attRev)
 
-	// PUT attachment.
-	attPath := "/testdb/" + docEncoded + "/readme.txt"
-	req = httptest.NewRequest("PUT", attPath+"?rev="+rev, strings.NewReader("attachment content"))
-	req.Header.Set("Content-Type", "text/plain")
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusCreated, w.Code, "PUT attachment: %s", w.Body.String())
+	att, err := db.GetAttachment(t.Context(), docID, "readme.txt")
+	require.NoError(t, err)
+	require.Equal(t, "text/plain", att.ContentType)
+	data, err := slashReadAttachment(att)
+	require.NoError(t, err)
+	assert.Equal(t, "attachment content", string(data))
 
-	var attPutResp map[string]interface{}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &attPutResp))
-	assert.Equal(t, true, attPutResp["ok"])
-	assert.Equal(t, docID, attPutResp["id"])
-	attRev := attPutResp["rev"].(string)
+	delRev, err := db.DeleteAttachment(t.Context(), docID, "readme.txt", attRev)
+	require.NoError(t, err)
+	require.NotEmpty(t, delRev)
 
-	// GET attachment.
-	req = httptest.NewRequest("GET", attPath, nil)
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code, "GET attachment: %s", w.Body.String())
-	assert.Equal(t, "attachment content", w.Body.String())
-	assert.Equal(t, "text/plain", w.Header().Get("Content-Type"))
-
-	// DELETE attachment.
-	req = httptest.NewRequest("DELETE", attPath+"?rev="+attRev, nil)
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code, "DELETE attachment: %s", w.Body.String())
-
-	var delResp map[string]interface{}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &delResp))
-	assert.Equal(t, true, delResp["ok"])
-	assert.Equal(t, docID, delResp["id"])
-
-	// Confirm attachment is gone.
-	req = httptest.NewRequest("GET", attPath, nil)
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	_, err = db.GetAttachment(t.Context(), docID, "readme.txt")
+	assert.True(t, client.IsNotFound(err))
 }
 
 // TestDesignDocWithSlashName verifies that a design document with a slash in
-// its name can be stored and retrieved via %2F encoding.
+// its name can be stored and retrieved.
 func TestDesignDocWithSlashName(t *testing.T) {
-	_, r, cleanup := setupSlashTest(t)
+	_, c, cleanup := setupSlashTest(t)
 	defer cleanup()
+	db := c.DB("testdb")
 
-	// _design/my/view — the slash after _design/ is the fixed separator;
-	// the slash within the name is encoded as %2F.
 	ddocID := "_design/my/view"
-	ddocPath := "/testdb/_design/my%2Fview"
 
-	bodyBytes, _ := json.Marshal(map[string]interface{}{
-		"views": map[string]interface{}{},
-	})
-	req := httptest.NewRequest("PUT", ddocPath, bytes.NewReader(bodyBytes))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusCreated, w.Code, "PUT _design: %s", w.Body.String())
+	rev, err := db.Put(t.Context(), &model.Document{ID: ddocID, Data: map[string]interface{}{"views": map[string]interface{}{}}})
+	require.NoError(t, err)
+	require.NotEmpty(t, rev)
 
-	var putResp map[string]interface{}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &putResp))
-	assert.Equal(t, true, putResp["ok"])
-	assert.Equal(t, ddocID, putResp["id"])
-
-	// GET it back.
-	req = httptest.NewRequest("GET", ddocPath, nil)
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code, "GET _design: %s", w.Body.String())
-
-	var getResp map[string]interface{}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &getResp))
-	assert.Equal(t, ddocID, getResp["_id"])
+	doc, err := db.Get(t.Context(), ddocID)
+	require.NoError(t, err)
+	assert.Equal(t, ddocID, doc.ID)
 }
 
 // TestLocalDocWithSlashID verifies that a local document with a slash in its
-// ID can be stored and retrieved via %2F encoding.
+// ID can be stored and retrieved.
 func TestLocalDocWithSlashID(t *testing.T) {
-	_, r, cleanup := setupSlashTest(t)
+	_, c, cleanup := setupSlashTest(t)
 	defer cleanup()
+	db := c.DB("testdb")
 
 	localID := "_local/my/checkpoint"
-	localPath := "/testdb/_local/my%2Fcheckpoint"
 
-	bodyBytes, _ := json.Marshal(map[string]interface{}{"seq": 42})
-	req := httptest.NewRequest("PUT", localPath, bytes.NewReader(bodyBytes))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusCreated, w.Code, "PUT _local: %s", w.Body.String())
+	rev, err := db.Put(t.Context(), &model.Document{ID: localID, Data: map[string]interface{}{"seq": 42}})
+	require.NoError(t, err)
+	require.NotEmpty(t, rev)
 
-	var putResp map[string]interface{}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &putResp))
-	assert.Equal(t, true, putResp["ok"])
-	assert.Equal(t, localID, putResp["id"])
-
-	// GET it back.
-	req = httptest.NewRequest("GET", localPath, nil)
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code, "GET _local: %s", w.Body.String())
-
-	var getResp map[string]interface{}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &getResp))
-	assert.Equal(t, localID, getResp["_id"])
-	assert.Equal(t, float64(42), getResp["seq"])
+	doc, err := db.Get(t.Context(), localID)
+	require.NoError(t, err)
+	assert.Equal(t, localID, doc.ID)
+	assert.Equal(t, float64(42), doc.Data["seq"])
 }
 
-// TestBulkGetWithSlashIDs verifies that _bulk_get works when the JSON body
+// TestBulkGetWithSlashIDs verifies that _bulk_get works when the request
 // contains document IDs with slashes.
 func TestBulkGetWithSlashIDs(t *testing.T) {
-	_, r, cleanup := setupSlashTest(t)
+	_, c, cleanup := setupSlashTest(t)
 	defer cleanup()
+	db := c.DB("testdb")
 
 	docID := "bulk/get/slash/doc"
-	docEncoded := "bulk%2Fget%2Fslash%2Fdoc"
+	_, err := db.Put(t.Context(), &model.Document{ID: docID, Data: map[string]interface{}{"value": "ok"}})
+	require.NoError(t, err)
 
-	// PUT the document.
-	bodyBytes, _ := json.Marshal(map[string]interface{}{"value": "ok"})
-	req := httptest.NewRequest("PUT", "/testdb/"+docEncoded, bytes.NewReader(bodyBytes))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusCreated, w.Code, "PUT: %s", w.Body.String())
-
-	// POST _bulk_get with the slash ID in the JSON body.
-	bulkBody, _ := json.Marshal(map[string]interface{}{
-		"docs": []map[string]interface{}{{"id": docID}},
-	})
-	req = httptest.NewRequest("POST", "/testdb/_bulk_get", bytes.NewReader(bulkBody))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code, "_bulk_get: %s", w.Body.String())
-
-	var bulkResp struct {
-		Results []struct {
-			ID   string                   `json:"id"`
-			Docs []map[string]interface{} `json:"docs"`
-		} `json:"results"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &bulkResp))
-	require.Len(t, bulkResp.Results, 1)
-	assert.Equal(t, docID, bulkResp.Results[0].ID)
-	require.Len(t, bulkResp.Results[0].Docs, 1)
-	okDoc, hasOk := bulkResp.Results[0].Docs[0]["ok"].(map[string]interface{})
-	require.True(t, hasOk, "expected ok field in result doc")
-	assert.Equal(t, docID, okDoc["_id"])
+	docs, err := db.BulkGet(t.Context(), []client.BulkGetRequest{{ID: docID}})
+	require.NoError(t, err)
+	require.Len(t, docs, 1)
+	assert.Equal(t, docID, docs[0].ID)
 }
 
-// TestAllDocsPostKeysWithSlashes verifies that POST _all_docs with a {"keys":[...]}
-// body correctly retrieves documents whose IDs contain slashes.
+// TestAllDocsPostKeysWithSlashes verifies that POST _all_docs with a
+// {"keys":[...]} body correctly retrieves documents whose IDs contain
+// slashes.
 func TestAllDocsPostKeysWithSlashes(t *testing.T) {
-	_, r, cleanup := setupSlashTest(t)
+	_, c, cleanup := setupSlashTest(t)
 	defer cleanup()
+	db := c.DB("testdb")
 
 	docID := "a/b/c"
-	docEncoded := "a%2Fb%2Fc"
+	_, err := db.Put(t.Context(), &model.Document{ID: docID, Data: map[string]interface{}{"hello": "world"}})
+	require.NoError(t, err)
 
-	// PUT the document.
-	bodyBytes, _ := json.Marshal(map[string]interface{}{"hello": "world"})
-	req := httptest.NewRequest("PUT", "/testdb/"+docEncoded, bytes.NewReader(bodyBytes))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusCreated, w.Code, "PUT: %s", w.Body.String())
+	resp, err := db.AllDocs(t.Context(), client.AllDocsQuery{Keys: []string{docID}})
+	require.NoError(t, err)
+	require.Len(t, resp.Rows, 1)
+	assert.Equal(t, docID, resp.Rows[0].ID)
+	assert.Empty(t, resp.Rows[0].Error)
+}
 
-	// POST _all_docs with the slash ID as a key.
-	keysBody, _ := json.Marshal(map[string]interface{}{
-		"keys": []string{docID},
-	})
-	req = httptest.NewRequest("POST", "/testdb/_all_docs", bytes.NewReader(keysBody))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code, "_all_docs POST: %s", w.Body.String())
-
-	var allDocsResp struct {
-		TotalRows int `json:"total_rows"`
-		Rows      []struct {
-			ID    string      `json:"id"`
-			Error string      `json:"error"`
-			Value interface{} `json:"value"`
-		} `json:"rows"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &allDocsResp))
-	require.Len(t, allDocsResp.Rows, 1)
-	assert.Equal(t, docID, allDocsResp.Rows[0].ID)
-	assert.Empty(t, allDocsResp.Rows[0].Error)
+func slashReadAttachment(r *client.AttachmentReader) ([]byte, error) {
+	defer r.Close() //nolint:errcheck
+	return io.ReadAll(r)
 }

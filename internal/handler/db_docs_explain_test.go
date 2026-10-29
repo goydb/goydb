@@ -1,34 +1,25 @@
 package handler
 
 import (
-	"encoding/json"
 	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
+	"github.com/goydb/goydb/pkg/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestExplain_Basic(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
-	body := strings.NewReader(`{"selector":{"name":"Alice"}}`)
-	req := httptest.NewRequest("POST", "/testdb/_explain", body)
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var result map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	result, err := c.DB("testdb").Explain(t.Context(), client.FindQuery{
+		Selector: map[string]interface{}{"name": "Alice"},
+	})
+	require.NoError(t, err)
 
 	assert.Equal(t, "testdb", result["dbname"])
 	assert.NotNil(t, result["index"])
@@ -41,23 +32,19 @@ func TestExplain_Basic(t *testing.T) {
 }
 
 func TestExplain_WithOptions(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
-	body := strings.NewReader(`{"selector":{"age":{"$gt":21}},"limit":10,"skip":5,"fields":["name","age"]}`)
-	req := httptest.NewRequest("POST", "/testdb/_explain", body)
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var result map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	result, err := c.DB("testdb").Explain(t.Context(), client.FindQuery{
+		Selector: map[string]interface{}{"age": map[string]interface{}{"$gt": 21}},
+		Limit:    10,
+		Skip:     5,
+		Fields:   []string{"name", "age"},
+	})
+	require.NoError(t, err)
 
 	assert.Equal(t, float64(10), result["limit"])
 	assert.Equal(t, float64(5), result["skip"])
@@ -68,15 +55,11 @@ func TestExplain_WithOptions(t *testing.T) {
 }
 
 func TestExplain_DBNotFound(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
-	body := strings.NewReader(`{"selector":{"name":"test"}}`)
-	req := httptest.NewRequest("POST", "/nonexistent/_explain", body)
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	_, err := c.DB("nonexistent").Explain(t.Context(), client.FindQuery{
+		Selector: map[string]interface{}{"name": "test"},
+	})
+	assert.Equal(t, http.StatusNotFound, statusCode(t, err, http.StatusOK))
 }

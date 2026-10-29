@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -13,7 +12,7 @@ import (
 )
 
 func TestAllDocsQueries_Basic(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -29,18 +28,16 @@ func TestAllDocsQueries_Basic(t *testing.T) {
 	}
 
 	body := strings.NewReader(`{"queries":[{"limit":1},{"startkey":"b"}]}`)
-	req := httptest.NewRequest("POST", "/testdb/_all_docs/queries", body)
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.DB("testdb").Raw(ctx, http.MethodPost, "/_all_docs/queries", body, map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
 
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var result struct {
 		Results []AllDocsResponse `json:"results"`
 	}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	require.Len(t, result.Results, 2)
 
 	// First query: limit=1
@@ -51,7 +48,7 @@ func TestAllDocsQueries_Basic(t *testing.T) {
 }
 
 func TestAllDocsQueries_WithKeys(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -65,18 +62,16 @@ func TestAllDocsQueries_WithKeys(t *testing.T) {
 	require.NoError(t, err)
 
 	body := strings.NewReader(`{"queries":[{"keys":["doc1","nonexistent"]}]}`)
-	req := httptest.NewRequest("POST", "/testdb/_all_docs/queries", body)
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.DB("testdb").Raw(ctx, http.MethodPost, "/_all_docs/queries", body, map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
 
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var result struct {
 		Results []AllDocsResponse `json:"results"`
 	}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	require.Len(t, result.Results, 1)
 	require.Len(t, result.Results[0].Rows, 2)
 
@@ -85,7 +80,7 @@ func TestAllDocsQueries_WithKeys(t *testing.T) {
 }
 
 func TestDesignDocsQueries_Basic(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -106,18 +101,16 @@ func TestDesignDocsQueries_Basic(t *testing.T) {
 	require.NoError(t, err)
 
 	body := strings.NewReader(`{"queries":[{}]}`)
-	req := httptest.NewRequest("POST", "/testdb/_design_docs/queries", body)
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.DB("testdb").Raw(ctx, http.MethodPost, "/_design_docs/queries", body, map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
 
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var result struct {
 		Results []AllDocsResponse `json:"results"`
 	}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	require.Len(t, result.Results, 1)
 
 	// Should only return design docs, not regular docs

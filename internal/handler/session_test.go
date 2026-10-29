@@ -4,27 +4,24 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/goydb/goydb/pkg/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSessionGet_Anonymous(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, baseURL, cleanup := setupMultiAuthTest(t)
 	defer cleanup()
 
-	req := httptest.NewRequest("GET", "/_session", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	anon, err := client.New(baseURL)
+	require.NoError(t, err)
 
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var result map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	result, err := anon.GetSession(t.Context())
+	require.NoError(t, err)
 
 	userCtx, ok := result["userCtx"].(map[string]interface{})
 	require.True(t, ok, "userCtx must be an object")
@@ -40,18 +37,11 @@ func TestSessionGet_Anonymous(t *testing.T) {
 }
 
 func TestSessionGet_BasicAuth(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
-	req := httptest.NewRequest("GET", "/_session", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var result map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	result, err := c.GetSession(t.Context())
+	require.NoError(t, err)
 
 	userCtx, ok := result["userCtx"].(map[string]interface{})
 	require.True(t, ok)
@@ -64,20 +54,22 @@ func TestSessionGet_BasicAuth(t *testing.T) {
 }
 
 func TestSessionPost_FormBody(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, baseURL, cleanup := setupMultiAuthTest(t)
 	defer cleanup()
 
-	form := url.Values{"name": {"admin"}, "password": {"secret"}}
-	req := httptest.NewRequest("POST", "/_session", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	anon, err := client.New(baseURL)
+	require.NoError(t, err)
 
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.NotEmpty(t, w.Result().Cookies(), "Set-Cookie must be present")
+	form := url.Values{"name": {"admin"}, "password": {"secret"}}
+	resp, err := anon.Raw(t.Context(), http.MethodPost, "/_session", strings.NewReader(form.Encode()), map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.NotEmpty(t, resp.Header.Values("Set-Cookie"), "Set-Cookie must be present")
 
 	var result map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	assert.Equal(t, true, result["ok"])
 	assert.Equal(t, "admin", result["name"])
 	_, hasRoles := result["roles"]
@@ -87,20 +79,22 @@ func TestSessionPost_FormBody(t *testing.T) {
 }
 
 func TestSessionPost_JSONBody(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, baseURL, cleanup := setupMultiAuthTest(t)
 	defer cleanup()
 
-	body, _ := json.Marshal(map[string]string{"name": "admin", "password": "secret"})
-	req := httptest.NewRequest("POST", "/_session", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	anon, err := client.New(baseURL)
+	require.NoError(t, err)
 
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.NotEmpty(t, w.Result().Cookies(), "Set-Cookie must be present")
+	body, _ := json.Marshal(map[string]string{"name": "admin", "password": "secret"})
+	resp, err := anon.Raw(t.Context(), http.MethodPost, "/_session", bytes.NewReader(body), map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.NotEmpty(t, resp.Header.Values("Set-Cookie"), "Set-Cookie must be present")
 
 	var result map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	assert.Equal(t, true, result["ok"])
 	assert.Equal(t, "admin", result["name"])
 	_, hasRoles := result["roles"]
@@ -110,29 +104,27 @@ func TestSessionPost_JSONBody(t *testing.T) {
 }
 
 func TestSessionPost_WrongPassword(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, baseURL, cleanup := setupMultiAuthTest(t)
 	defer cleanup()
 
-	form := url.Values{"name": {"admin"}, "password": {"wrong"}}
-	req := httptest.NewRequest("POST", "/_session", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	anon, err := client.New(baseURL)
+	require.NoError(t, err)
 
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	form := url.Values{"name": {"admin"}, "password": {"wrong"}}
+	resp, err := anon.Raw(t.Context(), http.MethodPost, "/_session", strings.NewReader(form.Encode()), map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
 func TestSessionDelete_NotLoggedIn(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, baseURL, cleanup := setupMultiAuthTest(t)
 	defer cleanup()
 
-	req := httptest.NewRequest("DELETE", "/_session", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	anon, err := client.New(baseURL)
+	require.NoError(t, err)
 
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var result map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
-	assert.Equal(t, true, result["ok"])
+	err = anon.DeleteSession(t.Context())
+	require.NoError(t, err)
 }

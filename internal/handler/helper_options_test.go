@@ -77,11 +77,11 @@ func TestStringOption(t *testing.T) {
 
 func TestParseDocKeyRange(t *testing.T) {
 	tests := []struct {
-		name         string
-		opts         url.Values
-		wantStart    string
-		wantEnd      string
-		wantExcEnd   bool
+		name       string
+		opts       url.Values
+		wantStart  string
+		wantEnd    string
+		wantExcEnd bool
 	}{
 		{
 			"startkey and endkey",

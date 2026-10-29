@@ -155,3 +155,110 @@ func TestChanges_SinceNowWakesUpOnlyWithTheNewDocument(t *testing.T) {
 		t.Fatal("since=now did not return after a document was created")
 	}
 }
+
+// TestWaitForChange_ReturnsImmediatelyWhenAlreadyPast covers the cheap
+// no-wait path: if a qualifying change already exists, WaitForChange must
+// not block at all.
+func TestWaitForChange_ReturnsImmediatelyWhenAlreadyPast(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{ID: "doc1", Data: map[string]interface{}{"n": 1}})
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+	var seq string
+	go func() {
+		defer close(done)
+		seq, err = db.WaitForChange(ctx, "")
+	}()
+
+	select {
+	case <-done:
+		require.NoError(t, err)
+		require.NotEmpty(t, seq)
+	case <-time.After(1 * time.Second):
+		t.Fatal("WaitForChange did not return immediately despite an existing change")
+	}
+}
+
+// TestWaitForChange_WakesUpOnlyWithTheNewDocument mirrors
+// TestChanges_SinceNowWakesUpOnlyWithTheNewDocument: resuming from the
+// sequence of an existing document must wake up (only) on the next new one.
+func TestWaitForChange_WakesUpOnlyWithTheNewDocument(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{ID: "doc1", Data: map[string]interface{}{"n": 1}})
+	require.NoError(t, err)
+
+	docs, _, err := db.Changes(ctx, &model.ChangesOptions{Since: "", Limit: 1000})
+	require.NoError(t, err)
+	require.Len(t, docs, 1)
+	since := strconv.FormatUint(docs[0].LocalSeq, 10)
+
+	type result struct {
+		seq string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		seq, err := db.WaitForChange(ctx, since)
+		done <- result{seq, err}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	_, err = db.PutDocument(ctx, &model.Document{ID: "doc2", Data: map[string]interface{}{"n": 1}})
+	require.NoError(t, err)
+
+	select {
+	case r := <-done:
+		require.NoError(t, r.err)
+		require.True(t, seqGreater(r.seq, since), "returned sequence must be past the given since")
+	case <-time.After(2 * time.Second):
+		t.Fatal("WaitForChange did not return after a document was created")
+	}
+}
+
+// TestWaitForChange_ContextCancellationReturnsPromptly ensures cancelling
+// the caller's context unblocks a pending wait immediately with ctx.Err(),
+// rather than waiting for a change or a timeout.
+func TestWaitForChange_ContextCancellationReturnsPromptly(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	waitCtx, cancel := context.WithCancel(ctx)
+
+	type result struct {
+		seq string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		seq, err := db.WaitForChange(waitCtx, "")
+		done <- result{seq, err}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	select {
+	case r := <-done:
+		require.ErrorIs(t, r.err, context.Canceled)
+		require.Empty(t, r.seq)
+	case <-time.After(2 * time.Second):
+		t.Fatal("WaitForChange did not return promptly after ctx cancellation")
+	}
+}

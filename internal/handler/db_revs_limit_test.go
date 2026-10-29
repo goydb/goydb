@@ -2,9 +2,7 @@ package handler
 
 import (
 	"bytes"
-	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,73 +10,47 @@ import (
 )
 
 func TestRevsLimitGet_Default(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
-	req := httptest.NewRequest("GET", "/testdb/_revs_limit", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var limit int
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&limit))
+	limit, err := c.DB("testdb").GetRevsLimit(t.Context())
+	require.NoError(t, err)
 	assert.Equal(t, 1000, limit)
 }
 
 func TestRevsLimitPut_Valid(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
-	body, _ := json.Marshal(500)
-	req := httptest.NewRequest("PUT", "/testdb/_revs_limit", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var result map[string]bool
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
-	assert.True(t, result["ok"])
+	err = c.DB("testdb").SetRevsLimit(t.Context(), 500)
+	require.NoError(t, err)
 }
 
 func TestRevsLimitGet_AfterPut(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
 	// PUT 500
-	body, _ := json.Marshal(500)
-	req := httptest.NewRequest("PUT", "/testdb/_revs_limit", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
+	err = c.DB("testdb").SetRevsLimit(t.Context(), 500)
+	require.NoError(t, err)
 
 	// GET should now return 500
-	req = httptest.NewRequest("GET", "/testdb/_revs_limit", nil)
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var limit int
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&limit))
+	limit, err := c.DB("testdb").GetRevsLimit(t.Context())
+	require.NoError(t, err)
 	assert.Equal(t, 500, limit)
 }
 
 func TestRevsLimitPut_InvalidBody(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
@@ -96,11 +68,10 @@ func TestRevsLimitPut_InvalidBody(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest("PUT", "/testdb/_revs_limit", bytes.NewReader(tc.body))
-			req.SetBasicAuth("admin", "secret")
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
-			assert.Equal(t, http.StatusBadRequest, w.Code)
+			resp, err := c.DB("testdb").Raw(t.Context(), http.MethodPut, "/_revs_limit", bytes.NewReader(tc.body), map[string]string{"Content-Type": "application/json"})
+			require.NoError(t, err)
+			defer resp.Body.Close() //nolint:errcheck
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 		})
 	}
 }

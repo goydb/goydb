@@ -5,7 +5,6 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-
 )
 
 // SearchCleanup handles POST /{db}/_search_cleanup and POST /{db}/_nouveau_cleanup.
@@ -90,11 +89,11 @@ func (s *SearchInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{ // nolint: errcheck
 		"name": ddocID + "/" + indexName,
 		"search_index": map[string]interface{}{
-			"pending_seq":    0,
-			"doc_del_count":  0,
-			"doc_count":      0,
-			"disk_size":      0,
-			"committed_seq":  0,
+			"pending_seq":     0,
+			"doc_del_count":   0,
+			"doc_count":       0,
+			"disk_size":       0,
+			"committed_seq":   0,
 			"compact_running": false,
 		},
 	})
@@ -142,11 +141,11 @@ func (s *NouveauInfo) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{ // nolint: errcheck
 		"name": ddocID + "/" + indexName,
 		"search_index": map[string]interface{}{
-			"pending_seq":    0,
-			"doc_del_count":  0,
-			"doc_count":      0,
-			"disk_size":      0,
-			"committed_seq":  0,
+			"pending_seq":     0,
+			"doc_del_count":   0,
+			"doc_count":       0,
+			"disk_size":       0,
+			"committed_seq":   0,
 			"compact_running": false,
 		},
 	})

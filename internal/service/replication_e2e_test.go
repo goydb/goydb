@@ -4,17 +4,26 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
+	"net/http/httptest"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gorilla/mux"
+	"github.com/gorilla/sessions"
 	"github.com/goydb/goydb/internal/adapter/logger"
 	"github.com/goydb/goydb/internal/adapter/storage"
+	"github.com/goydb/goydb/internal/handler"
+	"github.com/goydb/goydb/internal/service"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
 	"github.com/goydb/goydb/pkg/replication"
 	"github.com/goydb/goydb/pkg/replicator"
+	"github.com/goydb/goydb/pkg/unixhttp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -576,4 +585,354 @@ func TestE2E_Protocol_AllDocsTotal_ExcludesLocalAndDeleted(t *testing.T) {
 
 	assert.Equal(t, 4, total, "total must exclude tombstone and _local checkpoint")
 	assert.Equal(t, 4, len(rows), "returned rows must exclude tombstone and _local checkpoint")
+}
+
+// setupE2EChain is setupE2E extended to three independent storages, for
+// tests that chain replication across more than one hop (A <-> B <-> C).
+func setupE2EChain(t *testing.T) (storA, storB, storC *storage.Storage, cleanup func()) {
+	dirA, err := os.MkdirTemp(os.TempDir(), "goydb-e2e-chain-a-*")
+	require.NoError(t, err)
+	dirB, err := os.MkdirTemp(os.TempDir(), "goydb-e2e-chain-b-*")
+	require.NoError(t, err)
+	dirC, err := os.MkdirTemp(os.TempDir(), "goydb-e2e-chain-c-*")
+	require.NoError(t, err)
+
+	sA, err := storage.Open(dirA, storage.WithLogger(logger.NewNoLog()))
+	require.NoError(t, err)
+	sB, err := storage.Open(dirB, storage.WithLogger(logger.NewNoLog()))
+	require.NoError(t, err)
+	sC, err := storage.Open(dirC, storage.WithLogger(logger.NewNoLog()))
+	require.NoError(t, err)
+
+	return sA, sB, sC, func() {
+		_ = sA.Close()
+		_ = sB.Close()
+		_ = sC.Close()
+		_ = os.RemoveAll(dirA)
+		_ = os.RemoveAll(dirB)
+		_ = os.RemoveAll(dirC)
+	}
+}
+
+// waitForDoc polls db until a document with the given id appears, then
+// returns it.
+func waitForDoc(t *testing.T, db port.Database, id string) *model.Document {
+	t.Helper()
+	var doc *model.Document
+	require.Eventually(t, func() bool {
+		d, err := db.GetDocument(context.Background(), id)
+		if err != nil || d == nil {
+			return false
+		}
+		doc = d
+		return true
+	}, 8*time.Second, 200*time.Millisecond, "document %q did not appear", id)
+	return doc
+}
+
+// waitForDeleted polls db until the document with the given id is a
+// tombstone (Deleted == true).
+func waitForDeleted(t *testing.T, db port.Database, id string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		d, err := db.GetDocument(context.Background(), id)
+		return err == nil && d != nil && d.Deleted
+	}, 8*time.Second, 200*time.Millisecond, "document %q was not deleted", id)
+}
+
+// startChainReplication launches the four continuous replicators needed for
+// a bidirectional A <-> B <-> C chain (A->B, B->A, B->C, C->B) as goroutines
+// bound to repCtx. peerA/peerB/peerC may be any mix of port.ReplicationPeer
+// implementations (e.g. LocalDB and RemoteClient).
+func startChainReplication(t *testing.T, repCtx context.Context, peerA, peerB, peerC port.ReplicationPeer, nameA, nameB, nameC string) {
+	t.Helper()
+
+	legs := []struct {
+		source, target         port.ReplicationPeer
+		sourceName, targetName string
+	}{
+		{peerA, peerB, nameA, nameB},
+		{peerB, peerA, nameB, nameA},
+		{peerB, peerC, nameB, nameC},
+		{peerC, peerB, nameC, nameB},
+	}
+	for _, leg := range legs {
+		repDoc := &model.ReplicationDoc{Source: leg.sourceName, Target: leg.targetName, Continuous: true}
+		r := replicator.NewReplicator(leg.source, leg.target, repDoc, logger.NewNoLog())
+		go func() {
+			r.Run(repCtx) // nolint: errcheck
+		}()
+	}
+}
+
+// chainCRUDPropagationTest performs Create/Update/Delete operations at both
+// ends of an already-replicating A <-> B <-> C chain and verifies each change
+// propagates through the middle hop (B) all the way to the far end.
+func chainCRUDPropagationTest(t *testing.T, dbA, dbB, dbC port.Database) {
+	t.Helper()
+	ctx := context.Background()
+
+	// 1. Create on A must propagate through B to C.
+	_, err := dbA.PutDocument(ctx, &model.Document{ID: "from-a", Data: map[string]interface{}{"origin": "A"}})
+	require.NoError(t, err)
+	waitForDoc(t, dbB, "from-a")
+	waitForDoc(t, dbC, "from-a")
+
+	// 2. Create on C must propagate through B to A.
+	_, err = dbC.PutDocument(ctx, &model.Document{ID: "from-c", Data: map[string]interface{}{"origin": "C"}})
+	require.NoError(t, err)
+	waitForDoc(t, dbB, "from-c")
+	waitForDoc(t, dbA, "from-c")
+
+	// 3. Update on A must propagate through B to C.
+	docA := waitForDoc(t, dbA, "from-a")
+	docA.Data["updated"] = "by-a"
+	_, err = dbA.PutDocument(ctx, docA)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		d, err := dbB.GetDocument(ctx, "from-a")
+		return err == nil && d != nil && d.Data["updated"] == "by-a"
+	}, 8*time.Second, 200*time.Millisecond, "update on A did not reach B")
+	require.Eventually(t, func() bool {
+		d, err := dbC.GetDocument(ctx, "from-a")
+		return err == nil && d != nil && d.Data["updated"] == "by-a"
+	}, 8*time.Second, 200*time.Millisecond, "update on A did not reach C")
+
+	// 4. Update on C must propagate through B to A.
+	docC := waitForDoc(t, dbC, "from-c")
+	docC.Data["updated"] = "by-c"
+	_, err = dbC.PutDocument(ctx, docC)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		d, err := dbB.GetDocument(ctx, "from-c")
+		return err == nil && d != nil && d.Data["updated"] == "by-c"
+	}, 8*time.Second, 200*time.Millisecond, "update on C did not reach B")
+	require.Eventually(t, func() bool {
+		d, err := dbA.GetDocument(ctx, "from-c")
+		return err == nil && d != nil && d.Data["updated"] == "by-c"
+	}, 8*time.Second, 200*time.Millisecond, "update on C did not reach A")
+
+	// 5. Delete on A must propagate through B to C.
+	docA2, err := dbA.GetDocument(ctx, "from-a")
+	require.NoError(t, err)
+	_, err = dbA.DeleteDocument(ctx, "from-a", docA2.Rev)
+	require.NoError(t, err)
+	waitForDeleted(t, dbB, "from-a")
+	waitForDeleted(t, dbC, "from-a")
+
+	// 6. Delete on C must propagate through B to A.
+	docC2, err := dbC.GetDocument(ctx, "from-c")
+	require.NoError(t, err)
+	_, err = dbC.DeleteDocument(ctx, "from-c", docC2.Rev)
+	require.NoError(t, err)
+	waitForDeleted(t, dbB, "from-c")
+	waitForDeleted(t, dbA, "from-c")
+}
+
+// TestE2E_ChainedBidirectionalReplication_CRUDPropagates chains three
+// independent databases A <-> B <-> C with continuous, bidirectional
+// replication on each link, then performs Create/Update/Delete operations
+// at both ends of the chain (A and C) and verifies each change propagates
+// through the middle hop (B) all the way to the far end.
+func TestE2E_ChainedBidirectionalReplication_CRUDPropagates(t *testing.T) {
+	storA, storB, storC, cleanup := setupE2EChain(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	dbA, err := storA.CreateDatabase(ctx, "dba")
+	require.NoError(t, err)
+	dbB, err := storB.CreateDatabase(ctx, "dbb")
+	require.NoError(t, err)
+	dbC, err := storC.CreateDatabase(ctx, "dbc")
+	require.NoError(t, err)
+
+	peerA := &replication.LocalDB{Storage: storA, DBName: "dba"}
+	peerB := &replication.LocalDB{Storage: storB, DBName: "dbb"}
+	peerC := &replication.LocalDB{Storage: storC, DBName: "dbc"}
+
+	repCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	startChainReplication(t, repCtx, peerA, peerB, peerC, "dba", "dbb", "dbc")
+	chainCRUDPropagationTest(t, dbA, dbB, dbC)
+}
+
+// startRemotePeerServer wraps dbName (living in stor) with a real in-process
+// HTTP server speaking the CouchDB-compatible protocol, and returns a
+// replication.RemoteClient authenticated against it -- so replication to/from
+// this node goes over real HTTP, exactly like replicating against an actual
+// remote CouchDB/goydb server, rather than through the in-process LocalDB
+// shortcut. Modeled on test/couchdb/reference_test.go's startGoydb.
+func startRemotePeerServer(t *testing.T, stor *storage.Storage, dbName string) *replication.RemoteClient {
+	t.Helper()
+	log := logger.NewNoLog()
+
+	r := mux.NewRouter()
+	err := handler.Router{
+		Storage:      stor,
+		SessionStore: sessions.NewCookieStore([]byte("test-secret-32-bytes-long-enough")),
+		Admins:       model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}},
+		Replication:  &service.Replication{Storage: stor, Logger: log},
+		Logger:       log,
+	}.Build(r)
+	require.NoError(t, err)
+
+	ts := httptest.NewServer(r)
+	t.Cleanup(ts.Close)
+
+	u, err := url.Parse(ts.URL)
+	require.NoError(t, err)
+	u.User = url.UserPassword("admin", "secret")
+	u.Path = "/" + dbName
+
+	client, err := replication.NewRemoteClient(u.String(), nil)
+	require.NoError(t, err)
+
+	return client
+}
+
+// startRemoteUnixPeerServer is startRemotePeerServer but reached over a Unix
+// domain socket instead of TCP, proving the same replication-over-HTTP path
+// works identically regardless of transport.
+func startRemoteUnixPeerServer(t *testing.T, stor *storage.Storage, dbName string) *replication.RemoteClient {
+	t.Helper()
+	log := logger.NewNoLog()
+
+	r := mux.NewRouter()
+	err := handler.Router{
+		Storage:      stor,
+		SessionStore: sessions.NewCookieStore([]byte("test-secret-32-bytes-long-enough")),
+		Admins:       model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}},
+		Replication:  &service.Replication{Storage: stor, Logger: log},
+		Logger:       log,
+	}.Build(r)
+	require.NoError(t, err)
+
+	sockPath := filepath.Join(t.TempDir(), "goydb.sock")
+	ts := httptest.NewUnstartedServer(r)
+	require.NoError(t, ts.Listener.Close())
+	ln, err := net.Listen("unix", sockPath)
+	require.NoError(t, err)
+	ts.Listener = ln
+	ts.Start()
+	t.Cleanup(ts.Close)
+
+	rawURL := unixhttp.EncodeURL(sockPath, "/"+dbName)
+	u, err := url.Parse(rawURL)
+	require.NoError(t, err)
+	u.User = url.UserPassword("admin", "secret")
+
+	client, err := replication.NewRemoteClient(u.String(), nil)
+	require.NoError(t, err)
+
+	return client
+}
+
+// TestE2E_ChainedReplication_LocalRemoteLocal_UnixSocket is
+// TestE2E_ChainedReplication_LocalRemoteLocal with the middle hop (B) reached
+// over a Unix domain socket instead of TCP.
+func TestE2E_ChainedReplication_LocalRemoteLocal_UnixSocket(t *testing.T) {
+	storA, storB, storC, cleanup := setupE2EChain(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	dbA, err := storA.CreateDatabase(ctx, "dba")
+	require.NoError(t, err)
+	dbB, err := storB.CreateDatabase(ctx, "dbb")
+	require.NoError(t, err)
+	dbC, err := storC.CreateDatabase(ctx, "dbc")
+	require.NoError(t, err)
+
+	peerA := &replication.LocalDB{Storage: storA, DBName: "dba"}
+	peerB := startRemoteUnixPeerServer(t, storB, "dbb")
+	peerC := &replication.LocalDB{Storage: storC, DBName: "dbc"}
+
+	repCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	startChainReplication(t, repCtx, peerA, peerB, peerC, "dba", "dbb", "dbc")
+	chainCRUDPropagationTest(t, dbA, dbB, dbC)
+}
+
+// TestE2E_ChainedReplication_LocalRemoteLocal is the chain propagation test
+// with B reached over real HTTP (the middle hop is "remote") while A and C
+// stay local.
+func TestE2E_ChainedReplication_LocalRemoteLocal(t *testing.T) {
+	storA, storB, storC, cleanup := setupE2EChain(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	dbA, err := storA.CreateDatabase(ctx, "dba")
+	require.NoError(t, err)
+	dbB, err := storB.CreateDatabase(ctx, "dbb")
+	require.NoError(t, err)
+	dbC, err := storC.CreateDatabase(ctx, "dbc")
+	require.NoError(t, err)
+
+	peerA := &replication.LocalDB{Storage: storA, DBName: "dba"}
+	peerB := startRemotePeerServer(t, storB, "dbb")
+	peerC := &replication.LocalDB{Storage: storC, DBName: "dbc"}
+
+	repCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	startChainReplication(t, repCtx, peerA, peerB, peerC, "dba", "dbb", "dbc")
+	chainCRUDPropagationTest(t, dbA, dbB, dbC)
+}
+
+// TestE2E_ChainedReplication_RemoteLocalLocal is the chain propagation test
+// with A reached over real HTTP (one end of the chain is "remote") while B
+// and C stay local.
+func TestE2E_ChainedReplication_RemoteLocalLocal(t *testing.T) {
+	storA, storB, storC, cleanup := setupE2EChain(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	dbA, err := storA.CreateDatabase(ctx, "dba")
+	require.NoError(t, err)
+	dbB, err := storB.CreateDatabase(ctx, "dbb")
+	require.NoError(t, err)
+	dbC, err := storC.CreateDatabase(ctx, "dbc")
+	require.NoError(t, err)
+
+	peerA := startRemotePeerServer(t, storA, "dba")
+	peerB := &replication.LocalDB{Storage: storB, DBName: "dbb"}
+	peerC := &replication.LocalDB{Storage: storC, DBName: "dbc"}
+
+	repCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	startChainReplication(t, repCtx, peerA, peerB, peerC, "dba", "dbb", "dbc")
+	chainCRUDPropagationTest(t, dbA, dbB, dbC)
+}
+
+// TestE2E_ChainedReplication_LocalLocalRemote is the chain propagation test
+// with C reached over real HTTP (the other end of the chain is "remote")
+// while A and B stay local.
+func TestE2E_ChainedReplication_LocalLocalRemote(t *testing.T) {
+	storA, storB, storC, cleanup := setupE2EChain(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	dbA, err := storA.CreateDatabase(ctx, "dba")
+	require.NoError(t, err)
+	dbB, err := storB.CreateDatabase(ctx, "dbb")
+	require.NoError(t, err)
+	dbC, err := storC.CreateDatabase(ctx, "dbc")
+	require.NoError(t, err)
+
+	peerA := &replication.LocalDB{Storage: storA, DBName: "dba"}
+	peerB := &replication.LocalDB{Storage: storB, DBName: "dbb"}
+	peerC := startRemotePeerServer(t, storC, "dbc")
+
+	repCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	startChainReplication(t, repCtx, peerA, peerB, peerC, "dba", "dbb", "dbc")
+	chainCRUDPropagationTest(t, dbA, dbB, dbC)
 }

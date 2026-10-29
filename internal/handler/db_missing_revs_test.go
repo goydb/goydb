@@ -1,10 +1,8 @@
 package handler
 
 import (
-	"bytes"
-	"encoding/json"
 	"net/http"
-	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/goydb/goydb/pkg/model"
@@ -13,33 +11,26 @@ import (
 )
 
 func TestMissingRevs_AllMissing(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
-	body, _ := json.Marshal(map[string][]string{
+	result, err := c.DB("testdb").MissingRevs(t.Context(), map[string][]string{
 		"doc1": {"1-a"},
 		"doc2": {"1-b"},
 	})
+	require.NoError(t, err)
 
-	req := httptest.NewRequest("POST", "/testdb/_missing_revs", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var result map[string]map[string][]string
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
-	missingRevs := result["missing_revs"]
+	missingRevs, _ := result["missing_revs"].(map[string]interface{})
+	require.NotNil(t, missingRevs)
 	assert.Contains(t, missingRevs, "doc1")
 	assert.Contains(t, missingRevs, "doc2")
 }
 
 func TestMissingRevs_CurrentRevPresent(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -52,25 +43,17 @@ func TestMissingRevs_CurrentRevPresent(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	body, _ := json.Marshal(map[string][]string{
+	result, err := c.DB("testdb").MissingRevs(ctx, map[string][]string{
 		"doc1": {rev},
 	})
+	require.NoError(t, err)
 
-	req := httptest.NewRequest("POST", "/testdb/_missing_revs", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var result map[string]map[string][]string
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
-	missingRevs := result["missing_revs"]
+	missingRevs, _ := result["missing_revs"].(map[string]interface{})
 	assert.NotContains(t, missingRevs, "doc1")
 }
 
 func TestMissingRevs_AncestorRevNotMissing(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -91,25 +74,17 @@ func TestMissingRevs_AncestorRevNotMissing(t *testing.T) {
 	require.NoError(t, err)
 
 	// rev1 is now an ancestor — must not appear in missing_revs.
-	body, _ := json.Marshal(map[string][]string{
+	result, err := c.DB("testdb").MissingRevs(ctx, map[string][]string{
 		"doc1": {rev1},
 	})
+	require.NoError(t, err)
 
-	req := httptest.NewRequest("POST", "/testdb/_missing_revs", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var result map[string]map[string][]string
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
-	missingRevs := result["missing_revs"]
+	missingRevs, _ := result["missing_revs"].(map[string]interface{})
 	assert.NotContains(t, missingRevs, "doc1", "ancestor rev should not be reported as missing")
 }
 
 func TestMissingRevs_ConflictLeafNotMissing(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -130,32 +105,24 @@ func TestMissingRevs_ConflictLeafNotMissing(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	body, _ := json.Marshal(map[string][]string{
+	result, err := c.DB("testdb").MissingRevs(ctx, map[string][]string{
 		"doc1": {"1-aaa", "1-zzz"},
 	})
-	req := httptest.NewRequest("POST", "/testdb/_missing_revs", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	require.NoError(t, err)
 
-	assert.Equal(t, http.StatusOK, w.Code)
-	var result map[string]map[string][]string
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
-	missingRevs := result["missing_revs"]
+	missingRevs, _ := result["missing_revs"].(map[string]interface{})
 	assert.NotContains(t, missingRevs, "doc1", "conflict leaf revs should not appear as missing")
 }
 
 func TestMissingRevs_InvalidJSON(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
-	req := httptest.NewRequest("POST", "/testdb/_missing_revs", bytes.NewReader([]byte("not json")))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	resp, err := c.DB("testdb").Raw(t.Context(), http.MethodPost, "/_missing_revs", strings.NewReader("not json"), map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }

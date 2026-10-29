@@ -1,9 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,27 +8,19 @@ import (
 )
 
 func TestDBUpdates_NoDatabases(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
-	req := httptest.NewRequest("GET", "/_db_updates", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	result, err := c.DBUpdates(t.Context())
+	require.NoError(t, err)
 
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var result struct {
-		Results []interface{} `json:"results"`
-		LastSeq string        `json:"last_seq"`
-	}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
-	assert.Empty(t, result.Results)
-	assert.Equal(t, "0", result.LastSeq)
+	results, _ := result["results"].([]interface{})
+	assert.Empty(t, results)
+	assert.Equal(t, "0", result["last_seq"])
 }
 
 func TestDBUpdates_WithDatabases(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -40,29 +29,19 @@ func TestDBUpdates_WithDatabases(t *testing.T) {
 	_, err = s.CreateDatabase(ctx, "db2")
 	require.NoError(t, err)
 
-	req := httptest.NewRequest("GET", "/_db_updates", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	result, err := c.DBUpdates(ctx)
+	require.NoError(t, err)
 
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var result struct {
-		Results []struct {
-			DBName string `json:"db_name"`
-			Type   string `json:"type"`
-			Seq    string `json:"seq"`
-		} `json:"results"`
-		LastSeq string `json:"last_seq"`
-	}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
-	assert.GreaterOrEqual(t, len(result.Results), 2)
+	results, _ := result["results"].([]interface{})
+	assert.GreaterOrEqual(t, len(results), 2)
 
 	// Check that all events are "updated" type
-	for _, ev := range result.Results {
-		assert.Equal(t, "updated", ev.Type)
-		assert.NotEmpty(t, ev.DBName)
-		assert.NotEmpty(t, ev.Seq)
+	for _, ev := range results {
+		event, _ := ev.(map[string]interface{})
+		require.NotNil(t, event)
+		assert.Equal(t, "updated", event["type"])
+		assert.NotEmpty(t, event["db_name"])
+		assert.NotEmpty(t, event["seq"])
 	}
-	assert.NotEqual(t, "0", result.LastSeq)
+	assert.NotEqual(t, "0", result["last_seq"])
 }

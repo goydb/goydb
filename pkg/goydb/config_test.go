@@ -1,6 +1,7 @@
 package goydb
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/internal/handler"
+	"github.com/goydb/goydb/pkg/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,12 +46,19 @@ func TestBuildDatabase_RouteHookRegistersReachableRoute(t *testing.T) {
 	require.NoError(t, err)
 	defer gdb.Close() //nolint:errcheck
 
-	req := httptest.NewRequest("GET", "/_hooktest/a/b/c", nil)
-	w := httptest.NewRecorder()
-	gdb.Handler.ServeHTTP(w, req)
+	ts := httptest.NewServer(gdb.Handler)
+	defer ts.Close()
+	c, err := client.New(ts.URL)
+	require.NoError(t, err)
 
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, "hooked", w.Body.String())
+	resp, err := c.Raw(t.Context(), http.MethodGet, "/_hooktest/a/b/c", nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, "hooked", string(body))
 }
 
 func TestBuildDatabase_RouteHookErrorFailsBuild(t *testing.T) {
@@ -87,9 +96,14 @@ func TestBuildDatabase_RouteHookWorksWithCORSEnabled(t *testing.T) {
 	require.NoError(t, err)
 	defer gdb.Close() //nolint:errcheck
 
-	req := httptest.NewRequest("GET", "/_hooktest/a/b/c", nil)
-	w := httptest.NewRecorder()
-	gdb.Handler.ServeHTTP(w, req)
+	ts := httptest.NewServer(gdb.Handler)
+	defer ts.Close()
+	c, err := client.New(ts.URL)
+	require.NoError(t, err)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	resp, err := c.Raw(t.Context(), http.MethodGet, "/_hooktest/a/b/c", nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }

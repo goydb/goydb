@@ -5,79 +5,55 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
-	"os"
 	"testing"
 
-	"github.com/gorilla/mux"
-	"github.com/gorilla/sessions"
 	"github.com/goydb/goydb/internal/adapter/logger"
 	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/internal/adapter/view/gojaview"
-	"github.com/goydb/goydb/internal/service"
-	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// setupActiveTasksTest creates a storage + router without starting the task
-// controller, so tasks remain in the queue and are visible in /_active_tasks.
-func setupActiveTasksTest(t *testing.T) (*storage.Storage, *mux.Router, func()) {
+// setupActiveTasksTest creates a storage + client. Note: setupClientTest
+// always runs the background controller.Task goroutine, so a task queued by
+// a test must be observed quickly (its 500ms ticker interval) before it gets
+// processed and removed from the queue.
+func setupActiveTasksTest(t *testing.T) (*storage.Storage, *client.Client, func()) {
 	t.Helper()
 
-	dir, err := os.MkdirTemp(os.TempDir(), "goydb-active-tasks-test-*")
-	require.NoError(t, err)
-
 	log := logger.NewNoLog()
-	s, err := storage.Open(dir,
-		storage.WithLogger(log),
+	c, s, cleanup := setupClientTest(t,
 		storage.WithViewEngine("", gojaview.NewViewServer),
 		storage.WithViewEngine("javascript", gojaview.NewViewServer),
 		storage.WithReducerEngine("", gojaview.NewReducerBuilder(log)),
 		storage.WithReducerEngine("javascript", gojaview.NewReducerBuilder(log)),
 	)
-	require.NoError(t, err)
 
-	store := sessions.NewCookieStore([]byte("test-secret-32-bytes-long-enough"))
-
-	r := mux.NewRouter()
-	err = Router{
-		Storage:      s,
-		SessionStore: store,
-		Admins:       model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}},
-		Replication:  &service.Replication{Storage: s, Logger: log},
-		Logger:       log,
-	}.Build(r)
-	require.NoError(t, err)
-
-	return s, r, func() {
-		_ = s.Close()
-		_ = os.RemoveAll(dir)
-	}
+	return s, c, cleanup
 }
 
-func getActiveTasks(t *testing.T, router *mux.Router) ([]Task, int) {
+func getActiveTasks(t *testing.T, c *client.Client) ([]Task, int) {
 	t.Helper()
-	req := httptest.NewRequest("GET", "/_active_tasks", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(t.Context(), http.MethodGet, "/_active_tasks", nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
 	var tasks []Task
-	if w.Code == http.StatusOK {
-		require.NoError(t, json.NewDecoder(w.Body).Decode(&tasks))
+	if resp.StatusCode == http.StatusOK {
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&tasks))
 	}
-	return tasks, w.Code
+	return tasks, resp.StatusCode
 }
 
 func TestActiveTasks_ViewIndexType(t *testing.T) {
-	s, router, cleanup := setupActiveTasksTest(t)
+	s, c, cleanup := setupActiveTasksTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
 	_, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
-	putDesignDoc(t, router, "testdb", "myddoc", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "myddoc", map[string]interface{}{
 		"views": map[string]interface{}{
 			"myview": map[string]interface{}{
 				"map": "function(doc) { emit(doc._id, 1); }",
@@ -85,7 +61,7 @@ func TestActiveTasks_ViewIndexType(t *testing.T) {
 		},
 	})
 
-	tasks, code := getActiveTasks(t, router)
+	tasks, code := getActiveTasks(t, c)
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, tasks, 1)
 	assert.Equal(t, "indexer", tasks[0].Type)
@@ -94,14 +70,14 @@ func TestActiveTasks_ViewIndexType(t *testing.T) {
 }
 
 func TestActiveTasks_UpdatedOn(t *testing.T) {
-	s, router, cleanup := setupActiveTasksTest(t)
+	s, c, cleanup := setupActiveTasksTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
 	_, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
-	putDesignDoc(t, router, "testdb", "myddoc", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "myddoc", map[string]interface{}{
 		"views": map[string]interface{}{
 			"myview": map[string]interface{}{
 				"map": "function(doc) { emit(doc._id, 1); }",
@@ -109,7 +85,7 @@ func TestActiveTasks_UpdatedOn(t *testing.T) {
 		},
 	})
 
-	tasks, code := getActiveTasks(t, router)
+	tasks, code := getActiveTasks(t, c)
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, tasks, 1)
 	// started_on should be set (non-zero unix timestamp)
@@ -119,10 +95,10 @@ func TestActiveTasks_UpdatedOn(t *testing.T) {
 }
 
 func TestActiveTasks_Empty(t *testing.T) {
-	_, router, cleanup := setupActiveTasksTest(t)
+	_, c, cleanup := setupActiveTasksTest(t)
 	defer cleanup()
 
-	tasks, code := getActiveTasks(t, router)
+	tasks, code := getActiveTasks(t, c)
 	require.Equal(t, http.StatusOK, code)
 	assert.Empty(t, tasks)
 }

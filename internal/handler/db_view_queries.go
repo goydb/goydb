@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
-
 )
 
 // DBViewQueries handles POST /{db}/_design/{ddoc}/_view/{view}/queries.
