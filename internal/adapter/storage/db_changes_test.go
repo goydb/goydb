@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"testing"
 	"time"
@@ -339,6 +340,122 @@ func TestWaitForChange_WakesUpForConflictLeafDelete(t *testing.T) {
 		require.NotEmpty(t, r.seq)
 	case <-time.After(2 * time.Second):
 		t.Fatal("WaitForChange did not wake up for a conflict-leaf delete made through a raw db.Transaction call")
+	}
+}
+
+// TestDatabaseTransaction_RollbackDoesNotNotify is the flip side of the
+// raw-transaction notification fix: when the callback passed to
+// Database.Transaction returns an error -- so bbolt never commits the
+// writes made inside it -- no NotifyDocumentUpdate must fire for them.
+// Database.Transaction only drains the tracked notifications when the
+// transaction's own error is nil; getting that guard wrong would mean
+// listeners fire for documents that were never actually persisted.
+func TestDatabaseTransaction_RollbackDoesNotNotify(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	notified := make(chan string, 10)
+	err = db.AddListener(ctx, port.ChangeListenerFunc(func(_ context.Context, doc *model.Document) error {
+		notified <- doc.ID
+		return nil
+	}))
+	require.NoError(t, err)
+
+	boom := errors.New("boom")
+	err = db.Transaction(ctx, func(tx port.DatabaseTx) error {
+		_, err := tx.PutDocument(ctx, &model.Document{ID: "doc1", Data: map[string]interface{}{"n": 1}})
+		if err != nil {
+			return err
+		}
+		return boom
+	})
+	require.ErrorIs(t, err, boom)
+
+	// The write must not have been persisted...
+	doc, err := db.GetDocument(ctx, "doc1")
+	require.NoError(t, err)
+	require.Nil(t, doc, "a rolled-back transaction's writes must not be persisted")
+
+	// ...and must not have notified listeners either.
+	select {
+	case id := <-notified:
+		t.Fatalf("listener was notified for %q from a transaction that returned an error and rolled back", id)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// Sanity check: the listener registration itself still works for a real,
+	// committed write, so the absence above isn't just a broken listener.
+	_, err = db.PutDocument(ctx, &model.Document{ID: "doc2", Data: map[string]interface{}{"n": 1}})
+	require.NoError(t, err)
+	select {
+	case id := <-notified:
+		require.Equal(t, "doc2", id)
+	case <-time.After(2 * time.Second):
+		t.Fatal("listener never fired for a real, committed write either -- test setup is broken")
+	}
+}
+
+// TestTransaction_DeleteDocument_NotifiesExactlyOnce guards against
+// reintroducing a double notification on tx.DeleteDocument's delegate path:
+// deleting the winning revision delegates to tx.PutDocument, which already
+// tracks its own notification, so DeleteDocument itself must not track the
+// same document a second time.
+//
+// The listener is registered before any write (including the setup write
+// that creates doc1) so there's no ordering race between that write's own
+// asynchronous NotifyDocumentUpdate dispatch and AddListener: every
+// notification this test's write traffic can produce arrives on the
+// channel, in some order, and the test drains the ones it expects before
+// checking that no extra one follows.
+func TestTransaction_DeleteDocument_NotifiesExactlyOnce(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	notified := make(chan *model.Document, 10)
+	err = db.AddListener(ctx, port.ChangeListenerFunc(func(_ context.Context, doc *model.Document) error {
+		if doc.ID == "doc1" {
+			notified <- doc
+		}
+		return nil
+	}))
+	require.NoError(t, err)
+
+	rev, err := db.PutDocument(ctx, &model.Document{ID: "doc1", Data: map[string]interface{}{"n": 1}})
+	require.NoError(t, err)
+
+	// Drain the creation's own notification before testing the delete.
+	select {
+	case <-notified:
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not observe the notification for doc1's creation")
+	}
+
+	err = db.Transaction(ctx, func(tx port.DatabaseTx) error {
+		_, err := tx.DeleteDocument(ctx, "doc1", rev)
+		return err
+	})
+	require.NoError(t, err)
+
+	// Exactly one notification for the delete...
+	select {
+	case <-notified:
+	case <-time.After(2 * time.Second):
+		t.Fatal("delete did not notify listeners")
+	}
+
+	// ...and no extra (duplicate) notification behind it.
+	select {
+	case extra := <-notified:
+		t.Fatalf("got an unexpected extra notification for %q (rev %q) -- delete notified more than once", extra.ID, extra.Rev)
+	case <-time.After(300 * time.Millisecond):
 	}
 }
 
