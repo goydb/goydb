@@ -160,33 +160,41 @@ func (d *Database) WaitForChange(ctx context.Context, since string) (string, err
 		since = "0"
 	}
 
-	latest, err := d.latestChangeSeq()
-	if err != nil {
-		return "", err
-	}
-	if seqGreater(latest, since) {
-		return latest, nil
-	}
-
-	wait := make(chan struct{}, 1)
-	err = d.AddListener(ctx, port.ChangeListenerFunc(func(ctx context.Context, doc *model.Document) error {
-		select {
-		case wait <- struct{}{}:
-		default:
+	for {
+		latest, err := d.latestChangeSeq()
+		if err != nil {
+			return "", err
 		}
-		return context.Canceled // one-shot
-	}))
-	if err != nil {
-		return "", err
-	}
+		if seqGreater(latest, since) {
+			return latest, nil
+		}
 
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	case <-wait:
-	}
+		wait := make(chan struct{}, 1)
+		err = d.AddListener(ctx, port.ChangeListenerFunc(func(ctx context.Context, doc *model.Document) error {
+			select {
+			case wait <- struct{}{}:
+			default:
+			}
+			return context.Canceled // one-shot
+		}))
+		if err != nil {
+			return "", err
+		}
 
-	// Recheck rather than trusting the single waking document: multiple
-	// changes can coalesce between the wakeup and this point.
-	return d.latestChangeSeq()
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-wait:
+		}
+
+		// Recheck rather than trusting the single waking document: multiple
+		// changes can coalesce between the wakeup and this point. The wake
+		// itself can also be spurious: NotifyDocumentUpdate dispatches to
+		// listeners from an asynchronous goroutine with no ordering
+		// guarantee against AddListener, so an *earlier* write's
+		// notification can still be in flight and land on this freshly
+		// registered listener. If the recheck shows nothing past `since`
+		// yet, loop and wait again instead of returning a stale sequence --
+		// mirroring Database.Changes' longpoll retry for the same race.
+	}
 }

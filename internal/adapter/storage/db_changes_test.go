@@ -2,11 +2,14 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/port"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -225,6 +228,324 @@ func TestWaitForChange_WakesUpOnlyWithTheNewDocument(t *testing.T) {
 		require.True(t, seqGreater(r.seq, since), "returned sequence must be past the given since")
 	case <-time.After(2 * time.Second):
 		t.Fatal("WaitForChange did not return after a document was created")
+	}
+}
+
+// TestWaitForChange_WakesUpForRawTransactionWrite covers writes made through
+// a caller-opened db.Transaction/port.DatabaseTx (as pkg/replication.LocalDB
+// .BulkDocs and the attachment write paths do) rather than through the
+// top-level PutDocument convenience method. Database.Transaction must
+// announce every document written this way too, or a concurrent
+// WaitForChange caller never wakes up even though the write is fully
+// persisted and visible to ordinary reads.
+func TestWaitForChange_WakesUpForRawTransactionWrite(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	type result struct {
+		seq string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		seq, err := db.WaitForChange(ctx, "")
+		done <- result{seq, err}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	err = db.Transaction(ctx, func(tx port.DatabaseTx) error {
+		_, err := tx.PutDocument(ctx, &model.Document{ID: "doc1", Data: map[string]interface{}{"n": 1}})
+		return err
+	})
+	require.NoError(t, err)
+
+	select {
+	case r := <-done:
+		require.NoError(t, r.err)
+		require.NotEmpty(t, r.seq)
+	case <-time.After(2 * time.Second):
+		t.Fatal("WaitForChange did not wake up for a document written through a raw db.Transaction/port.DatabaseTx call")
+	}
+
+	// GetDocument must agree: the write landed regardless of notification.
+	doc, err := db.GetDocument(ctx, "doc1")
+	require.NoError(t, err)
+	require.NotNil(t, doc)
+}
+
+// TestWaitForChange_WakesUpForConflictLeafDelete covers tx.DeleteDocument's
+// conflict-leaf branch specifically: deleting a non-winning leaf revision
+// builds a tombstone without delegating to tx.PutDocument (unlike deleting
+// the winning revision), so it needs its own notification tracking. This is
+// the one path the BulkDocs/attachment regression tests don't exercise. The
+// delete is made through a raw db.Transaction/port.DatabaseTx call -- not
+// the top-level Database.DeleteDocument, which already notified
+// unconditionally before this fix and so wouldn't catch a regression here.
+func TestWaitForChange_WakesUpForConflictLeafDelete(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	// Create two conflicting leaves for doc1 via PutDocumentForReplication
+	// (new_edits=false), mirroring how replication produces conflicts.
+	err = db.PutDocumentForReplication(ctx, &model.Document{
+		ID: "doc1", Rev: "1-aaa", Data: map[string]interface{}{"_id": "doc1", "_rev": "1-aaa"},
+	})
+	require.NoError(t, err)
+	err = db.PutDocumentForReplication(ctx, &model.Document{
+		ID: "doc1", Rev: "1-zzz", Data: map[string]interface{}{"_id": "doc1", "_rev": "1-zzz"},
+	})
+	require.NoError(t, err)
+
+	leaves, err := db.GetLeaves(ctx, "doc1")
+	require.NoError(t, err)
+	require.Len(t, leaves, 2, "test setup assumption: doc1 should have two conflicting leaves")
+
+	winner, err := db.GetDocument(ctx, "doc1")
+	require.NoError(t, err)
+	nonWinnerRev := "1-aaa"
+	if winner.Rev == nonWinnerRev {
+		nonWinnerRev = "1-zzz"
+	}
+
+	since, err := db.WaitForChange(ctx, "")
+	require.NoError(t, err)
+
+	type result struct {
+		seq string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		seq, err := db.WaitForChange(ctx, since)
+		done <- result{seq, err}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	err = db.Transaction(ctx, func(tx port.DatabaseTx) error {
+		_, err := tx.DeleteDocument(ctx, "doc1", nonWinnerRev)
+		return err
+	})
+	require.NoError(t, err)
+
+	select {
+	case r := <-done:
+		require.NoError(t, r.err)
+		require.NotEmpty(t, r.seq)
+	case <-time.After(2 * time.Second):
+		t.Fatal("WaitForChange did not wake up for a conflict-leaf delete made through a raw db.Transaction call")
+	}
+}
+
+// TestDatabaseTransaction_RollbackDoesNotNotify is the flip side of the
+// raw-transaction notification fix: when the callback passed to
+// Database.Transaction returns an error -- so bbolt never commits the
+// writes made inside it -- no NotifyDocumentUpdate must fire for them.
+// Database.Transaction only drains the tracked notifications when the
+// transaction's own error is nil; getting that guard wrong would mean
+// listeners fire for documents that were never actually persisted.
+func TestDatabaseTransaction_RollbackDoesNotNotify(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	notified := make(chan string, 10)
+	err = db.AddListener(ctx, port.ChangeListenerFunc(func(_ context.Context, doc *model.Document) error {
+		notified <- doc.ID
+		return nil
+	}))
+	require.NoError(t, err)
+
+	boom := errors.New("boom")
+	err = db.Transaction(ctx, func(tx port.DatabaseTx) error {
+		_, err := tx.PutDocument(ctx, &model.Document{ID: "doc1", Data: map[string]interface{}{"n": 1}})
+		if err != nil {
+			return err
+		}
+		return boom
+	})
+	require.ErrorIs(t, err, boom)
+
+	// The write must not have been persisted...
+	doc, err := db.GetDocument(ctx, "doc1")
+	require.NoError(t, err)
+	require.Nil(t, doc, "a rolled-back transaction's writes must not be persisted")
+
+	// ...and must not have notified listeners either.
+	select {
+	case id := <-notified:
+		t.Fatalf("listener was notified for %q from a transaction that returned an error and rolled back", id)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// Sanity check: the listener registration itself still works for a real,
+	// committed write, so the absence above isn't just a broken listener.
+	_, err = db.PutDocument(ctx, &model.Document{ID: "doc2", Data: map[string]interface{}{"n": 1}})
+	require.NoError(t, err)
+	select {
+	case id := <-notified:
+		require.Equal(t, "doc2", id)
+	case <-time.After(2 * time.Second):
+		t.Fatal("listener never fired for a real, committed write either -- test setup is broken")
+	}
+}
+
+// TestTransaction_DeleteDocument_NotifiesExactlyOnce guards against
+// reintroducing a double notification on tx.DeleteDocument's delegate path:
+// deleting the winning revision delegates to tx.PutDocument, which already
+// tracks its own notification, so DeleteDocument itself must not track the
+// same document a second time.
+//
+// The listener is registered before any write (including the setup write
+// that creates doc1) so there's no ordering race between that write's own
+// asynchronous NotifyDocumentUpdate dispatch and AddListener: every
+// notification this test's write traffic can produce arrives on the
+// channel, in some order, and the test drains the ones it expects before
+// checking that no extra one follows.
+func TestTransaction_DeleteDocument_NotifiesExactlyOnce(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	notified := make(chan *model.Document, 10)
+	err = db.AddListener(ctx, port.ChangeListenerFunc(func(_ context.Context, doc *model.Document) error {
+		if doc.ID == "doc1" {
+			notified <- doc
+		}
+		return nil
+	}))
+	require.NoError(t, err)
+
+	rev, err := db.PutDocument(ctx, &model.Document{ID: "doc1", Data: map[string]interface{}{"n": 1}})
+	require.NoError(t, err)
+
+	// Drain the creation's own notification before testing the delete.
+	select {
+	case <-notified:
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not observe the notification for doc1's creation")
+	}
+
+	err = db.Transaction(ctx, func(tx port.DatabaseTx) error {
+		_, err := tx.DeleteDocument(ctx, "doc1", rev)
+		return err
+	})
+	require.NoError(t, err)
+
+	// Exactly one notification for the delete...
+	select {
+	case <-notified:
+	case <-time.After(2 * time.Second):
+		t.Fatal("delete did not notify listeners")
+	}
+
+	// ...and no extra (duplicate) notification behind it.
+	select {
+	case extra := <-notified:
+		t.Fatalf("got an unexpected extra notification for %q (rev %q) -- delete notified more than once", extra.ID, extra.Rev)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// TestDatabaseTransaction_EmptyTransactionDoesNotNotify covers the zero-write
+// edge case: a Transaction callback that succeeds without writing or
+// deleting any document (e.g. a read-only lookup, or a no-op branch in a
+// bulk operation) must not notify listeners at all -- tx.notifications
+// should simply stay nil/empty, not panic or spuriously fire.
+func TestDatabaseTransaction_EmptyTransactionDoesNotNotify(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	notified := make(chan string, 10)
+	err = db.AddListener(ctx, port.ChangeListenerFunc(func(_ context.Context, doc *model.Document) error {
+		notified <- doc.ID
+		return nil
+	}))
+	require.NoError(t, err)
+
+	err = db.Transaction(ctx, func(tx port.DatabaseTx) error {
+		_, err := tx.GetDocument(ctx, "does-not-exist")
+		return err
+	})
+	require.NoError(t, err)
+
+	select {
+	case id := <-notified:
+		t.Fatalf("listener was notified for %q from a transaction that wrote nothing", id)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// TestDatabaseTransaction_NotifiesEachWriteToSameDocumentInOneTransaction
+// covers writing the same document ID twice within a single transaction
+// (e.g. a bulk operation that happens to touch one ID more than once): both
+// writes are real, successive edits, so both must notify -- the
+// accumulation in Transaction.notifications must not dedupe by document ID.
+func TestDatabaseTransaction_NotifiesEachWriteToSameDocumentInOneTransaction(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	notified := make(chan *model.Document, 10)
+	err = db.AddListener(ctx, port.ChangeListenerFunc(func(_ context.Context, doc *model.Document) error {
+		if doc.ID == "doc1" {
+			notified <- doc
+		}
+		return nil
+	}))
+	require.NoError(t, err)
+
+	err = db.Transaction(ctx, func(tx port.DatabaseTx) error {
+		doc := &model.Document{ID: "doc1", Data: map[string]interface{}{"n": 1}}
+		if _, err := tx.PutDocument(ctx, doc); err != nil {
+			return err
+		}
+		// doc.Rev now holds the first write's generated revision. Reuse it
+		// directly rather than reading it back via tx.GetDocument: bbolt
+		// defers writes to a separate commit phase, so they aren't visible
+		// to reads within the same transaction (see PutDocumentForReplication's
+		// comment on this same quirk).
+		_, err := tx.PutDocument(ctx, &model.Document{ID: "doc1", Rev: doc.Rev, Data: map[string]interface{}{"n": 2}})
+		return err
+	})
+	require.NoError(t, err)
+
+	var revs []string
+	for i := 0; i < 2; i++ {
+		select {
+		case doc := <-notified:
+			revs = append(revs, doc.Rev)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("only got %d of 2 expected notifications", i)
+		}
+	}
+	require.Len(t, revs, 2)
+	assert.NotEqual(t, revs[0], revs[1], "the two writes produced different revisions and both must be reported")
+
+	select {
+	case extra := <-notified:
+		t.Fatalf("got an unexpected 3rd notification for doc1 (rev %q)", extra.Rev)
+	case <-time.After(300 * time.Millisecond):
 	}
 }
 

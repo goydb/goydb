@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/goydb/goydb/internal/adapter/logger"
 	"github.com/goydb/goydb/internal/adapter/storage"
@@ -201,6 +203,146 @@ func TestLocalDB_BulkDocs_NewEditsFalse(t *testing.T) {
 	doc, err := l.GetDoc(ctx, "doc1", false, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "1-abc", doc.Rev)
+}
+
+// TestLocalDB_BulkDocs_WakesUpWaitForChange covers the bug where BulkDocs
+// writes documents through a raw db.Transaction/port.DatabaseTx call,
+// persisting them correctly but never announcing them to registered change
+// listeners -- so a concurrent db.WaitForChange call would never wake up for
+// a BulkDocs-written document, even though GetDocument sees it immediately.
+func TestLocalDB_BulkDocs_WakesUpWaitForChange(t *testing.T) {
+	s, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	type result struct {
+		seq string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		seq, err := db.WaitForChange(ctx, "")
+		done <- result{seq, err}
+	}()
+
+	// Give the goroutine above a chance to actually register its listener
+	// before writing: without this, on a slow enough runner the write (and
+	// its one-shot notification) can land before WaitForChange gets there,
+	// and since nothing else writes afterward, it would then wait forever
+	// (observed as a flaky timeout on CI's sqlite build-tag job).
+	time.Sleep(100 * time.Millisecond)
+
+	l := &LocalDB{Storage: s, DBName: "testdb"}
+	docs := []*model.Document{
+		{ID: "doc1", Rev: "1-abc", Data: map[string]interface{}{"_id": "doc1", "_rev": "1-abc", "v": 1}},
+	}
+	err = l.BulkDocs(ctx, docs, false)
+	require.NoError(t, err)
+
+	select {
+	case r := <-done:
+		require.NoError(t, r.err)
+		require.NotEmpty(t, r.seq)
+	case <-time.After(2 * time.Second):
+		t.Fatal("WaitForChange did not wake up for a document written via BulkDocs")
+	}
+}
+
+// TestLocalDB_BulkDocs_NotifiesForEveryDocument guards against a regression
+// where only the first (or last) document of a multi-document BulkDocs batch
+// gets tracked for notification instead of all of them.
+func TestLocalDB_BulkDocs_NotifiesForEveryDocument(t *testing.T) {
+	s, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	var mu sync.Mutex
+	seen := make(map[string]bool)
+	err = db.AddListener(ctx, port.ChangeListenerFunc(func(_ context.Context, doc *model.Document) error {
+		mu.Lock()
+		seen[doc.ID] = true
+		mu.Unlock()
+		return nil
+	}))
+	require.NoError(t, err)
+
+	l := &LocalDB{Storage: s, DBName: "testdb"}
+	docs := []*model.Document{
+		{ID: "doc1", Rev: "1-aaa", Data: map[string]interface{}{"_id": "doc1", "_rev": "1-aaa"}},
+		{ID: "doc2", Rev: "1-bbb", Data: map[string]interface{}{"_id": "doc2", "_rev": "1-bbb"}},
+		{ID: "doc3", Rev: "1-ccc", Data: map[string]interface{}{"_id": "doc3", "_rev": "1-ccc"}},
+	}
+	err = l.BulkDocs(ctx, docs, false)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return seen["doc1"] && seen["doc2"] && seen["doc3"]
+	}, 2*time.Second, 10*time.Millisecond, "every document in the batch should notify listeners, not just one")
+}
+
+// TestLocalDB_BulkDocs_PartialFailureNotifiesNothing covers an edge value
+// specific to LocalDB.BulkDocs (unlike the HTTP _bulk_docs handler, which
+// swallows per-doc errors and commits whatever succeeded): BulkDocs returns
+// the first per-doc error immediately from its Transaction callback, so
+// bbolt rolls back the *entire* batch -- including documents before the
+// failing one that would otherwise have succeeded on their own. Those
+// earlier documents must be neither persisted nor notified.
+func TestLocalDB_BulkDocs_PartialFailureNotifiesNothing(t *testing.T) {
+	s, cleanup := setupTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	// Register the listener before any write (including this setup write),
+	// so there's no ordering race between the setup write's own
+	// asynchronous NotifyDocumentUpdate dispatch and AddListener: drain its
+	// one expected notification before testing the batch below.
+	notified := make(chan string, 10)
+	err = db.AddListener(ctx, port.ChangeListenerFunc(func(_ context.Context, doc *model.Document) error {
+		notified <- doc.ID
+		return nil
+	}))
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{ID: "existing", Data: map[string]interface{}{"n": 1}})
+	require.NoError(t, err)
+	select {
+	case <-notified:
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not observe the notification for the setup document")
+	}
+
+	l := &LocalDB{Storage: s, DBName: "testdb"}
+	docs := []*model.Document{
+		// Would succeed on its own: a genuinely new document.
+		{ID: "newdoc", Data: map[string]interface{}{"n": 1}},
+		// Fails: wrong revision for an existing document -> conflict.
+		{ID: "existing", Rev: "1-wrong", Data: map[string]interface{}{"n": 2}},
+	}
+	err = l.BulkDocs(ctx, docs, true)
+	require.Error(t, err, "the batch must fail overall since one of its documents conflicts")
+
+	// "newdoc" must not have been persisted...
+	doc, err := db.GetDocument(ctx, "newdoc")
+	require.NoError(t, err)
+	require.Nil(t, doc, "a document from a rolled-back batch must not be persisted, even if it would have succeeded alone")
+
+	// ...and must not have notified listeners either.
+	select {
+	case id := <-notified:
+		t.Fatalf("listener was notified for %q from a batch that failed and rolled back", id)
+	case <-time.After(300 * time.Millisecond):
+	}
 }
 
 func TestLocalDB_GetDoc(t *testing.T) {
