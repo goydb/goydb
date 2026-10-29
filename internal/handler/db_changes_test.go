@@ -441,6 +441,37 @@ func TestDBChanges_Since(t *testing.T) {
 	assert.Equal(t, "doc2", result2.Results[0].ID)
 }
 
+func TestDBChanges_Since_LimitedEmptyPoll(t *testing.T) {
+	s, c, cleanup := setupChangesTest(t)
+	defer cleanup()
+
+	ctx := t.Context()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	_, err = db.PutDocument(ctx, &model.Document{
+		ID:   "doc1",
+		Data: map[string]interface{}{"value": 1},
+	})
+	require.NoError(t, err)
+
+	result1, err := c.DB("testdb").Changes(ctx, &model.ChangesOptions{Feed: "normal"})
+	require.NoError(t, err)
+	since := result1.LastSeq
+
+	// A poll from the current (latest) sequence with a nonzero limit and no
+	// new documents must echo back `since` as `last_seq`, not regress to "0".
+	result2, err := c.DB("testdb").Changes(ctx, &model.ChangesOptions{
+		Feed:  "normal",
+		Since: since,
+		Limit: 100,
+	})
+	require.NoError(t, err)
+
+	assert.Empty(t, result2.Results)
+	assert.Equal(t, since, result2.LastSeq)
+}
+
 func TestDBChanges_Deleted(t *testing.T) {
 	s, c, cleanup := setupChangesTest(t)
 	defer cleanup()
