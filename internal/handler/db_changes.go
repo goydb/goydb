@@ -148,7 +148,7 @@ func (s *DBChanges) handleNormalFeed(w http.ResponseWriter, r *http.Request, db 
 		_, _ = fmt.Fprintln(w, "")
 	}
 
-	var lastSeq uint64
+	lastSeq, _ := strconv.ParseUint(options.Since, 10, 64)
 	for i, doc := range changes {
 		if lastSeq < doc.LocalSeq {
 			lastSeq = doc.LocalSeq
@@ -181,10 +181,6 @@ func (s *DBChanges) handleNormalFeed(w http.ResponseWriter, r *http.Request, db 
 		if i < len(changes)-1 {
 			_, _ = fmt.Fprint(w, `,`)
 		}
-	}
-
-	if options.Limit == 0 && lastSeq == 0 {
-		lastSeq, _ = strconv.ParseUint(options.Since, 10, 64)
 	}
 
 	_, _ = fmt.Fprintln(w, `],`)
