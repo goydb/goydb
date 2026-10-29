@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
+	"github.com/goydb/goydb/pkg/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,28 +17,25 @@ import (
 // helpers
 // ---------------------------------------------------------------------------
 
-func putDoc(t *testing.T, router http.Handler, path string, body interface{}) (code int, result map[string]interface{}) {
+func putDoc(t *testing.T, c *client.Client, path string, body interface{}) (code int, result map[string]interface{}) {
 	t.Helper()
 	b, err := json.Marshal(body)
 	require.NoError(t, err)
-	req := httptest.NewRequest("PUT", path, bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(t.Context(), http.MethodPut, path, bytes.NewReader(b), map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
 	result = map[string]interface{}{}
-	_ = json.NewDecoder(w.Body).Decode(&result)
-	return w.Code, result
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	return resp.StatusCode, result
 }
 
-func getAttachment(t *testing.T, router http.Handler, path string) (code int, body string) {
+func getAttachment(t *testing.T, c *client.Client, path string) (code int, body string) {
 	t.Helper()
-	req := httptest.NewRequest("GET", path, nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	raw, _ := io.ReadAll(w.Body)
-	return w.Code, string(raw)
+	resp, err := c.Raw(t.Context(), http.MethodGet, path, nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+	raw, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(raw)
 }
 
 // ---------------------------------------------------------------------------
@@ -46,7 +43,7 @@ func getAttachment(t *testing.T, router http.Handler, path string) (code int, bo
 // ---------------------------------------------------------------------------
 
 func TestPutDoc_InlineBase64_SingleAttachment(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -56,7 +53,7 @@ func TestPutDoc_InlineBase64_SingleAttachment(t *testing.T) {
 	content := "hello attachment"
 	b64 := base64.StdEncoding.EncodeToString([]byte(content))
 
-	code, result := putDoc(t, router, "/testdb/doc1", map[string]interface{}{
+	code, result := putDoc(t, c, "/testdb/doc1", map[string]interface{}{
 		"_id":   "doc1",
 		"hello": "world",
 		"_attachments": map[string]interface{}{
@@ -72,13 +69,13 @@ func TestPutDoc_InlineBase64_SingleAttachment(t *testing.T) {
 	assert.Equal(t, "doc1", result["id"])
 
 	// Verify attachment is retrievable.
-	attCode, attBody := getAttachment(t, router, "/testdb/doc1/note.txt")
+	attCode, attBody := getAttachment(t, c, "/testdb/doc1/note.txt")
 	assert.Equal(t, http.StatusOK, attCode)
 	assert.Equal(t, content, attBody)
 }
 
 func TestPutDoc_InlineBase64_MultipleAttachments(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -98,7 +95,7 @@ func TestPutDoc_InlineBase64_MultipleAttachments(t *testing.T) {
 		}
 	}
 
-	code, result := putDoc(t, router, "/testdb/doc1", map[string]interface{}{
+	code, result := putDoc(t, c, "/testdb/doc1", map[string]interface{}{
 		"_id":          "doc1",
 		"_attachments": atts,
 	})
@@ -107,21 +104,21 @@ func TestPutDoc_InlineBase64_MultipleAttachments(t *testing.T) {
 	assert.Equal(t, true, result["ok"])
 
 	for name, content := range files {
-		attCode, attBody := getAttachment(t, router, "/testdb/doc1/"+name)
+		attCode, attBody := getAttachment(t, c, "/testdb/doc1/"+name)
 		assert.Equal(t, http.StatusOK, attCode, "attachment %s should exist", name)
 		assert.Equal(t, content, attBody, "attachment %s content mismatch", name)
 	}
 }
 
 func TestPutDoc_InlineBase64_InvalidBase64(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
 	_, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
-	code, _ := putDoc(t, router, "/testdb/doc1", map[string]interface{}{
+	code, _ := putDoc(t, c, "/testdb/doc1", map[string]interface{}{
 		"_id": "doc1",
 		"_attachments": map[string]interface{}{
 			"bad.txt": map[string]interface{}{
@@ -137,7 +134,7 @@ func TestPutDoc_InlineBase64_InvalidBase64(t *testing.T) {
 func TestPutDoc_InlineBase64_StubAttachmentsIgnored(t *testing.T) {
 	// An _attachments entry with no "data" key is a stub reference and must
 	// not cause an error or a spurious write.
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -146,7 +143,7 @@ func TestPutDoc_InlineBase64_StubAttachmentsIgnored(t *testing.T) {
 
 	// Step 1: create doc with a real attachment via inline base64.
 	content := "original content"
-	code1, result1 := putDoc(t, router, "/testdb/doc1", map[string]interface{}{
+	code1, result1 := putDoc(t, c, "/testdb/doc1", map[string]interface{}{
 		"_id": "doc1",
 		"_attachments": map[string]interface{}{
 			"note.txt": map[string]interface{}{
@@ -161,7 +158,7 @@ func TestPutDoc_InlineBase64_StubAttachmentsIgnored(t *testing.T) {
 	// Step 2: PUT the doc again with a stub _attachments entry and no "data" —
 	// this simulates a replication client sending back the existing metadata.
 	// Must not error or overwrite the attachment.
-	code2, _ := putDoc(t, router, "/testdb/doc1",
+	code2, _ := putDoc(t, c, "/testdb/doc1",
 		map[string]interface{}{
 			"_id":  "doc1",
 			"_rev": rev,
@@ -179,14 +176,14 @@ func TestPutDoc_InlineBase64_StubAttachmentsIgnored(t *testing.T) {
 }
 
 func TestPutDoc_NoAttachments_StillWorks(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
 	_, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
-	code, result := putDoc(t, router, "/testdb/doc1", map[string]interface{}{
+	code, result := putDoc(t, c, "/testdb/doc1", map[string]interface{}{
 		"_id":  "doc1",
 		"name": "plain doc",
 	})
@@ -199,7 +196,10 @@ func TestPutDoc_NoAttachments_StillWorks(t *testing.T) {
 // multipart/related tests
 // ---------------------------------------------------------------------------
 
-func buildMultipart(boundary string, parts []struct{ headers map[string]string; body string }) []byte {
+func buildMultipart(boundary string, parts []struct {
+	headers map[string]string
+	body    string
+}) []byte {
 	var buf bytes.Buffer
 	for _, p := range parts {
 		buf.WriteString("--" + boundary + "\r\n")
@@ -214,20 +214,18 @@ func buildMultipart(boundary string, parts []struct{ headers map[string]string; 
 	return buf.Bytes()
 }
 
-func putMultipart(t *testing.T, router http.Handler, path, boundary string, body []byte) (code int, result map[string]interface{}) {
+func putMultipart(t *testing.T, c *client.Client, path, boundary string, body []byte) (code int, result map[string]interface{}) {
 	t.Helper()
-	req := httptest.NewRequest("PUT", path, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "multipart/related; boundary="+boundary)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(t.Context(), http.MethodPut, path, bytes.NewReader(body), map[string]string{"Content-Type": "multipart/related; boundary=" + boundary})
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
 	result = map[string]interface{}{}
-	_ = json.NewDecoder(w.Body).Decode(&result)
-	return w.Code, result
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	return resp.StatusCode, result
 }
 
 func TestPutDoc_Multipart_SingleAttachment(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -252,19 +250,19 @@ func TestPutDoc_Multipart_SingleAttachment(t *testing.T) {
 		},
 	})
 
-	code, result := putMultipart(t, router, "/testdb/doc2", boundary, body)
+	code, result := putMultipart(t, c, "/testdb/doc2", boundary, body)
 
 	require.Equal(t, http.StatusCreated, code)
 	assert.Equal(t, true, result["ok"])
 	assert.Equal(t, "doc2", result["id"])
 
-	attCode, attBody := getAttachment(t, router, "/testdb/doc2/note.txt")
+	attCode, attBody := getAttachment(t, c, "/testdb/doc2/note.txt")
 	assert.Equal(t, http.StatusOK, attCode)
 	assert.Equal(t, "hello multipart", attBody)
 }
 
 func TestPutDoc_Multipart_MultipleAttachments(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -296,23 +294,23 @@ func TestPutDoc_Multipart_MultipleAttachments(t *testing.T) {
 		},
 	})
 
-	code, result := putMultipart(t, router, "/testdb/doc3", boundary, body)
+	code, result := putMultipart(t, c, "/testdb/doc3", boundary, body)
 
 	require.Equal(t, http.StatusCreated, code)
 	assert.Equal(t, true, result["ok"])
 
-	alphaCode, alphaBody := getAttachment(t, router, "/testdb/doc3/alpha.txt")
+	alphaCode, alphaBody := getAttachment(t, c, "/testdb/doc3/alpha.txt")
 	assert.Equal(t, http.StatusOK, alphaCode)
 	assert.Equal(t, "alpha content", alphaBody)
 
-	betaCode, betaBody := getAttachment(t, router, "/testdb/doc3/beta.txt")
+	betaCode, betaBody := getAttachment(t, c, "/testdb/doc3/beta.txt")
 	assert.Equal(t, http.StatusOK, betaCode)
 	assert.Equal(t, "beta content", betaBody)
 }
 
 func TestPutDoc_Multipart_DocIDFromURL(t *testing.T) {
 	// _id absent from JSON body — falls back to URL path variable.
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -337,18 +335,18 @@ func TestPutDoc_Multipart_DocIDFromURL(t *testing.T) {
 		},
 	})
 
-	code, result := putMultipart(t, router, "/testdb/docFromURL", boundary, body)
+	code, result := putMultipart(t, c, "/testdb/docFromURL", boundary, body)
 
 	require.Equal(t, http.StatusCreated, code)
 	assert.Equal(t, "docFromURL", result["id"])
 
-	attCode, attBody := getAttachment(t, router, "/testdb/docFromURL/file.txt")
+	attCode, attBody := getAttachment(t, c, "/testdb/docFromURL/file.txt")
 	assert.Equal(t, http.StatusOK, attCode)
 	assert.Equal(t, "url-id content", attBody)
 }
 
 func TestPutDoc_Multipart_InvalidJSON(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -366,13 +364,13 @@ func TestPutDoc_Multipart_InvalidJSON(t *testing.T) {
 		},
 	})
 
-	code, _ := putMultipart(t, router, "/testdb/doc1", boundary, body)
+	code, _ := putMultipart(t, c, "/testdb/doc1", boundary, body)
 	assert.Equal(t, http.StatusBadRequest, code)
 }
 
 func TestPutDoc_Multipart_NoAttachments(t *testing.T) {
 	// JSON-only multipart (no attachment parts) is valid.
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -390,7 +388,7 @@ func TestPutDoc_Multipart_NoAttachments(t *testing.T) {
 		},
 	})
 
-	code, result := putMultipart(t, router, "/testdb/docNoAtts", boundary, body)
+	code, result := putMultipart(t, c, "/testdb/docNoAtts", boundary, body)
 
 	require.Equal(t, http.StatusCreated, code)
 	assert.Equal(t, true, result["ok"])
@@ -402,14 +400,14 @@ func TestPutDoc_Multipart_NoAttachments(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPutDoc_DesignDocPrefix(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
 	_, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
-	code, result := putDoc(t, router, "/testdb/_design/mydesign", map[string]interface{}{
+	code, result := putDoc(t, c, "/testdb/_design/mydesign", map[string]interface{}{
 		"views": map[string]interface{}{},
 	})
 
@@ -420,14 +418,14 @@ func TestPutDoc_DesignDocPrefix(t *testing.T) {
 }
 
 func TestPutDoc_LocalDocPrefix(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
 	_, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
-	code, result := putDoc(t, router, "/testdb/_local/checkpoint1", map[string]interface{}{
+	code, result := putDoc(t, c, "/testdb/_local/checkpoint1", map[string]interface{}{
 		"checkpoint": "data",
 	})
 
@@ -441,50 +439,36 @@ func TestPutDoc_LocalDocPrefix(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPutDoc_BatchOk(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
 	_, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
-	b, _ := json.Marshal(map[string]interface{}{"_id": "doc1", "hello": "world"})
-	req := httptest.NewRequest("PUT", "/testdb/doc1?batch=ok", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	code, result := putDoc(t, c, "/testdb/doc1?batch=ok", map[string]interface{}{"_id": "doc1", "hello": "world"})
 
-	assert.Equal(t, http.StatusAccepted, w.Code)
-	var result map[string]interface{}
-	_ = json.NewDecoder(w.Body).Decode(&result)
+	assert.Equal(t, http.StatusAccepted, code)
 	assert.Equal(t, true, result["ok"])
 	assert.Equal(t, "doc1", result["id"])
 	assert.NotEmpty(t, result["rev"])
 }
 
 func TestPutDoc_NewEditsFalse(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
 	_, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
-	b, _ := json.Marshal(map[string]interface{}{
+	code, result := putDoc(t, c, "/testdb/doc1?new_edits=false", map[string]interface{}{
 		"_id":  "doc1",
 		"_rev": "1-abc",
 		"data": "replicated",
 	})
-	req := httptest.NewRequest("PUT", "/testdb/doc1?new_edits=false", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusCreated, w.Code)
-	var result map[string]interface{}
-	_ = json.NewDecoder(w.Body).Decode(&result)
+	assert.Equal(t, http.StatusCreated, code)
 	assert.Equal(t, true, result["ok"])
 	assert.Equal(t, "doc1", result["id"])
 	assert.Equal(t, "1-abc", result["rev"])

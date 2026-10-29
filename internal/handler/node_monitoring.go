@@ -51,8 +51,8 @@ func (s *NodeSystem) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"binary":    memStats.HeapInuse,
 			"processes": memStats.HeapAlloc,
 		},
-		"run_queue":              runtime.NumGoroutine(),
-		"message_queues":         0,
+		"run_queue":                 runtime.NumGoroutine(),
+		"message_queues":            0,
 		"internal_replication_jobs": 0,
 	})
 }

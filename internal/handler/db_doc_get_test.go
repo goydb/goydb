@@ -9,7 +9,7 @@ import (
 )
 
 func TestGetDoc_Latest(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -17,32 +17,32 @@ func TestGetDoc_Latest(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create doc rev 1
-	rev1 := createDoc(t, router, "testdb", "doc1")
+	rev1 := createDoc(t, c, "testdb", "doc1")
 
 	// Update to get rev 2
-	code, result := putDoc(t, router, "/testdb/doc1", map[string]interface{}{
+	code, result := putDoc(t, c, "/testdb/doc1", map[string]interface{}{
 		"_id": "doc1", "_rev": rev1, "updated": true,
 	})
 	require.Equal(t, http.StatusCreated, code)
 	rev2 := result["rev"].(string)
 
 	// GET with rev=old&latest=true should return the latest (rev2)
-	code, result = getDoc(t, router, "/testdb/doc1?rev="+rev1+"&latest=true")
+	code, result = getDoc(t, c, "/testdb/doc1?rev="+rev1+"&latest=true")
 	assert.Equal(t, http.StatusOK, code)
 	assert.Equal(t, rev2, result["_rev"])
 }
 
 func TestGetDoc_AttachmentsInline(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
 	_, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
-	_ = createDocAndAttachment(t, router, "testdb", "doc1", "file.txt", "hello")
+	_ = createDocAndAttachment(t, c, "testdb", "doc1", "file.txt", "hello")
 
-	code, result := getDoc(t, router, "/testdb/doc1?attachments=true")
+	code, result := getDoc(t, c, "/testdb/doc1?attachments=true")
 	assert.Equal(t, http.StatusOK, code)
 
 	atts, ok := result["_attachments"].(map[string]interface{})
@@ -54,16 +54,16 @@ func TestGetDoc_AttachmentsInline(t *testing.T) {
 }
 
 func TestGetDoc_AttEncodingInfo(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
 	_, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
-	_ = createDocAndAttachment(t, router, "testdb", "doc1", "file.txt", "hello")
+	_ = createDocAndAttachment(t, c, "testdb", "doc1", "file.txt", "hello")
 
-	code, result := getDoc(t, router, "/testdb/doc1?att_encoding_info=true")
+	code, result := getDoc(t, c, "/testdb/doc1?att_encoding_info=true")
 	assert.Equal(t, http.StatusOK, code)
 
 	atts, ok := result["_attachments"].(map[string]interface{})
@@ -74,16 +74,16 @@ func TestGetDoc_AttEncodingInfo(t *testing.T) {
 }
 
 func TestGetDoc_Meta(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
 	_, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
-	_ = createDoc(t, router, "testdb", "doc1")
+	_ = createDoc(t, c, "testdb", "doc1")
 
 	// meta=true should include _conflicts if any (empty is fine)
-	code, _ := getDoc(t, router, "/testdb/doc1?meta=true")
+	code, _ := getDoc(t, c, "/testdb/doc1?meta=true")
 	assert.Equal(t, http.StatusOK, code)
 }

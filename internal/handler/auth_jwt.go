@@ -228,4 +228,3 @@ func (h *JWTAuthHandler) getJWKSCache(url string) *JWKSCache {
 	h.jwksCache = NewJWKSCache(url, time.Duration(ttl)*time.Second)
 	return h.jwksCache
 }
-

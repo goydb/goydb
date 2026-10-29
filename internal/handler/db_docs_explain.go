@@ -44,16 +44,16 @@ func (s *DBDocsExplain) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	opts := map[string]interface{}{
-		"use_index":  []interface{}{},
-		"bookmark":   "nil",
-		"limit":      find.Limit,
-		"skip":       find.Skip,
-		"sort":       find.Sort,
-		"fields":     find.Fields,
-		"conflicts":  find.Conflicts,
-		"r":          []int{1},
-		"stable":     find.Stable,
-		"update":     true,
+		"use_index": []interface{}{},
+		"bookmark":  "nil",
+		"limit":     find.Limit,
+		"skip":      find.Skip,
+		"sort":      find.Sort,
+		"fields":    find.Fields,
+		"conflicts": find.Conflicts,
+		"r":         []int{1},
+		"stable":    find.Stable,
+		"update":    true,
 	}
 
 	if find.Fields == nil {

@@ -4,143 +4,62 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
-	"os"
+	"net/url"
 	"testing"
 
-	"github.com/gorilla/mux"
-	"github.com/gorilla/sessions"
-	"github.com/goydb/goydb/internal/adapter/logger"
 	"github.com/goydb/goydb/internal/adapter/storage"
-	"github.com/goydb/goydb/internal/service"
+	"github.com/goydb/goydb/pkg/client"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestDBDocGet_RevisionsOnlyWithRevsParam(t *testing.T) {
-	dir, err := os.MkdirTemp(os.TempDir(), "goydb-revisions-test-*")
-	require.NoError(t, err)
-	defer os.RemoveAll(dir)
-
-	s, err := storage.Open(dir, storage.WithLogger(logger.NewNoLog()))
-	require.NoError(t, err)
-	defer s.Close()
-
-	store := sessions.NewCookieStore([]byte("test-secret-32-bytes-long-enough"))
-
-	r := mux.Router{}
-	err = Router{
-		Storage:      s,
-		SessionStore: store,
-		Admins:       model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}},
-		Replication:  &service.Replication{Storage: s, Logger: logger.NewNoLog()},
-		Logger:       logger.NewNoLog(),
-	}.Build(&r)
-	require.NoError(t, err)
-
+	c, _, cleanup := setupClientTest(t)
+	defer cleanup()
 	ctx := context.Background()
-	db, err := s.CreateDatabase(ctx, "testdb")
-	require.NoError(t, err)
+	db := c.DB("testdb")
+	require.NoError(t, db.Create(ctx))
 
 	// Create a document
-	_, err = db.PutDocument(ctx, &model.Document{
-		ID:   "doc1",
-		Data: map[string]interface{}{"name": "test", "value": 123},
-	})
+	_, err := db.Put(ctx, &model.Document{ID: "doc1", Data: map[string]interface{}{"name": "test", "value": 123}})
 	require.NoError(t, err)
 
 	// Test 1: GET without revs parameter should NOT include _revisions
-	req := httptest.NewRequest("GET", "/testdb/doc1", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	var result map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
-
-	assert.NotNil(t, result["_id"])
-	assert.NotNil(t, result["_rev"])
-	assert.Nil(t, result["_revisions"], "_revisions should NOT be present without revs=true")
+	doc, err := db.Get(ctx, "doc1")
+	require.NoError(t, err)
+	assert.NotEmpty(t, doc.ID)
+	assert.NotEmpty(t, doc.Rev)
+	assert.Nil(t, doc.Data["_revisions"], "_revisions should NOT be present without revs=true")
 
 	// Test 2: GET with revs=true should include _revisions
-	req = httptest.NewRequest("GET", "/testdb/doc1?revs=true", nil)
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
-
-	assert.NotNil(t, result["_id"])
-	assert.NotNil(t, result["_rev"])
-	assert.NotNil(t, result["_revisions"], "_revisions should be present with revs=true")
+	doc, err = db.Get(ctx, "doc1", client.WithRevs(true))
+	require.NoError(t, err)
+	assert.NotNil(t, doc.Data["_revisions"], "_revisions should be present with revs=true")
 
 	// Test 3: Subsequent GET without revs should NOT include _revisions
-	req = httptest.NewRequest("GET", "/testdb/doc1", nil)
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	result = nil // reset to avoid stale keys from previous decode
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
-
-	assert.NotNil(t, result["_id"])
-	assert.NotNil(t, result["_rev"])
-	assert.Nil(t, result["_revisions"], "_revisions should NOT persist after revs=true request")
+	doc, err = db.Get(ctx, "doc1")
+	require.NoError(t, err)
+	assert.Nil(t, doc.Data["_revisions"], "_revisions should NOT persist after revs=true request")
 }
 
 func TestDBDocGet_RevisionsChainGrowsWithUpdates(t *testing.T) {
-	dir, err := os.MkdirTemp(os.TempDir(), "goydb-revchain-test-*")
-	require.NoError(t, err)
-	defer os.RemoveAll(dir)
-
-	s, err := storage.Open(dir, storage.WithLogger(logger.NewNoLog()))
-	require.NoError(t, err)
-	defer s.Close()
-
-	store := sessions.NewCookieStore([]byte("test-secret-32-bytes-long-enough"))
-
-	r := mux.NewRouter()
-	err = Router{
-		Storage:      s,
-		SessionStore: store,
-		Admins:       model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}},
-		Replication:  &service.Replication{Storage: s, Logger: logger.NewNoLog()},
-		Logger:       logger.NewNoLog(),
-	}.Build(r)
-	require.NoError(t, err)
-
+	c, _, cleanup := setupClientTest(t)
+	defer cleanup()
 	ctx := context.Background()
-	db, err := s.CreateDatabase(ctx, "testdb")
+	db := c.DB("testdb")
+	require.NoError(t, db.Create(ctx))
+
+	rev1, err := db.Put(ctx, &model.Document{ID: "doc1", Data: map[string]interface{}{"x": 1}})
 	require.NoError(t, err)
 
-	rev1, err := db.PutDocument(ctx, &model.Document{
-		ID:   "doc1",
-		Data: map[string]interface{}{"x": 1},
-	})
+	_, err = db.Put(ctx, &model.Document{ID: "doc1", Rev: rev1, Data: map[string]interface{}{"x": 2}})
 	require.NoError(t, err)
 
-	_, err = db.PutDocument(ctx, &model.Document{
-		ID:   "doc1",
-		Rev:  rev1,
-		Data: map[string]interface{}{"x": 2},
-	})
+	doc, err := db.Get(ctx, "doc1", client.WithRevs(true))
 	require.NoError(t, err)
 
-	req := httptest.NewRequest("GET", "/testdb/doc1?revs=true", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var result map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
-
-	revisions, ok := result["_revisions"].(map[string]interface{})
+	revisions, ok := doc.Data["_revisions"].(map[string]interface{})
 	require.True(t, ok, "_revisions should be present with revs=true")
 
 	start, ok := revisions["start"].(float64)
@@ -152,33 +71,16 @@ func TestDBDocGet_RevisionsChainGrowsWithUpdates(t *testing.T) {
 	assert.Len(t, ids, 2, "should have 2 revision IDs in the chain")
 }
 
-func setupRevisionTest(t *testing.T) (*storage.Storage, *mux.Router, func()) {
+// setupRevisionTest is setupClientTest, kept under its original name since
+// many tests in this file already call it.
+func setupRevisionTest(t *testing.T) (*storage.Storage, *client.Client, func()) {
 	t.Helper()
-	dir, err := os.MkdirTemp(os.TempDir(), "goydb-revtest-*")
-	require.NoError(t, err)
-
-	s, err := storage.Open(dir, storage.WithLogger(logger.NewNoLog()))
-	require.NoError(t, err)
-
-	store := sessions.NewCookieStore([]byte("test-secret-32-bytes-long-enough"))
-	r := mux.NewRouter()
-	err = Router{
-		Storage:      s,
-		SessionStore: store,
-		Admins:       model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}},
-		Replication:  &service.Replication{Storage: s, Logger: logger.NewNoLog()},
-		Logger:       logger.NewNoLog(),
-	}.Build(r)
-	require.NoError(t, err)
-
-	return s, r, func() {
-		_ = s.Close()
-		_ = os.RemoveAll(dir)
-	}
+	c, s, cleanup := setupClientTest(t)
+	return s, c, cleanup
 }
 
 func TestDocGet_ConflictsField(t *testing.T) {
-	s, router, cleanup := setupRevisionTest(t)
+	s, c, cleanup := setupRevisionTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -199,34 +101,37 @@ func TestDocGet_ConflictsField(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Without ?conflicts=true, _conflicts must NOT be in the response (CouchDB compat).
-	req := httptest.NewRequest("GET", "/testdb/doc1", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	cdb := c.DB("testdb")
 
-	require.Equal(t, http.StatusOK, w.Code)
-	var result map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
-	assert.Nil(t, result["_conflicts"], "_conflicts should NOT be present without ?conflicts=true")
+	// Without ?conflicts=true, _conflicts must NOT be in the response (CouchDB compat).
+	doc, err := cdb.Get(ctx, "doc1")
+	require.NoError(t, err)
+	assert.Nil(t, doc.Data["_conflicts"], "_conflicts should NOT be present without ?conflicts=true")
 
 	// With ?conflicts=true, _conflicts MUST be present.
-	req = httptest.NewRequest("GET", "/testdb/doc1?conflicts=true", nil)
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	result = nil
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
-	assert.NotNil(t, result["_conflicts"], "_conflicts should be present with ?conflicts=true")
-	conflictList, ok := result["_conflicts"].([]interface{})
+	doc, err = cdb.Get(ctx, "doc1", client.WithConflicts(true))
+	require.NoError(t, err)
+	assert.NotNil(t, doc.Data["_conflicts"], "_conflicts should be present with ?conflicts=true")
+	conflictList, ok := doc.Data["_conflicts"].([]interface{})
 	require.True(t, ok, "_conflicts should be an array")
 	assert.Len(t, conflictList, 1, "should have 1 conflict revision")
 }
 
+// getOpenRevs issues GET /{db}/{docid}?open_revs=... via Raw (pkg/client's
+// typed Get doesn't expose the open_revs multi-result array shape) and
+// decodes the JSON array response.
+func getOpenRevs(t *testing.T, c *client.Client, dbName, docID, openRevsJSON string) (code int, result []map[string]interface{}) {
+	t.Helper()
+	path := "/" + docID + "?open_revs=" + url.QueryEscape(openRevsJSON)
+	resp, err := c.DB(dbName).Raw(t.Context(), http.MethodGet, path, nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	return resp.StatusCode, result
+}
+
 func TestDocGet_OpenRevsAll(t *testing.T) {
-	s, router, cleanup := setupRevisionTest(t)
+	s, c, cleanup := setupRevisionTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -247,19 +152,13 @@ func TestDocGet_OpenRevsAll(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	req := httptest.NewRequest("GET", "/testdb/doc1?open_revs=all", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	var result []map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	code, result := getOpenRevs(t, c, "testdb", "doc1", `all`)
+	require.Equal(t, http.StatusOK, code)
 	assert.Len(t, result, 2)
 }
 
 func TestDocGet_OpenRevsSpecific(t *testing.T) {
-	s, router, cleanup := setupRevisionTest(t)
+	s, c, cleanup := setupRevisionTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -280,85 +179,43 @@ func TestDocGet_OpenRevsSpecific(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(`GET`, `/testdb/doc1?open_revs=%5B%221-aaa%22%5D`, nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	var result []map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	code, result := getOpenRevs(t, c, "testdb", "doc1", `["1-aaa"]`)
+	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result, 1)
 	assert.NotNil(t, result[0]["ok"])
 }
 
 func TestDocGet_OpenRevsMissingRev(t *testing.T) {
-	s, router, cleanup := setupRevisionTest(t)
+	s, c, cleanup := setupRevisionTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
-	_, err = db.PutDocument(ctx, &model.Document{
-		ID:   "doc1",
-		Data: map[string]interface{}{"x": 1},
-	})
+	_, err = db.PutDocument(ctx, &model.Document{ID: "doc1", Data: map[string]interface{}{"x": 1}})
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(`GET`, `/testdb/doc1?open_revs=%5B%223-nonexistent%22%5D`, nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	var result []map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	code, result := getOpenRevs(t, c, "testdb", "doc1", `["3-nonexistent"]`)
+	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result, 1)
 	assert.Equal(t, "3-nonexistent", result[0]["missing"])
 }
 
 func TestAllDocs_NoRevisions(t *testing.T) {
-	dir, err := os.MkdirTemp(os.TempDir(), "goydb-allrevisions-test-*")
-	require.NoError(t, err)
-	defer os.RemoveAll(dir)
-
-	s, err := storage.Open(dir, storage.WithLogger(logger.NewNoLog()))
-	require.NoError(t, err)
-	defer s.Close()
-
-	store := sessions.NewCookieStore([]byte("test-secret-32-bytes-long-enough"))
-
-	r := mux.NewRouter()
-	err = Router{
-		Storage:      s,
-		SessionStore: store,
-		Admins:       model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}},
-		Replication:  &service.Replication{Storage: s, Logger: logger.NewNoLog()},
-		Logger:       logger.NewNoLog(),
-	}.Build(r)
-	require.NoError(t, err)
-
+	c, _, cleanup := setupClientTest(t)
+	defer cleanup()
 	ctx := context.Background()
-	db, err := s.CreateDatabase(ctx, "testdb")
-	require.NoError(t, err)
+	db := c.DB("testdb")
+	require.NoError(t, db.Create(ctx))
 
 	// Create a document
-	_, err = db.PutDocument(ctx, &model.Document{
-		ID:   "doc1",
-		Data: map[string]interface{}{"name": "test"},
-	})
+	_, err := db.Put(ctx, &model.Document{ID: "doc1", Data: map[string]interface{}{"name": "test"}})
 	require.NoError(t, err)
 
 	// Query _all_docs with include_docs=true
-	req := httptest.NewRequest("GET", "/testdb/_all_docs?include_docs=true", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	var result AllDocsResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	result, err := db.AllDocs(ctx, client.AllDocsQuery{IncludeDocs: true})
+	require.NoError(t, err)
 
 	require.Len(t, result.Rows, 1)
 	doc := result.Rows[0].Doc
@@ -370,34 +227,25 @@ func TestAllDocs_NoRevisions(t *testing.T) {
 }
 
 func TestDocGet_RevParam_WinningRevision(t *testing.T) {
-	s, router, cleanup := setupRevisionTest(t)
+	s, c, cleanup := setupRevisionTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
-	rev, err := db.PutDocument(ctx, &model.Document{
-		ID:   "doc1",
-		Data: map[string]interface{}{"x": 1},
-	})
+	rev, err := db.PutDocument(ctx, &model.Document{ID: "doc1", Data: map[string]interface{}{"x": 1}})
 	require.NoError(t, err)
 
 	// ?rev= matching the winning revision should return the document normally.
-	req := httptest.NewRequest("GET", "/testdb/doc1?rev="+rev, nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	var result map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
-	assert.Equal(t, "doc1", result["_id"])
-	assert.Equal(t, rev, result["_rev"])
+	doc, err := c.DB("testdb").Get(ctx, "doc1", client.WithRev(rev))
+	require.NoError(t, err)
+	assert.Equal(t, "doc1", doc.ID)
+	assert.Equal(t, rev, doc.Rev)
 }
 
 func TestDocGet_RevParam_ConflictRevision(t *testing.T) {
-	s, router, cleanup := setupRevisionTest(t)
+	s, c, cleanup := setupRevisionTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -420,38 +268,26 @@ func TestDocGet_RevParam_ConflictRevision(t *testing.T) {
 	require.NoError(t, err)
 
 	// Winner is 1-zzz (higher lexicographic hash). Fetch the loser 1-aaa via ?rev=.
-	req := httptest.NewRequest("GET", "/testdb/doc1?rev=1-aaa", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	var result map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
-	assert.Equal(t, "doc1", result["_id"])
-	assert.Equal(t, "1-aaa", result["_rev"])
-	assert.Equal(t, "replica-a", result["source"])
+	doc, err := c.DB("testdb").Get(ctx, "doc1", client.WithRev("1-aaa"))
+	require.NoError(t, err)
+	assert.Equal(t, "doc1", doc.ID)
+	assert.Equal(t, "1-aaa", doc.Rev)
+	assert.Equal(t, "replica-a", doc.Data["source"])
 }
 
 func TestDocGet_RevParam_NonExistent(t *testing.T) {
-	s, router, cleanup := setupRevisionTest(t)
+	s, c, cleanup := setupRevisionTest(t)
 	defer cleanup()
 
 	ctx := context.Background()
 	db, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
-	_, err = db.PutDocument(ctx, &model.Document{
-		ID:   "doc1",
-		Data: map[string]interface{}{"x": 1},
-	})
+	_, err = db.PutDocument(ctx, &model.Document{ID: "doc1", Data: map[string]interface{}{"x": 1}})
 	require.NoError(t, err)
 
 	// ?rev= with a non-existent revision should return 404.
-	req := httptest.NewRequest("GET", "/testdb/doc1?rev=99-nonexistent", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	_, err = c.DB("testdb").Get(ctx, "doc1", client.WithRev("99-nonexistent"))
+	require.Error(t, err)
+	assert.True(t, client.IsNotFound(err))
 }

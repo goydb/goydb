@@ -5,7 +5,6 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,16 +12,15 @@ import (
 )
 
 func TestNodeVersionsJSEngine(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
-	req := httptest.NewRequest("GET", "/_node/_local/_versions", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
+	resp, err := c.Raw(t.Context(), http.MethodGet, "/_node/_local/_versions", nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var result map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	assert.Contains(t, result, "javascript_engine")
 }

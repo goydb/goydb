@@ -5,7 +5,6 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -14,77 +13,73 @@ import (
 )
 
 func TestSearchCleanup(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
-	req := httptest.NewRequest("POST", "/testdb/_search_cleanup", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.DB("testdb").Raw(t.Context(), http.MethodPost, "/_search_cleanup", nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
 
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var result map[string]bool
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	assert.True(t, result["ok"])
 }
 
 func TestNouveauCleanup(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
-	req := httptest.NewRequest("POST", "/testdb/_nouveau_cleanup", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.DB("testdb").Raw(t.Context(), http.MethodPost, "/_nouveau_cleanup", nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
 
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var result map[string]bool
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	assert.True(t, result["ok"])
 }
 
 func TestSearchAnalyze(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	body := strings.NewReader(`{"analyzer":"standard","text":"hello world foo"}`)
-	req := httptest.NewRequest("POST", "/_search_analyze", body)
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(t.Context(), http.MethodPost, "/_search_analyze", body, map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
 
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var result struct {
 		Tokens []string `json:"tokens"`
 	}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	assert.Equal(t, []string{"hello", "world", "foo"}, result.Tokens)
 }
 
 func TestNouveauAnalyze(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	body := strings.NewReader(`{"analyzer":"standard","text":"one two"}`)
-	req := httptest.NewRequest("POST", "/_nouveau_analyze", body)
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(t.Context(), http.MethodPost, "/_nouveau_analyze", body, map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
 
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var result struct {
 		Tokens []string `json:"tokens"`
 	}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	assert.Equal(t, []string{"one", "two"}, result.Tokens)
 }

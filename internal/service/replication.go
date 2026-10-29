@@ -13,6 +13,7 @@ import (
 	"github.com/goydb/goydb/pkg/port"
 	"github.com/goydb/goydb/pkg/replication"
 	"github.com/goydb/goydb/pkg/replicator"
+	"github.com/goydb/goydb/pkg/unixhttp"
 )
 
 const replicatorDBName = "_replicator"
@@ -294,7 +295,7 @@ func (c *Replication) resetRetryCount(ctx context.Context, repDoc *model.Replica
 // else is treated as a local database name. Custom headers can be provided for
 // authentication or other purposes.
 func (c *Replication) BuildPeer(addr string, customHeaders map[string]string) port.ReplicationPeer {
-	if strings.HasPrefix(addr, "http://") || strings.HasPrefix(addr, "https://") {
+	if strings.HasPrefix(addr, "http://") || strings.HasPrefix(addr, "https://") || strings.HasPrefix(addr, unixhttp.Scheme+"://") {
 		client, err := replication.NewRemoteClient(addr, customHeaders)
 		if err != nil {
 			c.Logger.Errorf(context.Background(), "failed to create remote peer", "address", addr, "error", err)

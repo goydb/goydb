@@ -11,6 +11,7 @@ import (
 
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
+	"github.com/goydb/goydb/pkg/unixhttp"
 )
 
 // RemoteClient implements port.ReplicationPeer for HTTP-based remote CouchDB-compatible endpoints.
@@ -25,17 +26,26 @@ type RemoteClient struct {
 var _ port.ReplicationPeer = (*RemoteClient)(nil)
 
 // NewRemoteClient creates an HTTP client for a remote replication endpoint.
-// Basic auth credentials are extracted from the URL's userinfo, or custom headers
-// can be provided (e.g., Authorization header).
+// rawURL is either a normal http(s):// URL, or a unixhttp.Scheme ("http+unix")
+// URL addressing a database reachable over a Unix domain socket (see
+// pkg/unixhttp.EncodeURL). Basic auth credentials are extracted from the
+// URL's userinfo, or custom headers can be provided (e.g., Authorization
+// header).
 func NewRemoteClient(rawURL string, customHeaders map[string]string) (*RemoteClient, error) {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return nil, fmt.Errorf("invalid URL: %w", err)
-	}
-
 	c := &RemoteClient{
 		client:        &http.Client{},
 		customHeaders: customHeaders,
+	}
+
+	var u *url.URL
+	if socketPath, base, err := unixhttp.ParseURL(rawURL); err == nil {
+		c.client.Transport = unixhttp.Transport(socketPath)
+		u = base
+	} else {
+		u, err = url.Parse(rawURL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid URL: %w", err)
+		}
 	}
 
 	if u.User != nil {

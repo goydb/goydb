@@ -6,30 +6,22 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
-	"os"
+	"strings"
 	"testing"
 
-	"github.com/gorilla/mux"
-	"github.com/gorilla/sessions"
 	"github.com/goydb/goydb/internal/adapter/logger"
 	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/internal/adapter/view/gojaview"
-	"github.com/goydb/goydb/internal/service"
-	"github.com/goydb/goydb/pkg/model"
+	"github.com/goydb/goydb/pkg/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // setupVDUTest creates a test environment with validate engines registered.
-func setupVDUTest(t *testing.T) (*storage.Storage, *mux.Router, func()) {
+func setupVDUTest(t *testing.T) (*storage.Storage, *client.Client, func()) {
 	t.Helper()
-	dir, err := os.MkdirTemp(os.TempDir(), "goydb-vdu-test-*")
-	require.NoError(t, err)
-
 	log := logger.NewNoLog()
-	s, err := storage.Open(dir,
-		storage.WithLogger(log),
+	c, s, cleanup := setupClientTest(t,
 		storage.WithViewEngine("", gojaview.NewViewServer),
 		storage.WithViewEngine("javascript", gojaview.NewViewServer),
 		storage.WithFilterEngine("", gojaview.NewFilterServer),
@@ -39,87 +31,84 @@ func setupVDUTest(t *testing.T) (*storage.Storage, *mux.Router, func()) {
 		storage.WithValidateEngine("", gojaview.NewValidateServerBuilder(log)),
 		storage.WithValidateEngine("javascript", gojaview.NewValidateServerBuilder(log)),
 	)
-	require.NoError(t, err)
-
-	store := sessions.NewCookieStore([]byte("test-secret-32-bytes-long-enough"))
-
-	r := mux.NewRouter()
-	err = Router{
-		Storage:      s,
-		SessionStore: store,
-		Admins:       model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}},
-		Replication:  &service.Replication{Storage: s, Logger: log},
-		Logger:       log,
-	}.Build(r)
-	require.NoError(t, err)
-
-	return s, r, func() {
-		_ = s.Close()
-		_ = os.RemoveAll(dir)
-	}
+	return s, c, cleanup
 }
 
 // vduPutDoc PUTs a document and returns the status code and decoded JSON response.
-func vduPutDoc(t *testing.T, router http.Handler, path string, body interface{}) (int, map[string]interface{}) {
+func vduPutDoc(t *testing.T, c *client.Client, path string, body interface{}) (int, map[string]interface{}) {
 	t.Helper()
 	b, err := json.Marshal(body)
 	require.NoError(t, err)
-	req := httptest.NewRequest("PUT", path, bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(t.Context(), http.MethodPut, path, bytes.NewReader(b), map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
 	result := map[string]interface{}{}
-	_ = json.NewDecoder(w.Body).Decode(&result)
-	return w.Code, result
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	return resp.StatusCode, result
 }
 
 // vduPostDoc POSTs a document and returns the status code and decoded JSON response.
-func vduPostDoc(t *testing.T, router http.Handler, path string, body interface{}) (int, map[string]interface{}) {
+func vduPostDoc(t *testing.T, c *client.Client, path string, body interface{}) (int, map[string]interface{}) {
 	t.Helper()
 	b, err := json.Marshal(body)
 	require.NoError(t, err)
-	req := httptest.NewRequest("POST", path, bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(t.Context(), http.MethodPost, path, bytes.NewReader(b), map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
 	result := map[string]interface{}{}
-	_ = json.NewDecoder(w.Body).Decode(&result)
-	return w.Code, result
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	return resp.StatusCode, result
 }
 
 // vduDeleteDoc DELETEs a document and returns the status code and decoded JSON response.
-func vduDeleteDoc(t *testing.T, router http.Handler, path string) (int, map[string]interface{}) {
+func vduDeleteDoc(t *testing.T, c *client.Client, path string) (int, map[string]interface{}) {
 	t.Helper()
-	req := httptest.NewRequest("DELETE", path, nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(t.Context(), http.MethodDelete, path, nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
 	result := map[string]interface{}{}
-	_ = json.NewDecoder(w.Body).Decode(&result)
-	return w.Code, result
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	return resp.StatusCode, result
 }
 
 // vduBulkDocs POSTs to _bulk_docs and returns the status code and decoded JSON response.
-func vduBulkDocs(t *testing.T, router http.Handler, dbName string, body interface{}) (int, []map[string]interface{}) {
+func vduBulkDocs(t *testing.T, c *client.Client, dbName string, body interface{}) (int, []map[string]interface{}) {
 	t.Helper()
 	b, err := json.Marshal(body)
 	require.NoError(t, err)
-	req := httptest.NewRequest("POST", "/"+dbName+"/_bulk_docs", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(t.Context(), http.MethodPost, "/"+dbName+"/_bulk_docs", bytes.NewReader(b), map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
 	var result []map[string]interface{}
-	_ = json.NewDecoder(w.Body).Decode(&result)
-	return w.Code, result
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	return resp.StatusCode, result
+}
+
+// vduGetDoc GETs a document and returns the status code and decoded JSON response.
+func vduGetDoc(t *testing.T, c *client.Client, path string) (int, map[string]interface{}) {
+	t.Helper()
+	resp, err := c.Raw(t.Context(), http.MethodGet, path, nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	result := map[string]interface{}{}
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	return resp.StatusCode, result
+}
+
+// vduSetConfig sets a config value via the HTTP API.
+func vduSetConfig(t *testing.T, c *client.Client, section, key, value string) {
+	t.Helper()
+	b, _ := json.Marshal(value)
+	resp, err := c.Raw(t.Context(), http.MethodPut, "/_node/_local/_config/"+section+"/"+key, bytes.NewReader(b), map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode, "failed to set config %s/%s", section, key)
 }
 
 // createDesignDocWithVDU creates a design document with a validate_doc_update function.
-func createDesignDocWithVDU(t *testing.T, router http.Handler, dbName, ddocName, vduFn string) string {
+func createDesignDocWithVDU(t *testing.T, c *client.Client, dbName, ddocName, vduFn string) string {
 	t.Helper()
-	code, result := vduPutDoc(t, router, "/"+dbName+"/_design/"+ddocName, map[string]interface{}{
+	code, result := vduPutDoc(t, c, "/"+dbName+"/_design/"+ddocName, map[string]interface{}{
 		"language":            "javascript",
 		"validate_doc_update": vduFn,
 	})
@@ -127,16 +116,32 @@ func createDesignDocWithVDU(t *testing.T, router http.Handler, dbName, ddocName,
 	return result["rev"].(string)
 }
 
+// createDesignDocWithVDUAndReplication creates a design document with a
+// validate_doc_update function and optionally the validate_on_replication flag.
+func createDesignDocWithVDUAndReplication(t *testing.T, c *client.Client, dbName, ddocName, vduFn string, validateOnReplication bool) string {
+	t.Helper()
+	doc := map[string]interface{}{
+		"language":            "javascript",
+		"validate_doc_update": vduFn,
+	}
+	if validateOnReplication {
+		doc["validate_on_replication"] = true
+	}
+	code, result := vduPutDoc(t, c, "/"+dbName+"/_design/"+ddocName, doc)
+	require.Equal(t, http.StatusCreated, code, "failed to create design doc: %v", result)
+	return result["rev"].(string)
+}
+
 // --- Tests ---
 
 func TestVDU_NoVDUFunctions_WritesSucceed(t *testing.T) {
-	s, router, cleanup := setupVDUTest(t)
+	s, c, cleanup := setupVDUTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
-	code, result := vduPutDoc(t, router, "/testdb/doc1", map[string]interface{}{
+	code, result := vduPutDoc(t, c, "/testdb/doc1", map[string]interface{}{
 		"_id": "doc1",
 		"foo": "bar",
 	})
@@ -145,14 +150,14 @@ func TestVDU_NoVDUFunctions_WritesSucceed(t *testing.T) {
 }
 
 func TestVDU_CustomVDU_RejectsMissingField(t *testing.T) {
-	s, router, cleanup := setupVDUTest(t)
+	s, c, cleanup := setupVDUTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
 	// Create a VDU that requires a "title" field.
-	createDesignDocWithVDU(t, router, "testdb", "myvalidator",
+	createDesignDocWithVDU(t, c, "testdb", "myvalidator",
 		`function(newDoc, oldDoc, userCtx, secObj) {
 			if (!newDoc._deleted && !newDoc.title) {
 				throw({forbidden: "document must have a title"});
@@ -160,7 +165,7 @@ func TestVDU_CustomVDU_RejectsMissingField(t *testing.T) {
 		}`)
 
 	// Try to create a doc without title -> should fail.
-	code, result := vduPutDoc(t, router, "/testdb/nodoc", map[string]interface{}{
+	code, result := vduPutDoc(t, c, "/testdb/nodoc", map[string]interface{}{
 		"_id": "nodoc",
 		"foo": "bar",
 	})
@@ -168,7 +173,7 @@ func TestVDU_CustomVDU_RejectsMissingField(t *testing.T) {
 	assert.Contains(t, result["reason"], "document must have a title")
 
 	// Create a doc with title -> should succeed.
-	code, result = vduPutDoc(t, router, "/testdb/hasdoc", map[string]interface{}{
+	code, result = vduPutDoc(t, c, "/testdb/hasdoc", map[string]interface{}{
 		"_id":   "hasdoc",
 		"title": "Hello",
 	})
@@ -177,18 +182,18 @@ func TestVDU_CustomVDU_RejectsMissingField(t *testing.T) {
 }
 
 func TestVDU_ThrowsForbidden_Returns403(t *testing.T) {
-	s, router, cleanup := setupVDUTest(t)
+	s, c, cleanup := setupVDUTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
-	createDesignDocWithVDU(t, router, "testdb", "forbidder",
+	createDesignDocWithVDU(t, c, "testdb", "forbidder",
 		`function(newDoc, oldDoc, userCtx, secObj) {
 			throw({forbidden: "nope"});
 		}`)
 
-	code, result := vduPutDoc(t, router, "/testdb/doc1", map[string]interface{}{
+	code, result := vduPutDoc(t, c, "/testdb/doc1", map[string]interface{}{
 		"_id": "doc1",
 	})
 	assert.Equal(t, http.StatusForbidden, code)
@@ -196,18 +201,18 @@ func TestVDU_ThrowsForbidden_Returns403(t *testing.T) {
 }
 
 func TestVDU_ThrowsUnauthorized_Returns401(t *testing.T) {
-	s, router, cleanup := setupVDUTest(t)
+	s, c, cleanup := setupVDUTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
-	createDesignDocWithVDU(t, router, "testdb", "authchecker",
+	createDesignDocWithVDU(t, c, "testdb", "authchecker",
 		`function(newDoc, oldDoc, userCtx, secObj) {
 			throw({unauthorized: "login required"});
 		}`)
 
-	code, result := vduPutDoc(t, router, "/testdb/doc1", map[string]interface{}{
+	code, result := vduPutDoc(t, c, "/testdb/doc1", map[string]interface{}{
 		"_id": "doc1",
 	})
 	assert.Equal(t, http.StatusUnauthorized, code)
@@ -215,14 +220,14 @@ func TestVDU_ThrowsUnauthorized_Returns401(t *testing.T) {
 }
 
 func TestVDU_MultipleVDUs_AllMustPass(t *testing.T) {
-	s, router, cleanup := setupVDUTest(t)
+	s, c, cleanup := setupVDUTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
 	// VDU 1: requires "title" (skip design docs)
-	createDesignDocWithVDU(t, router, "testdb", "v1",
+	createDesignDocWithVDU(t, c, "testdb", "v1",
 		`function(newDoc, oldDoc, userCtx, secObj) {
 			if (newDoc._id.indexOf('_design/') === 0) return;
 			if (!newDoc._deleted && !newDoc.title) {
@@ -231,7 +236,7 @@ func TestVDU_MultipleVDUs_AllMustPass(t *testing.T) {
 		}`)
 
 	// VDU 2: requires "author" (skip design docs)
-	createDesignDocWithVDU(t, router, "testdb", "v2",
+	createDesignDocWithVDU(t, c, "testdb", "v2",
 		`function(newDoc, oldDoc, userCtx, secObj) {
 			if (newDoc._id.indexOf('_design/') === 0) return;
 			if (!newDoc._deleted && !newDoc.author) {
@@ -240,20 +245,20 @@ func TestVDU_MultipleVDUs_AllMustPass(t *testing.T) {
 		}`)
 
 	// Missing both -> should fail (one of them).
-	code, _ := vduPutDoc(t, router, "/testdb/doc1", map[string]interface{}{
+	code, _ := vduPutDoc(t, c, "/testdb/doc1", map[string]interface{}{
 		"_id": "doc1",
 	})
 	assert.Equal(t, http.StatusForbidden, code)
 
 	// Has title but no author -> should still fail.
-	code, _ = vduPutDoc(t, router, "/testdb/doc2", map[string]interface{}{
+	code, _ = vduPutDoc(t, c, "/testdb/doc2", map[string]interface{}{
 		"_id":   "doc2",
 		"title": "Hello",
 	})
 	assert.Equal(t, http.StatusForbidden, code)
 
 	// Has both -> should succeed.
-	code, result := vduPutDoc(t, router, "/testdb/doc3", map[string]interface{}{
+	code, result := vduPutDoc(t, c, "/testdb/doc3", map[string]interface{}{
 		"_id":    "doc3",
 		"title":  "Hello",
 		"author": "Alice",
@@ -263,14 +268,14 @@ func TestVDU_MultipleVDUs_AllMustPass(t *testing.T) {
 }
 
 func TestVDU_DeleteValidated(t *testing.T) {
-	s, router, cleanup := setupVDUTest(t)
+	s, c, cleanup := setupVDUTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
 	// VDU that forbids deletes.
-	createDesignDocWithVDU(t, router, "testdb", "nodelete",
+	createDesignDocWithVDU(t, c, "testdb", "nodelete",
 		`function(newDoc, oldDoc, userCtx, secObj) {
 			if (newDoc._deleted) {
 				throw({forbidden: "deletes not allowed"});
@@ -278,7 +283,7 @@ func TestVDU_DeleteValidated(t *testing.T) {
 		}`)
 
 	// Create a doc first (should pass since not a delete).
-	code, result := vduPutDoc(t, router, "/testdb/doc1", map[string]interface{}{
+	code, result := vduPutDoc(t, c, "/testdb/doc1", map[string]interface{}{
 		"_id":  "doc1",
 		"data": "hello",
 	})
@@ -286,20 +291,20 @@ func TestVDU_DeleteValidated(t *testing.T) {
 	rev := result["rev"].(string)
 
 	// Delete -> should fail.
-	code, result = vduDeleteDoc(t, router, "/testdb/doc1?rev="+rev)
+	code, result = vduDeleteDoc(t, c, "/testdb/doc1?rev="+rev)
 	assert.Equal(t, http.StatusForbidden, code)
 	assert.Contains(t, result["reason"], "deletes not allowed")
 }
 
 func TestVDU_ReplicationSkipsVDU(t *testing.T) {
-	s, router, cleanup := setupVDUTest(t)
+	s, c, cleanup := setupVDUTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
 	// VDU that rejects everything.
-	createDesignDocWithVDU(t, router, "testdb", "rejectall",
+	createDesignDocWithVDU(t, c, "testdb", "rejectall",
 		`function(newDoc, oldDoc, userCtx, secObj) {
 			throw({forbidden: "all writes rejected"});
 		}`)
@@ -310,23 +315,21 @@ func TestVDU_ReplicationSkipsVDU(t *testing.T) {
 		"_rev": "1-abc",
 		"data": "replicated",
 	})
-	req := httptest.NewRequest("PUT", "/testdb/doc1?new_edits=false", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(t.Context(), http.MethodPut, "/testdb/doc1?new_edits=false", bytes.NewReader(b), map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
 
-	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.Equal(t, http.StatusCreated, resp.StatusCode)
 }
 
 func TestVDU_POSTEndpointValidated(t *testing.T) {
-	s, router, cleanup := setupVDUTest(t)
+	s, c, cleanup := setupVDUTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
-	createDesignDocWithVDU(t, router, "testdb", "check",
+	createDesignDocWithVDU(t, c, "testdb", "check",
 		`function(newDoc, oldDoc, userCtx, secObj) {
 			if (!newDoc.required_field) {
 				throw({forbidden: "missing required_field"});
@@ -334,14 +337,14 @@ func TestVDU_POSTEndpointValidated(t *testing.T) {
 		}`)
 
 	// POST without required field -> rejected.
-	code, result := vduPostDoc(t, router, "/testdb", map[string]interface{}{
+	code, result := vduPostDoc(t, c, "/testdb", map[string]interface{}{
 		"other": "value",
 	})
 	assert.Equal(t, http.StatusForbidden, code)
 	assert.Contains(t, result["reason"], "missing required_field")
 
 	// POST with required field -> accepted.
-	code, result = vduPostDoc(t, router, "/testdb", map[string]interface{}{
+	code, result = vduPostDoc(t, c, "/testdb", map[string]interface{}{
 		"required_field": "present",
 	})
 	assert.Equal(t, http.StatusCreated, code)
@@ -349,21 +352,21 @@ func TestVDU_POSTEndpointValidated(t *testing.T) {
 }
 
 func TestVDU_BulkDocsPerDocErrors(t *testing.T) {
-	s, router, cleanup := setupVDUTest(t)
+	s, c, cleanup := setupVDUTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
 	// VDU that requires "valid" field.
-	createDesignDocWithVDU(t, router, "testdb", "bulkcheck",
+	createDesignDocWithVDU(t, c, "testdb", "bulkcheck",
 		`function(newDoc, oldDoc, userCtx, secObj) {
 			if (!newDoc._deleted && !newDoc.valid) {
 				throw({forbidden: "doc must be valid"});
 			}
 		}`)
 
-	code, results := vduBulkDocs(t, router, "testdb", map[string]interface{}{
+	code, results := vduBulkDocs(t, c, "testdb", map[string]interface{}{
 		"docs": []map[string]interface{}{
 			{"_id": "good1", "valid": true},
 			{"_id": "bad1"},
@@ -387,19 +390,19 @@ func TestVDU_BulkDocsPerDocErrors(t *testing.T) {
 }
 
 func TestVDU_BulkDocsReplicationSkipsVDU(t *testing.T) {
-	s, router, cleanup := setupVDUTest(t)
+	s, c, cleanup := setupVDUTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
-	createDesignDocWithVDU(t, router, "testdb", "rejectall",
+	createDesignDocWithVDU(t, c, "testdb", "rejectall",
 		`function(newDoc, oldDoc, userCtx, secObj) {
 			throw({forbidden: "all writes rejected"});
 		}`)
 
 	newEdits := false
-	code, results := vduBulkDocs(t, router, "testdb", map[string]interface{}{
+	code, results := vduBulkDocs(t, c, "testdb", map[string]interface{}{
 		"new_edits": newEdits,
 		"docs": []map[string]interface{}{
 			{"_id": "doc1", "_rev": "1-abc", "data": "replicated"},
@@ -411,48 +414,36 @@ func TestVDU_BulkDocsReplicationSkipsVDU(t *testing.T) {
 }
 
 func TestVDU_DesignDocUpdatesValidated(t *testing.T) {
-	s, router, cleanup := setupVDUTest(t)
+	s, c, cleanup := setupVDUTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
 	// VDU that rejects everything except design docs and deletes.
-	createDesignDocWithVDU(t, router, "testdb", "strictvdu",
+	createDesignDocWithVDU(t, c, "testdb", "strictvdu",
 		`function(newDoc, oldDoc, userCtx, secObj) {
 			if (newDoc._id.indexOf('_design/') === 0) return;
 			throw({forbidden: "regular docs not allowed"});
 		}`)
 
 	// Creating another design doc should work (the existing VDU allows design docs).
-	code, result := vduPutDoc(t, router, "/testdb/_design/another", map[string]interface{}{
+	code, result := vduPutDoc(t, c, "/testdb/_design/another", map[string]interface{}{
 		"language": "javascript",
 	})
 	assert.Equal(t, http.StatusCreated, code)
 	assert.Equal(t, true, result["ok"])
 
 	// Creating a regular doc should fail.
-	code, result = vduPutDoc(t, router, "/testdb/regular", map[string]interface{}{
+	code, result = vduPutDoc(t, c, "/testdb/regular", map[string]interface{}{
 		"_id": "regular",
 	})
 	assert.Equal(t, http.StatusForbidden, code)
 	assert.Contains(t, result["reason"], "regular docs not allowed")
 }
 
-// vduGetDoc GETs a document and returns the status code and decoded JSON response.
-func vduGetDoc(t *testing.T, router http.Handler, path string) (int, map[string]interface{}) {
-	t.Helper()
-	req := httptest.NewRequest("GET", path, nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	result := map[string]interface{}{}
-	_ = json.NewDecoder(w.Body).Decode(&result)
-	return w.Code, result
-}
-
 func TestVDU_UsersDBValidation(t *testing.T) {
-	s, router, cleanup := setupVDUTest(t)
+	s, c, cleanup := setupVDUTest(t)
 	defer cleanup()
 
 	// Ensure system databases are created (seeds _design/_auth with VDU).
@@ -460,7 +451,7 @@ func TestVDU_UsersDBValidation(t *testing.T) {
 	require.NoError(t, err)
 
 	// PUT a user doc missing type: "user" -> should get 403.
-	code, result := vduPutDoc(t, router, "/_users/org.couchdb.user:testuser", map[string]interface{}{
+	code, result := vduPutDoc(t, c, "/_users/org.couchdb.user:testuser", map[string]interface{}{
 		"_id":  "org.couchdb.user:testuser",
 		"name": "testuser",
 	})
@@ -469,7 +460,7 @@ func TestVDU_UsersDBValidation(t *testing.T) {
 
 	// PUT a well-formed user doc with plaintext password -> should succeed
 	// and the password should be hashed server-side.
-	code, result = vduPutDoc(t, router, "/_users/org.couchdb.user:testuser", map[string]interface{}{
+	code, result = vduPutDoc(t, c, "/_users/org.couchdb.user:testuser", map[string]interface{}{
 		"_id":      "org.couchdb.user:testuser",
 		"name":     "testuser",
 		"type":     "user",
@@ -480,7 +471,7 @@ func TestVDU_UsersDBValidation(t *testing.T) {
 	assert.Equal(t, true, result["ok"])
 
 	// GET the stored doc and verify password was hashed.
-	code, stored := vduGetDoc(t, router, "/_users/org.couchdb.user:testuser")
+	code, stored := vduGetDoc(t, c, "/_users/org.couchdb.user:testuser")
 	require.Equal(t, http.StatusOK, code)
 	assert.Nil(t, stored["password"], "plaintext password must be removed")
 	assert.NotEmpty(t, stored["derived_key"], "derived_key must be set")
@@ -489,14 +480,14 @@ func TestVDU_UsersDBValidation(t *testing.T) {
 }
 
 func TestVDU_UsersDB_PasswordHashAndLogin(t *testing.T) {
-	s, router, cleanup := setupVDUTest(t)
+	s, c, cleanup := setupVDUTest(t)
 	defer cleanup()
 
 	err := s.EnsureSystemDatabases(t.Context())
 	require.NoError(t, err)
 
 	// Create a user with plaintext password.
-	code, result := vduPutDoc(t, router, "/_users/org.couchdb.user:logintest", map[string]interface{}{
+	code, result := vduPutDoc(t, c, "/_users/org.couchdb.user:logintest", map[string]interface{}{
 		"_id":      "org.couchdb.user:logintest",
 		"name":     "logintest",
 		"type":     "user",
@@ -508,28 +499,27 @@ func TestVDU_UsersDB_PasswordHashAndLogin(t *testing.T) {
 
 	// Verify login via POST /_session with the plaintext password.
 	form := "name=logintest&password=mypassword"
-	req := httptest.NewRequest("POST", "/_session", bytes.NewReader([]byte(form)))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(t.Context(), http.MethodPost, "/_session", strings.NewReader(form), map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var sessionResult map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&sessionResult))
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&sessionResult))
 	assert.Equal(t, true, sessionResult["ok"])
 	assert.Equal(t, "logintest", sessionResult["name"])
 }
 
 func TestVDU_VDUReceivesOldDoc(t *testing.T) {
-	s, router, cleanup := setupVDUTest(t)
+	s, c, cleanup := setupVDUTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
 	// VDU that prevents changing the "owner" field once set.
-	createDesignDocWithVDU(t, router, "testdb", "ownerlock",
+	createDesignDocWithVDU(t, c, "testdb", "ownerlock",
 		`function(newDoc, oldDoc, userCtx, secObj) {
 			if (oldDoc && oldDoc.owner && newDoc.owner !== oldDoc.owner) {
 				throw({forbidden: "cannot change owner"});
@@ -537,7 +527,7 @@ func TestVDU_VDUReceivesOldDoc(t *testing.T) {
 		}`)
 
 	// Create doc with owner.
-	code, result := vduPutDoc(t, router, "/testdb/doc1", map[string]interface{}{
+	code, result := vduPutDoc(t, c, "/testdb/doc1", map[string]interface{}{
 		"_id":   "doc1",
 		"owner": "alice",
 	})
@@ -545,7 +535,7 @@ func TestVDU_VDUReceivesOldDoc(t *testing.T) {
 	rev := result["rev"].(string)
 
 	// Try to change owner -> should fail.
-	code, result = vduPutDoc(t, router, "/testdb/doc1", map[string]interface{}{
+	code, result = vduPutDoc(t, c, "/testdb/doc1", map[string]interface{}{
 		"_id":   "doc1",
 		"_rev":  rev,
 		"owner": "bob",
@@ -554,7 +544,7 @@ func TestVDU_VDUReceivesOldDoc(t *testing.T) {
 	assert.Contains(t, result["reason"], "cannot change owner")
 
 	// Keep same owner -> should succeed.
-	code, result = vduPutDoc(t, router, "/testdb/doc1", map[string]interface{}{
+	code, result = vduPutDoc(t, c, "/testdb/doc1", map[string]interface{}{
 		"_id":   "doc1",
 		"_rev":  rev,
 		"owner": "alice",
@@ -564,46 +554,18 @@ func TestVDU_VDUReceivesOldDoc(t *testing.T) {
 	assert.Equal(t, true, result["ok"])
 }
 
-// vduSetConfig sets a config value via the HTTP API.
-func vduSetConfig(t *testing.T, router http.Handler, section, key, value string) {
-	t.Helper()
-	b, _ := json.Marshal(value)
-	req := httptest.NewRequest("PUT", "/_node/_local/_config/"+section+"/"+key, bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code, "failed to set config %s/%s", section, key)
-}
-
-// createDesignDocWithVDUAndReplication creates a design document with a
-// validate_doc_update function and optionally the validate_on_replication flag.
-func createDesignDocWithVDUAndReplication(t *testing.T, router http.Handler, dbName, ddocName, vduFn string, validateOnReplication bool) string {
-	t.Helper()
-	doc := map[string]interface{}{
-		"language":            "javascript",
-		"validate_doc_update": vduFn,
-	}
-	if validateOnReplication {
-		doc["validate_on_replication"] = true
-	}
-	code, result := vduPutDoc(t, router, "/"+dbName+"/_design/"+ddocName, doc)
-	require.Equal(t, http.StatusCreated, code, "failed to create design doc: %v", result)
-	return result["rev"].(string)
-}
-
 func TestVDU_ReplicationValidates_GlobalConfig(t *testing.T) {
-	s, router, cleanup := setupVDUTest(t)
+	s, c, cleanup := setupVDUTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
 	// Enable global validate_on_replication.
-	vduSetConfig(t, router, "couchdb", "validate_on_replication", "true")
+	vduSetConfig(t, c, "couchdb", "validate_on_replication", "true")
 
 	// VDU that rejects everything.
-	createDesignDocWithVDU(t, router, "testdb", "rejectall",
+	createDesignDocWithVDU(t, c, "testdb", "rejectall",
 		`function(newDoc, oldDoc, userCtx, secObj) {
 			throw({forbidden: "all writes rejected"});
 		}`)
@@ -614,24 +576,22 @@ func TestVDU_ReplicationValidates_GlobalConfig(t *testing.T) {
 		"_rev": "1-abc",
 		"data": "replicated",
 	})
-	req := httptest.NewRequest("PUT", "/testdb/doc1?new_edits=false", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(t.Context(), http.MethodPut, "/testdb/doc1?new_edits=false", bytes.NewReader(b), map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
 
-	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
 
 func TestVDU_ReplicationValidates_PerDesignDoc(t *testing.T) {
-	s, router, cleanup := setupVDUTest(t)
+	s, c, cleanup := setupVDUTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
 	// Global config is OFF (default). Design doc opts in.
-	createDesignDocWithVDUAndReplication(t, router, "testdb", "rejectall",
+	createDesignDocWithVDUAndReplication(t, c, "testdb", "rejectall",
 		`function(newDoc, oldDoc, userCtx, secObj) {
 			throw({forbidden: "all writes rejected"});
 		}`, true)
@@ -642,24 +602,22 @@ func TestVDU_ReplicationValidates_PerDesignDoc(t *testing.T) {
 		"_rev": "1-abc",
 		"data": "replicated",
 	})
-	req := httptest.NewRequest("PUT", "/testdb/doc1?new_edits=false", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(t.Context(), http.MethodPut, "/testdb/doc1?new_edits=false", bytes.NewReader(b), map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
 
-	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
 
 func TestVDU_ReplicationSkips_PerDesignDoc_Default(t *testing.T) {
-	s, router, cleanup := setupVDUTest(t)
+	s, c, cleanup := setupVDUTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
 	// Global config is OFF (default). Design doc does NOT have the flag.
-	createDesignDocWithVDU(t, router, "testdb", "rejectall",
+	createDesignDocWithVDU(t, c, "testdb", "rejectall",
 		`function(newDoc, oldDoc, userCtx, secObj) {
 			throw({forbidden: "all writes rejected"});
 		}`)
@@ -670,33 +628,31 @@ func TestVDU_ReplicationSkips_PerDesignDoc_Default(t *testing.T) {
 		"_rev": "1-abc",
 		"data": "replicated",
 	})
-	req := httptest.NewRequest("PUT", "/testdb/doc1?new_edits=false", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(t.Context(), http.MethodPut, "/testdb/doc1?new_edits=false", bytes.NewReader(b), map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
 
-	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.Equal(t, http.StatusCreated, resp.StatusCode)
 }
 
 func TestVDU_BulkDocsReplicationValidates_GlobalConfig(t *testing.T) {
-	s, router, cleanup := setupVDUTest(t)
+	s, c, cleanup := setupVDUTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
 	// Enable global validate_on_replication.
-	vduSetConfig(t, router, "couchdb", "validate_on_replication", "true")
+	vduSetConfig(t, c, "couchdb", "validate_on_replication", "true")
 
 	// VDU that rejects everything.
-	createDesignDocWithVDU(t, router, "testdb", "rejectall",
+	createDesignDocWithVDU(t, c, "testdb", "rejectall",
 		`function(newDoc, oldDoc, userCtx, secObj) {
 			throw({forbidden: "all writes rejected"});
 		}`)
 
 	newEdits := false
-	code, results := vduBulkDocs(t, router, "testdb", map[string]interface{}{
+	code, results := vduBulkDocs(t, c, "testdb", map[string]interface{}{
 		"new_edits": newEdits,
 		"docs": []map[string]interface{}{
 			{"_id": "doc1", "_rev": "1-abc", "data": "replicated"},
@@ -709,20 +665,20 @@ func TestVDU_BulkDocsReplicationValidates_GlobalConfig(t *testing.T) {
 }
 
 func TestVDU_BulkDocsReplicationValidates_PerDesignDoc(t *testing.T) {
-	s, router, cleanup := setupVDUTest(t)
+	s, c, cleanup := setupVDUTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
 	// Global config is OFF (default). Design doc opts in.
-	createDesignDocWithVDUAndReplication(t, router, "testdb", "rejectall",
+	createDesignDocWithVDUAndReplication(t, c, "testdb", "rejectall",
 		`function(newDoc, oldDoc, userCtx, secObj) {
 			throw({forbidden: "all writes rejected"});
 		}`, true)
 
 	newEdits := false
-	code, results := vduBulkDocs(t, router, "testdb", map[string]interface{}{
+	code, results := vduBulkDocs(t, c, "testdb", map[string]interface{}{
 		"new_edits": newEdits,
 		"docs": []map[string]interface{}{
 			{"_id": "doc1", "_rev": "1-abc", "data": "replicated"},
@@ -735,7 +691,7 @@ func TestVDU_BulkDocsReplicationValidates_PerDesignDoc(t *testing.T) {
 }
 
 func TestVDU_CompilationErrorSkipped(t *testing.T) {
-	s, router, cleanup := setupVDUTest(t)
+	s, c, cleanup := setupVDUTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
@@ -744,20 +700,18 @@ func TestVDU_CompilationErrorSkipped(t *testing.T) {
 	// Create a design doc with broken JS — should not block writes.
 	// We store it via new_edits=false to bypass any VDU on the design doc itself.
 	b, _ := json.Marshal(map[string]interface{}{
-		"_id":  "_design/broken",
-		"_rev": "1-abc",
+		"_id":                 "_design/broken",
+		"_rev":                "1-abc",
 		"language":            "javascript",
 		"validate_doc_update": "this is not valid javascript{{{",
 	})
-	req := httptest.NewRequest("PUT", "/testdb/_design/broken?new_edits=false", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusCreated, w.Code)
+	resp, err := c.Raw(t.Context(), http.MethodPut, "/testdb/_design/broken?new_edits=false", bytes.NewReader(b), map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
 	// Now try to write a regular doc — should succeed (broken VDU is skipped).
-	code, result := vduPutDoc(t, router, "/testdb/doc1", map[string]interface{}{
+	code, result := vduPutDoc(t, c, "/testdb/doc1", map[string]interface{}{
 		"_id":  "doc1",
 		"data": "hello",
 	})

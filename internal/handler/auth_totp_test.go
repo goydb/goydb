@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -40,24 +39,16 @@ func totpCode(base32Key string) string {
 }
 
 func TestSessionPost_AdminBypassTOTP(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	// Admin users skip TOTP — they have no user document with TOTP config.
-	body, _ := json.Marshal(map[string]string{
-		"name":     "admin",
-		"password": "secret",
-	})
-	req := httptest.NewRequest("POST", "/_session", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
+	_, err := c.CreateSession(t.Context(), "admin", "secret")
+	assert.NoError(t, err)
 }
 
 func TestSessionPost_UserWithoutTOTP(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -89,20 +80,12 @@ func TestSessionPost_UserWithoutTOTP(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	body, _ := json.Marshal(map[string]string{
-		"name":     "testuser",
-		"password": "testpass",
-	})
-	req := httptest.NewRequest("POST", "/_session", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
+	_, err = c.CreateSession(ctx, "testuser", "testpass")
+	assert.NoError(t, err)
 }
 
 func TestSessionPost_UserWithTOTP_ValidToken(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -140,21 +123,22 @@ func TestSessionPost_UserWithTOTP_ValidToken(t *testing.T) {
 
 	code := totpCode(totpKey)
 
+	// CreateSession doesn't support a "token" field, so POST /_session
+	// directly for TOTP login.
 	body, _ := json.Marshal(map[string]string{
 		"name":     "totpuser",
 		"password": "totppass",
 		"token":    code,
 	})
-	req := httptest.NewRequest("POST", "/_session", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(ctx, http.MethodPost, "/_session", bytes.NewReader(body), map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
 func TestSessionPost_UserWithTOTP_MissingToken(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -191,20 +175,12 @@ func TestSessionPost_UserWithTOTP_MissingToken(t *testing.T) {
 	require.NoError(t, err)
 
 	// No token provided.
-	body, _ := json.Marshal(map[string]string{
-		"name":     "totpuser2",
-		"password": "totppass",
-	})
-	req := httptest.NewRequest("POST", "/_session", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	_, err = c.CreateSession(ctx, "totpuser2", "totppass")
+	assert.Equal(t, http.StatusUnauthorized, statusCode(t, err, http.StatusOK))
 }
 
 func TestSessionPost_UserWithTOTP_InvalidToken(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -245,10 +221,9 @@ func TestSessionPost_UserWithTOTP_InvalidToken(t *testing.T) {
 		"password": "totppass",
 		"token":    "000000",
 	})
-	req := httptest.NewRequest("POST", "/_session", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(ctx, http.MethodPost, "/_session", bytes.NewReader(body), map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
 
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }

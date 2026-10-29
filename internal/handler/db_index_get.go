@@ -42,7 +42,7 @@ func (s *DBIndexGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if mi.Ddoc == "" {
 			// Built-in _all_docs index
-			entry.Ddoc = ""  // JSON null handled by omitempty would hide it; use "" here
+			entry.Ddoc = "" // JSON null handled by omitempty would hide it; use "" here
 			entry.Type = "special"
 			var fields []map[string]string
 			for _, f := range mi.Fields {

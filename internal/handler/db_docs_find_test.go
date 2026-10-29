@@ -4,17 +4,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
+	"github.com/goydb/goydb/pkg/client"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestFind_FieldsProjection(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -27,18 +26,11 @@ func TestFind_FieldsProjection(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	body, _ := json.Marshal(map[string]interface{}{
-		"selector": map[string]interface{}{"name": "Alice"},
-		"fields":   []string{"name"},
+	resp, err := c.DB("testdb").Find(ctx, client.FindQuery{
+		Selector: map[string]interface{}{"name": "Alice"},
+		Fields:   []string{"name"},
 	})
-	req := httptest.NewRequest("POST", "/testdb/_find", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp FindResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.NoError(t, err)
 	require.Len(t, resp.Docs, 1)
 
 	doc := resp.Docs[0]
@@ -49,7 +41,7 @@ func TestFind_FieldsProjection(t *testing.T) {
 }
 
 func TestFind_FieldsProjection_Nested(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -68,18 +60,11 @@ func TestFind_FieldsProjection_Nested(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	body, _ := json.Marshal(map[string]interface{}{
-		"selector": map[string]interface{}{"title": "Test"},
-		"fields":   []string{"meta.score"},
+	resp, err := c.DB("testdb").Find(ctx, client.FindQuery{
+		Selector: map[string]interface{}{"title": "Test"},
+		Fields:   []string{"meta.score"},
 	})
-	req := httptest.NewRequest("POST", "/testdb/_find", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp FindResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.NoError(t, err)
 	require.Len(t, resp.Docs, 1)
 
 	doc := resp.Docs[0]
@@ -91,7 +76,7 @@ func TestFind_FieldsProjection_Nested(t *testing.T) {
 }
 
 func TestFind_SortAsc(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -106,18 +91,11 @@ func TestFind_SortAsc(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	body, _ := json.Marshal(map[string]interface{}{
-		"selector": map[string]interface{}{"n": map[string]interface{}{"$gt": 0}},
-		"sort":     []interface{}{map[string]string{"n": "asc"}},
+	resp, err := c.DB("testdb").Find(ctx, client.FindQuery{
+		Selector: map[string]interface{}{"n": map[string]interface{}{"$gt": 0}},
+		Sort:     []map[string]string{{"n": "asc"}},
 	})
-	req := httptest.NewRequest("POST", "/testdb/_find", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp FindResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.NoError(t, err)
 	require.Len(t, resp.Docs, 3)
 
 	assert.Equal(t, float64(1), resp.Docs[0]["n"])
@@ -126,7 +104,7 @@ func TestFind_SortAsc(t *testing.T) {
 }
 
 func TestFind_SortDesc(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -141,18 +119,11 @@ func TestFind_SortDesc(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	body, _ := json.Marshal(map[string]interface{}{
-		"selector": map[string]interface{}{"n": map[string]interface{}{"$gt": 0}},
-		"sort":     []interface{}{map[string]string{"n": "desc"}},
+	resp, err := c.DB("testdb").Find(ctx, client.FindQuery{
+		Selector: map[string]interface{}{"n": map[string]interface{}{"$gt": 0}},
+		Sort:     []map[string]string{{"n": "desc"}},
 	})
-	req := httptest.NewRequest("POST", "/testdb/_find", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp FindResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.NoError(t, err)
 	require.Len(t, resp.Docs, 3)
 
 	assert.Equal(t, float64(3), resp.Docs[0]["n"])
@@ -161,7 +132,7 @@ func TestFind_SortDesc(t *testing.T) {
 }
 
 func TestFind_SortWithLimit(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -177,19 +148,12 @@ func TestFind_SortWithLimit(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	body, _ := json.Marshal(map[string]interface{}{
-		"selector": map[string]interface{}{"n": map[string]interface{}{"$gt": 0}},
-		"sort":     []interface{}{map[string]string{"n": "asc"}},
-		"limit":    2,
+	resp, err := c.DB("testdb").Find(ctx, client.FindQuery{
+		Selector: map[string]interface{}{"n": map[string]interface{}{"$gt": 0}},
+		Sort:     []map[string]string{{"n": "asc"}},
+		Limit:    2,
 	})
-	req := httptest.NewRequest("POST", "/testdb/_find", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp FindResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.NoError(t, err)
 	require.Len(t, resp.Docs, 2)
 
 	// Should return the 2 smallest values (1, 2), not the first 2 scanned (5, 1 or similar).
@@ -198,7 +162,7 @@ func TestFind_SortWithLimit(t *testing.T) {
 }
 
 func TestFind_UseIndex(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -206,15 +170,13 @@ func TestFind_UseIndex(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a Mango index on "type" field under ddoc "mango", name "by_type".
-	indexBody, _ := json.Marshal(map[string]interface{}{
-		"index": map[string]interface{}{"fields": []string{"type"}},
-		"name":  "by_type",
-		"ddoc":  "mango",
-		"type":  "json",
+	_, err = c.DB("testdb").CreateIndex(ctx, client.IndexDef{
+		Index: map[string]interface{}{"fields": []string{"type"}},
+		Name:  "by_type",
+		Ddoc:  "mango",
+		Type:  "json",
 	})
-	idxReq := httptest.NewRequest("POST", "/testdb/_index", bytes.NewReader(indexBody))
-	idxReq.SetBasicAuth("admin", "secret")
-	router.ServeHTTP(httptest.NewRecorder(), idxReq)
+	require.NoError(t, err)
 
 	for i := 0; i < 3; i++ {
 		_, err = db.PutDocument(ctx, &model.Document{
@@ -225,30 +187,21 @@ func TestFind_UseIndex(t *testing.T) {
 	}
 
 	// Query with use_index pointing at our mango index.
-	findBody, _ := json.Marshal(map[string]interface{}{
-		"selector":        map[string]interface{}{"type": "widget"},
-		"use_index":       []interface{}{"mango", "by_type"},
-		"execution_stats": true,
+	resp, err := c.DB("testdb").Find(ctx, client.FindQuery{
+		Selector:       map[string]interface{}{"type": "widget"},
+		UseIndex:       []interface{}{"mango", "by_type"},
+		ExecutionStats: true,
 	})
-	req := httptest.NewRequest("POST", "/testdb/_find", bytes.NewReader(findBody))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-	docs, _ := resp["docs"].([]interface{})
-	assert.Len(t, docs, 3)
+	require.NoError(t, err)
+	assert.Len(t, resp.Docs, 3)
 
 	// With execution_stats, total_keys_examined > 0 when the index is used.
-	stats, _ := resp["execution_stats"].(map[string]interface{})
-	require.NotNil(t, stats)
-	assert.Equal(t, float64(3), stats["total_keys_examined"])
+	require.NotNil(t, resp.ExecutionStats)
+	assert.Equal(t, 3, resp.ExecutionStats.TotalKeysExamined)
 }
 
 func TestFind_NoopParams(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -261,6 +214,9 @@ func TestFind_NoopParams(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// r, q, stable, conflicts, update are accepted-but-ignored CouchDB params
+	// not modeled by client.FindQuery; send via Raw to verify they don't
+	// break the request.
 	body, _ := json.Marshal(map[string]interface{}{
 		"selector":  map[string]interface{}{"x": 1},
 		"r":         1,
@@ -269,13 +225,12 @@ func TestFind_NoopParams(t *testing.T) {
 		"conflicts": false,
 		"update":    "true",
 	})
-	req := httptest.NewRequest("POST", "/testdb/_find", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	rawResp, err := c.DB("testdb").Raw(ctx, "POST", "/_find", bytes.NewReader(body), map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer rawResp.Body.Close() //nolint:errcheck
 
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp FindResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-	assert.Len(t, resp.Docs, 1)
+	require.Equal(t, 200, rawResp.StatusCode)
+	var findResp client.FindResponse
+	require.NoError(t, json.NewDecoder(rawResp.Body).Decode(&findResp))
+	assert.Len(t, findResp.Docs, 1)
 }

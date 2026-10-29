@@ -16,13 +16,13 @@ func (s *ReshardGet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{ // nolint: errcheck
-		"state":            "running",
-		"state_reason":     nil,
-		"completed":        0,
-		"failed":           0,
-		"running":          0,
-		"stopped":          0,
-		"total":            0,
+		"state":        "running",
+		"state_reason": nil,
+		"completed":    0,
+		"failed":       0,
+		"running":      0,
+		"stopped":      0,
+		"total":        0,
 	})
 }
 

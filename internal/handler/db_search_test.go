@@ -6,11 +6,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
-	"github.com/gorilla/mux"
 	"github.com/goydb/goydb/internal/adapter/storage"
+	"github.com/goydb/goydb/pkg/client"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,7 +17,7 @@ import (
 
 // setupSearchDB creates a database, puts several test documents, and creates
 // a design doc with a search index.
-func setupSearchDB(t *testing.T, s *storage.Storage, router *mux.Router, dbName string) {
+func setupSearchDB(t *testing.T, s *storage.Storage, c *client.Client, dbName string) {
 	t.Helper()
 	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, dbName)
@@ -46,7 +45,7 @@ func setupSearchDB(t *testing.T, s *storage.Storage, router *mux.Router, dbName 
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, dbName, "myidx", map[string]interface{}{
+	putDesignDoc(t, c, dbName, "myidx", map[string]interface{}{
 		"indexes": map[string]interface{}{
 			"search": map[string]interface{}{
 				"index": `function(doc) {
@@ -60,54 +59,51 @@ func setupSearchDB(t *testing.T, s *storage.Storage, router *mux.Router, dbName 
 }
 
 // querySearch performs a GET request against the search endpoint.
-func querySearch(t *testing.T, router *mux.Router, dbName, docID, index, query string) (SearchResult, int) {
+func querySearch(t *testing.T, c *client.Client, dbName, docID, index, query string) (SearchResult, int) {
 	t.Helper()
 	u := "/" + dbName + "/_design/" + docID + "/_search/" + index
 	if query != "" {
 		u += "?" + query
 	}
-	req := httptest.NewRequest("GET", u, nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(t.Context(), http.MethodGet, u, nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
 	var result SearchResult
-	if w.Code == http.StatusOK {
-		require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	if resp.StatusCode == http.StatusOK {
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	}
-	return result, w.Code
+	return result, resp.StatusCode
 }
 
 // postSearch performs a POST request against the search endpoint.
-func postSearch(t *testing.T, router *mux.Router, dbName, docID, index string, body interface{}) (SearchResult, int) {
+func postSearch(t *testing.T, c *client.Client, dbName, docID, index string, body interface{}) (SearchResult, int) {
 	t.Helper()
 	b, err := json.Marshal(body)
 	require.NoError(t, err)
-	req := httptest.NewRequest("POST", "/"+dbName+"/_design/"+docID+"/_search/"+index, bytes.NewReader(b))
-	req.SetBasicAuth("admin", "secret")
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(t.Context(), http.MethodPost, "/"+dbName+"/_design/"+docID+"/_search/"+index, bytes.NewReader(b), map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
 	var result SearchResult
-	if w.Code == http.StatusOK {
-		require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	if resp.StatusCode == http.StatusOK {
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	}
-	return result, w.Code
+	return result, resp.StatusCode
 }
 
 func TestSearch_BasicQuery(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSearchDB(t, s, router, "testdb")
+	setupSearchDB(t, s, c, "testdb")
 
-	result, code := querySearch(t, router, "testdb", "myidx", "search", "q=name:alice")
+	result, code := querySearch(t, c, "testdb", "myidx", "search", "q=name:alice")
 	require.Equal(t, http.StatusOK, code)
 	require.True(t, result.TotalRows >= 1, "expected at least 1 match")
 	assert.Equal(t, "doc1", result.Rows[0].ID)
 }
 
 func TestSearch_DefaultLimit(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -123,7 +119,7 @@ func TestSearch_DefaultLimit(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	putDesignDoc(t, router, "testdb", "myidx", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "myidx", map[string]interface{}{
 		"indexes": map[string]interface{}{
 			"search": map[string]interface{}{
 				"index": `function(doc) {
@@ -135,19 +131,19 @@ func TestSearch_DefaultLimit(t *testing.T) {
 		},
 	})
 
-	result, code := querySearch(t, router, "testdb", "myidx", "search", "q=name:test")
+	result, code := querySearch(t, c, "testdb", "myidx", "search", "q=name:test")
 	require.Equal(t, http.StatusOK, code)
 	// Default limit is 25.
 	assert.LessOrEqual(t, len(result.Rows), 25)
 }
 
 func TestSearch_IncludeDocs(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSearchDB(t, s, router, "testdb")
+	setupSearchDB(t, s, c, "testdb")
 
-	result, code := querySearch(t, router, "testdb", "myidx", "search", "q=name:alice&include_docs=true")
+	result, code := querySearch(t, c, "testdb", "myidx", "search", "q=name:alice&include_docs=true")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 1)
 	assert.NotNil(t, result.Rows[0].Doc, "doc should be included")
@@ -156,12 +152,12 @@ func TestSearch_IncludeDocs(t *testing.T) {
 }
 
 func TestSearch_Sort(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSearchDB(t, s, router, "testdb")
+	setupSearchDB(t, s, c, "testdb")
 
-	result, code := querySearch(t, router, "testdb", "myidx", "search",
+	result, code := querySearch(t, c, "testdb", "myidx", "search",
 		`q=type:person&sort=%5B%22name%22%5D`)
 	require.Equal(t, http.StatusOK, code)
 	require.True(t, len(result.Rows) >= 2)
@@ -170,19 +166,19 @@ func TestSearch_Sort(t *testing.T) {
 }
 
 func TestSearch_Bookmark(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSearchDB(t, s, router, "testdb")
+	setupSearchDB(t, s, c, "testdb")
 
 	// First page with limit=2.
-	result1, code := querySearch(t, router, "testdb", "myidx", "search", "q=type:person&limit=2")
+	result1, code := querySearch(t, c, "testdb", "myidx", "search", "q=type:person&limit=2")
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result1.Rows, 2)
 	require.NotEmpty(t, result1.Bookmark, "bookmark should be set")
 
 	// Second page using bookmark.
-	result2, code := querySearch(t, router, "testdb", "myidx", "search",
+	result2, code := querySearch(t, c, "testdb", "myidx", "search",
 		"q=type:person&limit=2&bookmark="+result1.Bookmark)
 	require.Equal(t, http.StatusOK, code)
 	require.True(t, len(result2.Rows) >= 1)
@@ -198,12 +194,12 @@ func TestSearch_Bookmark(t *testing.T) {
 }
 
 func TestSearch_POST(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSearchDB(t, s, router, "testdb")
+	setupSearchDB(t, s, c, "testdb")
 
-	result, code := postSearch(t, router, "testdb", "myidx", "search", map[string]interface{}{
+	result, code := postSearch(t, c, "testdb", "myidx", "search", map[string]interface{}{
 		"q":     "name:bob",
 		"limit": 10,
 	})
@@ -213,23 +209,23 @@ func TestSearch_POST(t *testing.T) {
 }
 
 func TestSearch_Stale(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSearchDB(t, s, router, "testdb")
+	setupSearchDB(t, s, c, "testdb")
 
 	// stale=ok should be accepted and return results.
-	_, code := querySearch(t, router, "testdb", "myidx", "search", "q=name:alice&stale=ok")
+	_, code := querySearch(t, c, "testdb", "myidx", "search", "q=name:alice&stale=ok")
 	assert.Equal(t, http.StatusOK, code)
 }
 
 func TestSearch_Counts(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSearchDB(t, s, router, "testdb")
+	setupSearchDB(t, s, c, "testdb")
 
-	result, code := querySearch(t, router, "testdb", "myidx", "search",
+	result, code := querySearch(t, c, "testdb", "myidx", "search",
 		`q=name:*&counts=%5B%22type%22%5D`)
 	require.Equal(t, http.StatusOK, code)
 	if result.Counts != nil {
@@ -241,12 +237,12 @@ func TestSearch_Counts(t *testing.T) {
 }
 
 func TestSearch_IncludeFields(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSearchDB(t, s, router, "testdb")
+	setupSearchDB(t, s, c, "testdb")
 
-	result, code := querySearch(t, router, "testdb", "myidx", "search",
+	result, code := querySearch(t, c, "testdb", "myidx", "search",
 		`q=name:alice&include_fields=%5B%22name%22%5D`)
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 1)
@@ -255,12 +251,12 @@ func TestSearch_IncludeFields(t *testing.T) {
 }
 
 func TestSearch_Highlight(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSearchDB(t, s, router, "testdb")
+	setupSearchDB(t, s, c, "testdb")
 
-	result, code := querySearch(t, router, "testdb", "myidx", "search",
+	result, code := querySearch(t, c, "testdb", "myidx", "search",
 		`q=name:alice&highlight_fields=%5B%22name%22%5D`)
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, result.Rows, 1)
@@ -271,13 +267,13 @@ func TestSearch_Highlight(t *testing.T) {
 }
 
 func TestSearch_Drilldown(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSearchDB(t, s, router, "testdb")
+	setupSearchDB(t, s, c, "testdb")
 
 	// Search all names, but drilldown to type=admin only.
-	result, code := querySearch(t, router, "testdb", "myidx", "search",
+	result, code := querySearch(t, c, "testdb", "myidx", "search",
 		`q=name:*&drilldown=%5B%22type%22%2C%22admin%22%5D`)
 	require.Equal(t, http.StatusOK, code)
 	// Only dave should match (type=admin).
@@ -287,21 +283,20 @@ func TestSearch_Drilldown(t *testing.T) {
 }
 
 func TestSearch_GroupField(t *testing.T) {
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 	defer cleanup()
 
-	setupSearchDB(t, s, router, "testdb")
+	setupSearchDB(t, s, c, "testdb")
 
 	// Grouped response uses a different struct; parse raw JSON to check structure.
 	u := "/testdb/_design/myidx/_search/search?q=name:*&group_field=type&group_limit=10"
-	req := httptest.NewRequest("GET", u, nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
+	resp, err := c.Raw(t.Context(), http.MethodGet, u, nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var raw map[string]json.RawMessage
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&raw))
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&raw))
 	_, hasGroups := raw["groups"]
 	assert.True(t, hasGroups, "grouped response should contain 'groups' key")
 }

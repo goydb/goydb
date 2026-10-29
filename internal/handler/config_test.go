@@ -10,9 +10,10 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
-	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/internal/adapter/logger"
+	"github.com/goydb/goydb/internal/adapter/storage"
 	"github.com/goydb/goydb/internal/service"
+	"github.com/goydb/goydb/pkg/client"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,17 +21,17 @@ import (
 
 // TestConfigAll verifies GET /_config returns all sections including defaults.
 func TestConfigAll(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
-	req := httptest.NewRequest("GET", "/_config", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(t.Context(), http.MethodGet, "/_config", nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
 
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var result map[string]map[string]string
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 
 	assert.Contains(t, result, "couchdb")
 	assert.Contains(t, result, "httpd")
@@ -40,17 +41,11 @@ func TestConfigAll(t *testing.T) {
 
 // TestConfigSection_Exists verifies GET /_config/{section} for a known section.
 func TestConfigSection_Exists(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
-	req := httptest.NewRequest("GET", "/_config/httpd", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var result map[string]string
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	result, err := c.GetConfigSection(t.Context(), "httpd")
+	require.NoError(t, err)
 	assert.Equal(t, "0.0.0.0", result["bind_address"])
 	assert.Equal(t, "7070", result["port"])
 }
@@ -58,198 +53,167 @@ func TestConfigSection_Exists(t *testing.T) {
 // TestConfigSection_Missing verifies GET /_config/{section} returns 404 for
 // an unknown section.
 func TestConfigSection_Missing(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
-	req := httptest.NewRequest("GET", "/_config/nonexistent", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	_, err := c.GetConfigSection(t.Context(), "nonexistent")
+	assert.Equal(t, http.StatusNotFound, statusCode(t, err, http.StatusOK))
 }
 
 // TestConfigKey_Exists verifies GET /_config/{section}/{key} for a known key.
 func TestConfigKey_Exists(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
-	req := httptest.NewRequest("GET", "/_config/log/level", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var val string
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&val))
+	val, err := c.GetConfig(t.Context(), "log", "level")
+	require.NoError(t, err)
 	assert.Equal(t, "info", val)
 }
 
 // TestConfigKey_Missing verifies GET /_config/{section}/{key} returns 404 for
 // an unknown key.
 func TestConfigKey_Missing(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
-	req := httptest.NewRequest("GET", "/_config/log/nosuchkey", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	_, err := c.GetConfig(t.Context(), "log", "nosuchkey")
+	assert.Equal(t, http.StatusNotFound, statusCode(t, err, http.StatusOK))
 }
 
 // TestConfigKeyPut verifies PUT /_config/{section}/{key} stores the value and
 // returns the previous value.
 func TestConfigKeyPut(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
-	// First PUT: key does not exist yet — old value should be empty string.
-	body := strings.NewReader(`"debug"`)
-	req := httptest.NewRequest("PUT", "/_config/log/level", body)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	// First PUT: key does not exist yet — old value should reflect the
+	// previous default. The PUT response body (the old value) isn't exposed
+	// by the typed PutConfig, so use Raw to inspect it.
+	resp, err := c.Raw(t.Context(), http.MethodPut, "/_config/log/level", strings.NewReader(`"debug"`), nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
 
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var old string
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&old))
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&old))
 	assert.Equal(t, "info", old) // default was "info"
 
 	// Subsequent GET should reflect the new value.
-	req = httptest.NewRequest("GET", "/_config/log/level", nil)
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
-	var newVal string
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&newVal))
+	newVal, err := c.GetConfig(t.Context(), "log", "level")
+	require.NoError(t, err)
 	assert.Equal(t, "debug", newVal)
 }
 
 // TestConfigKeyPut_NewSection verifies PUT creates a new section on the fly.
 func TestConfigKeyPut_NewSection(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
-	body := strings.NewReader(`"42"`)
-	req := httptest.NewRequest("PUT", "/_config/custom/mykey", body)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
+	require.NoError(t, c.PutConfig(t.Context(), "custom", "mykey", "42"))
 
-	req = httptest.NewRequest("GET", "/_config/custom/mykey", nil)
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
-	var val string
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&val))
+	val, err := c.GetConfig(t.Context(), "custom", "mykey")
+	require.NoError(t, err)
 	assert.Equal(t, "42", val)
 }
 
 // TestConfigKeyPut_InvalidBody verifies PUT with non-string JSON returns 400.
 func TestConfigKeyPut_InvalidBody(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	body := strings.NewReader(`{"not":"a string"}`)
-	req := httptest.NewRequest("PUT", "/_config/log/level", body)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	resp, err := c.Raw(t.Context(), http.MethodPut, "/_config/log/level", body, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
 // TestConfigKeyDelete verifies DELETE /_config/{section}/{key} removes the key
 // and returns the old value.
 func TestConfigKeyDelete(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
-	req := httptest.NewRequest("DELETE", "/_config/log/level", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(t.Context(), http.MethodDelete, "/_config/log/level", nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
 
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var old string
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&old))
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&old))
 	assert.Equal(t, "info", old)
 
 	// Key should now be absent.
-	req = httptest.NewRequest("GET", "/_config/log/level", nil)
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	_, err = c.GetConfig(t.Context(), "log", "level")
+	assert.Equal(t, http.StatusNotFound, statusCode(t, err, http.StatusOK))
 }
 
 // TestConfigKeyDelete_Missing verifies DELETE on an unknown key returns 404.
 func TestConfigKeyDelete_Missing(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
-	req := httptest.NewRequest("DELETE", "/_config/log/nosuchkey", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	err := c.DeleteConfig(t.Context(), "log", "nosuchkey")
+	assert.Equal(t, http.StatusNotFound, statusCode(t, err, http.StatusOK))
 }
 
 // TestNodeConfig verifies that the CouchDB 2.x /_node/{node}/_config/* routes
 // are wired to the same store as /_config/*.
 func TestNodeConfig(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	// GET /_node/nonode@nohost/_config/cors should return the cors section.
-	req := httptest.NewRequest("GET", "/_node/nonode@nohost/_config/cors", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
+	resp, err := c.Raw(t.Context(), http.MethodGet, "/_node/nonode@nohost/_config/cors", nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var section map[string]string
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&section))
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&section))
+	resp.Body.Close() //nolint:errcheck
 	assert.Equal(t, "*", section["origins"])
 
 	// PUT via node-scoped route should update the shared store.
 	body := strings.NewReader(`"https://app.example.com"`)
-	req = httptest.NewRequest("PUT", "/_node/nonode@nohost/_config/cors/origins", body)
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
+	resp, err = c.Raw(t.Context(), http.MethodPut, "/_node/nonode@nohost/_config/cors/origins", body, nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close() //nolint:errcheck
 
 	// GET via the plain /_config route should reflect the updated value.
-	req = httptest.NewRequest("GET", "/_config/cors/origins", nil)
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
-	var val string
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&val))
+	val, err := c.GetConfig(t.Context(), "cors", "origins")
+	require.NoError(t, err)
 	assert.Equal(t, "https://app.example.com", val)
 }
 
 // TestConfigReload verifies POST /_node/{node}/_config/_reload returns ok.
 func TestConfigReload(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
-	req := httptest.NewRequest("POST", "/_node/nonode@nohost/_config/_reload", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(t.Context(), http.MethodPost, "/_node/nonode@nohost/_config/_reload", nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
 
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var result map[string]bool
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	assert.True(t, result["ok"])
 }
 
 // TestConfigReload_Local verifies POST /_node/_local/_config/_reload also works.
 func TestConfigReload_Local(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
-	req := httptest.NewRequest("POST", "/_node/_local/_config/_reload", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(t.Context(), http.MethodPost, "/_node/_local/_config/_reload", nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
 
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var result map[string]bool
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	assert.True(t, result["ok"])
 }
 
@@ -263,32 +227,27 @@ func TestConfigPersistence(t *testing.T) {
 	store := sessions.NewCookieStore([]byte("test-secret-32-bytes-long-enough"))
 	admins := model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}}
 
-	buildRouter := func() (http.Handler, func()) {
+	buildServer := func() (*client.Client, func()) {
 		s, err := storage.Open(dir, storage.WithLogger(logger.NewNoLog()))
 		require.NoError(t, err)
 		r := mux.NewRouter()
 		err = Router{Storage: s, SessionStore: store, Admins: admins, Replication: &service.Replication{Storage: s, Logger: logger.NewNoLog()}, Logger: logger.NewNoLog()}.Build(r)
 		require.NoError(t, err)
-		return r, func() { _ = s.Close() }
+		ts := httptest.NewServer(r)
+		cl, err := client.New(ts.URL)
+		require.NoError(t, err)
+		return cl, func() { ts.Close(); _ = s.Close() }
 	}
 
 	// --- First server instance: write a value ---
-	router1, close1 := buildRouter()
-	body := strings.NewReader(`"https://example.com"`)
-	req := httptest.NewRequest("PUT", "/_config/cors/origins", body)
-	w := httptest.NewRecorder()
-	router1.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
+	c1, close1 := buildServer()
+	require.NoError(t, c1.PutConfig(t.Context(), "cors", "origins", "https://example.com"))
 	close1()
 
 	// --- Second server instance: value must still be present ---
-	router2, close2 := buildRouter()
+	c2, close2 := buildServer()
 	defer close2()
-	req = httptest.NewRequest("GET", "/_config/cors/origins", nil)
-	w = httptest.NewRecorder()
-	router2.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
-	var val string
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&val))
+	val, err := c2.GetConfig(t.Context(), "cors", "origins")
+	require.NoError(t, err)
 	assert.Equal(t, "https://example.com", val)
 }

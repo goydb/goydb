@@ -11,14 +11,14 @@ import (
 )
 
 func TestActiveTasks_SearchIndexType(t *testing.T) {
-	s, router, cleanup := setupActiveTasksTest(t)
+	s, c, cleanup := setupActiveTasksTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
 	_, err := s.CreateDatabase(ctx, "testdb")
 	require.NoError(t, err)
 
-	putDesignDoc(t, router, "testdb", "myidx", map[string]interface{}{
+	putDesignDoc(t, c, "testdb", "myidx", map[string]interface{}{
 		"indexes": map[string]interface{}{
 			"search": map[string]interface{}{
 				"index": `function(doc) {
@@ -28,7 +28,7 @@ func TestActiveTasks_SearchIndexType(t *testing.T) {
 		},
 	})
 
-	tasks, code := getActiveTasks(t, router)
+	tasks, code := getActiveTasks(t, c)
 	require.Equal(t, http.StatusOK, code)
 	require.Len(t, tasks, 1)
 	assert.Equal(t, "search_indexer", tasks[0].Type)

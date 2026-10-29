@@ -3,9 +3,9 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
+	"github.com/goydb/goydb/pkg/client"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,24 +17,24 @@ type schedulerJobsResponse struct {
 	Jobs      []SchedulerJob `json:"jobs"`
 }
 
-func getSchedulerJobs(t *testing.T, router http.Handler) schedulerJobsResponse {
+func getSchedulerJobs(t *testing.T, c *client.Client) schedulerJobsResponse {
 	t.Helper()
-	req := httptest.NewRequest("GET", "/_scheduler/jobs", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
-	var resp schedulerJobsResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-	return resp
+	resp, err := c.Raw(t.Context(), http.MethodGet, "/_scheduler/jobs", nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var out schedulerJobsResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	return out
 }
 
 // TestSchedulerJobs_NoReplicatorDB verifies that when the _replicator database
 // does not exist the endpoint returns an empty job list without error.
 func TestSchedulerJobs_NoReplicatorDB(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
-	resp := getSchedulerJobs(t, router)
+	resp := getSchedulerJobs(t, c)
 	assert.Equal(t, 0, resp.TotalRows)
 	assert.Equal(t, 0, resp.Offset)
 	assert.Empty(t, resp.Jobs)
@@ -43,13 +43,13 @@ func TestSchedulerJobs_NoReplicatorDB(t *testing.T) {
 // TestSchedulerJobs_EmptyReplicatorDB verifies that when _replicator exists but
 // contains no valid replication docs the response is still empty.
 func TestSchedulerJobs_EmptyReplicatorDB(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "_replicator")
 	require.NoError(t, err)
 
-	resp := getSchedulerJobs(t, router)
+	resp := getSchedulerJobs(t, c)
 	assert.Equal(t, 0, resp.TotalRows)
 	assert.Empty(t, resp.Jobs)
 }
@@ -57,7 +57,7 @@ func TestSchedulerJobs_EmptyReplicatorDB(t *testing.T) {
 // TestSchedulerJobs_SingleRunningJob verifies that a replication doc with state
 // "running" is returned as a job with status "running".
 func TestSchedulerJobs_SingleRunningJob(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -67,15 +67,15 @@ func TestSchedulerJobs_SingleRunningJob(t *testing.T) {
 	_, err = db.PutDocument(ctx, &model.Document{
 		ID: "myjob",
 		Data: map[string]interface{}{
-			"source":                   "http://source/db",
-			"target":                   "http://target/db",
-			"_replication_state":       "running",
-			"_replication_state_time":  "2024-06-01T12:00:00Z",
+			"source":                  "http://source/db",
+			"target":                  "http://target/db",
+			"_replication_state":      "running",
+			"_replication_state_time": "2024-06-01T12:00:00Z",
 		},
 	})
 	require.NoError(t, err)
 
-	resp := getSchedulerJobs(t, router)
+	resp := getSchedulerJobs(t, c)
 	require.Equal(t, 1, resp.TotalRows)
 	require.Len(t, resp.Jobs, 1)
 
@@ -110,7 +110,7 @@ func TestSchedulerJobs_StateMapping(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.state, func(t *testing.T) {
-			s, router, cleanup := setupRevsDiffTest(t)
+			s, c, cleanup := setupRevsDiffTest(t)
 			defer cleanup()
 
 			ctx := t.Context()
@@ -127,7 +127,7 @@ func TestSchedulerJobs_StateMapping(t *testing.T) {
 			_, err = db.PutDocument(ctx, &model.Document{ID: "job1", Data: data})
 			require.NoError(t, err)
 
-			resp := getSchedulerJobs(t, router)
+			resp := getSchedulerJobs(t, c)
 			require.Len(t, resp.Jobs, 1)
 			assert.Equal(t, tc.expectedStatus, resp.Jobs[0].Status)
 		})
@@ -137,7 +137,7 @@ func TestSchedulerJobs_StateMapping(t *testing.T) {
 // TestSchedulerJobs_DesignDocsSkipped verifies that design documents in
 // _replicator are not included in the jobs list.
 func TestSchedulerJobs_DesignDocsSkipped(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -161,7 +161,7 @@ func TestSchedulerJobs_DesignDocsSkipped(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	resp := getSchedulerJobs(t, router)
+	resp := getSchedulerJobs(t, c)
 	require.Equal(t, 1, resp.TotalRows)
 	require.Len(t, resp.Jobs, 1)
 	assert.Equal(t, "realjob", resp.Jobs[0].ID)
@@ -170,7 +170,7 @@ func TestSchedulerJobs_DesignDocsSkipped(t *testing.T) {
 // TestSchedulerJobs_InvalidDocSkipped verifies that docs missing source or
 // target fields are silently skipped.
 func TestSchedulerJobs_InvalidDocSkipped(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -184,7 +184,7 @@ func TestSchedulerJobs_InvalidDocSkipped(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	resp := getSchedulerJobs(t, router)
+	resp := getSchedulerJobs(t, c)
 	assert.Equal(t, 0, resp.TotalRows)
 	assert.Empty(t, resp.Jobs)
 }
@@ -192,7 +192,7 @@ func TestSchedulerJobs_InvalidDocSkipped(t *testing.T) {
 // TestSchedulerJobs_MultipleJobs verifies that multiple replication docs are
 // all returned with correct fields.
 func TestSchedulerJobs_MultipleJobs(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -222,7 +222,7 @@ func TestSchedulerJobs_MultipleJobs(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	resp := getSchedulerJobs(t, router)
+	resp := getSchedulerJobs(t, c)
 	assert.Equal(t, 3, resp.TotalRows)
 	assert.Len(t, resp.Jobs, 3)
 
@@ -242,7 +242,7 @@ func TestSchedulerJobs_MultipleJobs(t *testing.T) {
 // TestSchedulerJobs_HistoryAndInfo verifies that jobs include history entries
 // and info fields.
 func TestSchedulerJobs_HistoryAndInfo(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -252,17 +252,17 @@ func TestSchedulerJobs_HistoryAndInfo(t *testing.T) {
 	_, err = db.PutDocument(ctx, &model.Document{
 		ID: "myjob",
 		Data: map[string]interface{}{
-			"source":                          "http://source/db",
-			"target":                          "http://target/db",
-			"_replication_state":              "error",
-			"_replication_state_reason":       "db_not_found",
-			"_replication_state_time":         "2024-06-01T12:00:00Z",
-			"_replication_consecutive_fails":  float64(3),
+			"source":                         "http://source/db",
+			"target":                         "http://target/db",
+			"_replication_state":             "error",
+			"_replication_state_reason":      "db_not_found",
+			"_replication_state_time":        "2024-06-01T12:00:00Z",
+			"_replication_consecutive_fails": float64(3),
 		},
 	})
 	require.NoError(t, err)
 
-	resp := getSchedulerJobs(t, router)
+	resp := getSchedulerJobs(t, c)
 	require.Len(t, resp.Jobs, 1)
 
 	job := resp.Jobs[0]
@@ -282,30 +282,30 @@ type schedulerDocsResponse struct {
 	Docs      []SchedulerDocInfo `json:"docs"`
 }
 
-func getSchedulerDocs(t *testing.T, router http.Handler) schedulerDocsResponse {
+func getSchedulerDocs(t *testing.T, c *client.Client) schedulerDocsResponse {
 	t.Helper()
-	req := httptest.NewRequest("GET", "/_scheduler/docs", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
-	var resp schedulerDocsResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-	return resp
+	resp, err := c.Raw(t.Context(), http.MethodGet, "/_scheduler/docs", nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var out schedulerDocsResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	return out
 }
 
 // TestSchedulerDocs_NoReplicatorDB verifies empty response when _replicator doesn't exist.
 func TestSchedulerDocs_NoReplicatorDB(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
-	resp := getSchedulerDocs(t, router)
+	resp := getSchedulerDocs(t, c)
 	assert.Equal(t, 0, resp.TotalRows)
 	assert.Empty(t, resp.Docs)
 }
 
 // TestSchedulerDocs_ListsDocs verifies docs are returned from _replicator.
 func TestSchedulerDocs_ListsDocs(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -322,7 +322,7 @@ func TestSchedulerDocs_ListsDocs(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	resp := getSchedulerDocs(t, router)
+	resp := getSchedulerDocs(t, c)
 	require.Equal(t, 1, resp.TotalRows)
 	require.Len(t, resp.Docs, 1)
 
@@ -337,7 +337,7 @@ func TestSchedulerDocs_ListsDocs(t *testing.T) {
 
 // TestSchedulerDocByID_Found verifies individual doc lookup.
 func TestSchedulerDocByID_Found(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -354,13 +354,13 @@ func TestSchedulerDocByID_Found(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	req := httptest.NewRequest("GET", "/_scheduler/docs/rep-abc", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
+	resp, err := c.Raw(t.Context(), http.MethodGet, "/_scheduler/docs/rep-abc", nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var doc SchedulerDocInfo
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&doc))
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&doc))
 	assert.Equal(t, "rep-abc", doc.DocID)
 	assert.Equal(t, "http://src/x", doc.Source)
 	assert.Equal(t, "http://tgt/x", doc.Target)
@@ -369,14 +369,14 @@ func TestSchedulerDocByID_Found(t *testing.T) {
 
 // TestSchedulerDocByID_NotFound verifies 404 for missing doc.
 func TestSchedulerDocByID_NotFound(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "_replicator")
 	require.NoError(t, err)
 
-	req := httptest.NewRequest("GET", "/_scheduler/docs/nonexistent", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	resp, err := c.Raw(t.Context(), http.MethodGet, "/_scheduler/docs/nonexistent", nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }

@@ -4,16 +4,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
+	"github.com/goydb/goydb/pkg/client"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestReplicate_LocalToLocal(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -36,20 +36,11 @@ func TestReplicate_LocalToLocal(t *testing.T) {
 	_, err = s.CreateDatabase(ctx, "targetdb")
 	require.NoError(t, err)
 
-	body, _ := json.Marshal(map[string]interface{}{
-		"source": "sourcedb",
-		"target": "targetdb",
+	_, err = c.Replicate(ctx, &model.ReplicationDoc{
+		Source: "sourcedb",
+		Target: "targetdb",
 	})
-	req := httptest.NewRequest("POST", "/_replicate", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var result map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
-	assert.Equal(t, true, result["ok"])
+	require.NoError(t, err)
 
 	// Verify docs appear in target
 	tgt, err := s.Database(ctx, "targetdb")
@@ -63,7 +54,7 @@ func TestReplicate_LocalToLocal(t *testing.T) {
 }
 
 func TestReplicate_CreateTarget(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -76,20 +67,23 @@ func TestReplicate_CreateTarget(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Target does NOT exist — create_target should create it
+	// Target does NOT exist — create_target should create it. The
+	// "create_target" field doesn't round-trip through model.ReplicationDoc
+	// (it has no JSON tags, and the field's camelCase doesn't
+	// case-insensitively match the server's snake_case tag), so send it
+	// directly via Raw.
 	body, _ := json.Marshal(map[string]interface{}{
 		"source":        "sourcedb",
 		"target":        "newdb",
 		"create_target": true,
 	})
-	req := httptest.NewRequest("POST", "/_replicate", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.Raw(ctx, http.MethodPost, "/_replicate", bytes.NewReader(body), map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
 
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var result map[string]interface{}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	assert.Equal(t, true, result["ok"])
 
 	tgt, err := s.Database(ctx, "newdb")
@@ -100,16 +94,11 @@ func TestReplicate_CreateTarget(t *testing.T) {
 }
 
 func TestReplicate_MissingSourceOrTarget(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
-	body, _ := json.Marshal(map[string]interface{}{"source": "only-source"})
-	req := httptest.NewRequest("POST", "/_replicate", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	_, err := c.Replicate(t.Context(), &model.ReplicationDoc{Source: "only-source"})
+	assert.Equal(t, http.StatusBadRequest, statusCode(t, err, http.StatusOK))
 }
 
 // TestReplicate_AllDocsCountAfterReplication mirrors the Fauxton verify-install
@@ -117,7 +106,7 @@ func TestReplicate_MissingSourceOrTarget(t *testing.T) {
 // replication the target's _all_docs total_rows must be exactly 4 — not 5
 // (tombstone) and not 5 (checkpoint _local doc).
 func TestReplicate_AllDocsCountAfterReplication(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -151,26 +140,16 @@ func TestReplicate_AllDocsCountAfterReplication(t *testing.T) {
 	_, err = s.CreateDatabase(ctx, "targetdb")
 	require.NoError(t, err)
 
-	body, _ := json.Marshal(map[string]interface{}{
-		"source": "sourcedb",
-		"target": "targetdb",
+	_, err = c.Replicate(ctx, &model.ReplicationDoc{
+		Source: "sourcedb",
+		Target: "targetdb",
 	})
-	req := httptest.NewRequest("POST", "/_replicate", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
+	require.NoError(t, err)
 
 	// _all_docs on the target must report exactly 4 (excludes tombstone and
 	// the _local checkpoint doc written by the replicator).
-	req = httptest.NewRequest("GET", "/targetdb/_all_docs", nil)
-	req.SetBasicAuth("admin", "secret")
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var result AllDocsResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	result, err := c.DB("targetdb").AllDocs(ctx, client.AllDocsQuery{})
+	require.NoError(t, err)
 	assert.Equal(t, 4, result.TotalRows)
 	assert.Len(t, result.Rows, 4)
 }

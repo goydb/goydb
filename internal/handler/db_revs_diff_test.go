@@ -1,74 +1,62 @@
 package handler
 
 import (
-	"bytes"
-	"encoding/json"
+	"errors"
 	"net/http"
-	"net/http/httptest"
-	"os"
+	"strings"
 	"testing"
 
-	"github.com/gorilla/mux"
-	"github.com/gorilla/sessions"
 	"github.com/goydb/goydb/internal/adapter/storage"
-	"github.com/goydb/goydb/internal/adapter/logger"
-	"github.com/goydb/goydb/internal/service"
+	"github.com/goydb/goydb/pkg/client"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func setupRevsDiffTest(t *testing.T) (*storage.Storage, *mux.Router, func()) {
-	dir, err := os.MkdirTemp(os.TempDir(), "goydb-handler-test-*")
-	require.NoError(t, err)
+// setupRevsDiffTest is the original shared test setup, now backed by
+// setupClientTest (a real in-process HTTP server + pkg/client), with the
+// storage/client values in the order most existing callers already expect.
+func setupRevsDiffTest(t *testing.T) (*storage.Storage, *client.Client, func()) {
+	t.Helper()
+	c, s, cleanup := setupClientTest(t)
+	return s, c, cleanup
+}
 
-	s, err := storage.Open(dir, storage.WithLogger(logger.NewNoLog()))
-	require.NoError(t, err)
-
-	store := sessions.NewCookieStore([]byte("test-secret-32-bytes-long-enough"))
-
-	r := mux.NewRouter()
-	err = Router{
-		Storage:            s,
-		SessionStore:       store,
-		Admins:             model.AdminUsers{model.AdminUser{Username: "admin", Password: "secret"}},
-		Replication: &service.Replication{Storage: s, Logger: logger.NewNoLog()}, Logger: logger.NewNoLog(),
-	}.Build(r)
-	require.NoError(t, err)
-
-	return s, r, func() {
-		_ = s.Close()
-		_ = os.RemoveAll(dir)
+// statusCode derives the HTTP status code a pkg/client call's outcome
+// implies: okStatus on success, or the *client.StatusError's code on
+// failure. Used where a test needs the exact status code rather than just
+// success/failure.
+func statusCode(t *testing.T, err error, okStatus int) int {
+	t.Helper()
+	if err == nil {
+		return okStatus
 	}
+	var se *client.StatusError
+	if errors.As(err, &se) {
+		return se.StatusCode
+	}
+	t.Fatalf("unexpected transport error: %v", err)
+	return 0
 }
 
 func TestRevsDiff_AllMissing(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
-	body, _ := json.Marshal(map[string][]string{
+	result, err := c.DB("testdb").RevsDiff(t.Context(), map[string][]string{
 		"doc1": {"1-a"},
 		"doc2": {"1-b"},
 	})
-
-	req := httptest.NewRequest("POST", "/testdb/_revs_diff", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var result map[string]map[string][]string
-	json.NewDecoder(w.Body).Decode(&result) // nolint: errcheck
+	require.NoError(t, err)
 	assert.Contains(t, result, "doc1")
 	assert.Contains(t, result, "doc2")
 }
 
 func TestRevsDiff_SomePresent(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -81,26 +69,17 @@ func TestRevsDiff_SomePresent(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	body, _ := json.Marshal(map[string][]string{
+	result, err := c.DB("testdb").RevsDiff(t.Context(), map[string][]string{
 		"doc1": {rev},
 		"doc2": {"1-b"},
 	})
-
-	req := httptest.NewRequest("POST", "/testdb/_revs_diff", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var result map[string]map[string][]string
-	json.NewDecoder(w.Body).Decode(&result) // nolint: errcheck
+	require.NoError(t, err)
 	assert.NotContains(t, result, "doc1")
 	assert.Contains(t, result, "doc2")
 }
 
 func TestRevsDiff_NoneMissing(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -113,53 +92,37 @@ func TestRevsDiff_NoneMissing(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	body, _ := json.Marshal(map[string][]string{
+	result, err := c.DB("testdb").RevsDiff(t.Context(), map[string][]string{
 		"doc1": {rev},
 	})
-
-	req := httptest.NewRequest("POST", "/testdb/_revs_diff", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var result map[string]map[string][]string
-	json.NewDecoder(w.Body).Decode(&result) // nolint: errcheck
+	require.NoError(t, err)
 	assert.Empty(t, result)
 }
 
 func TestRevsDiff_InvalidJSON(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	_, err := s.CreateDatabase(t.Context(), "testdb")
 	require.NoError(t, err)
 
-	req := httptest.NewRequest("POST", "/testdb/_revs_diff", bytes.NewReader([]byte("not json")))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
+	resp, err := c.DB("testdb").Raw(t.Context(), http.MethodPost, "/_revs_diff", strings.NewReader("not json"), map[string]string{"Content-Type": "application/json"})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
 func TestRevsDiff_NonexistentDB(t *testing.T) {
-	_, router, cleanup := setupRevsDiffTest(t)
+	_, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
-	body, _ := json.Marshal(map[string][]string{"doc1": {"1-a"}})
-
-	req := httptest.NewRequest("POST", "/nonexistent/_revs_diff", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusNotFound, w.Code)
+	_, err := c.DB("nonexistent").RevsDiff(t.Context(), map[string][]string{"doc1": {"1-a"}})
+	require.Error(t, err)
+	assert.Equal(t, http.StatusNotFound, statusCode(t, err, http.StatusOK))
 }
 
 func TestRevsDiff_AncestorRevNotMissing(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -180,24 +143,15 @@ func TestRevsDiff_AncestorRevNotMissing(t *testing.T) {
 	require.NoError(t, err)
 
 	// POST rev1 (now an ancestor of the current rev).
-	body, _ := json.Marshal(map[string][]string{
+	result, err := c.DB("testdb").RevsDiff(t.Context(), map[string][]string{
 		"doc1": {rev1},
 	})
-
-	req := httptest.NewRequest("POST", "/testdb/_revs_diff", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var result map[string]map[string][]string
-	json.NewDecoder(w.Body).Decode(&result) //nolint: errcheck
+	require.NoError(t, err)
 	assert.NotContains(t, result, "doc1", "ancestor rev should not appear in _revs_diff result")
 }
 
 func TestRevsDiff_ConflictLeafNotMissing(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -219,22 +173,15 @@ func TestRevsDiff_ConflictLeafNotMissing(t *testing.T) {
 	require.NoError(t, err)
 
 	// Both conflict revs should not be reported as missing.
-	body, _ := json.Marshal(map[string][]string{
+	result, err := c.DB("testdb").RevsDiff(t.Context(), map[string][]string{
 		"doc1": {"1-aaa", "1-zzz"},
 	})
-	req := httptest.NewRequest("POST", "/testdb/_revs_diff", bytes.NewReader(body))
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var result map[string]map[string][]string
-	json.NewDecoder(w.Body).Decode(&result) //nolint:errcheck
+	require.NoError(t, err)
 	assert.NotContains(t, result, "doc1", "conflict leaf revs should not appear as missing")
 }
 
 func TestAllDocs_TotalRowsExcludesDeleted(t *testing.T) {
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 	defer cleanup()
 
 	ctx := t.Context()
@@ -262,14 +209,8 @@ func TestAllDocs_TotalRowsExcludesDeleted(t *testing.T) {
 	require.NoError(t, err)
 
 	// total_rows must reflect only live documents (2), not the tombstone
-	req := httptest.NewRequest("GET", "/testdb/_all_docs", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	var result AllDocsResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	result, err := c.DB("testdb").AllDocs(ctx, client.AllDocsQuery{})
+	require.NoError(t, err)
 	assert.Equal(t, 2, result.TotalRows)
 	assert.Len(t, result.Rows, 2)
 }

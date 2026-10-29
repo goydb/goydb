@@ -47,6 +47,13 @@ type Database interface {
 	AllDesignDocs(ctx context.Context) ([]*model.Document, int, error)
 	FindDocs(ctx context.Context, query model.FindQuery) ([]*model.Document, *model.ExecutionStats, error)
 	Changes(ctx context.Context, options *model.ChangesOptions) ([]*model.Document, int, error)
+	// WaitForChange blocks until the database has at least one document
+	// change with a sequence greater than since, then returns the new
+	// sequence to resume from (equivalent to a longpoll _changes response's
+	// last_seq). If since is "" it returns as soon as there is any change at
+	// all. It blocks (does not poll) until ctx is cancelled or a qualifying
+	// change occurs; ctx cancellation returns ctx.Err().
+	WaitForChange(ctx context.Context, since string) (string, error)
 
 	GetSecurity(ctx context.Context) (*model.Security, error)
 	PutSecurity(ctx context.Context, sec *model.Security) error

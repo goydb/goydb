@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-
 )
 
 // ConfigAll handles GET /_config — returns all sections.

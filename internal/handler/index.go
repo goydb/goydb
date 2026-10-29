@@ -11,10 +11,10 @@ func (s *Index) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close() //nolint:errcheck
 
 	response := &Info{
-		Couchdb: "Welcome",
-		Version: "0.1.0",
-		GitSha:  "master",
-		UUID:    "0dbc95c8-4208-11eb-ad76-00155d4c9c92",
+		Couchdb:  "Welcome",
+		Version:  "0.1.0",
+		GitSha:   "master",
+		UUID:     "0dbc95c8-4208-11eb-ad76-00155d4c9c92",
 		Features: Features(),
 		Vendor: Vendor{
 			Name: "goydb",

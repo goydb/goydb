@@ -3,102 +3,71 @@
 package handler
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/gorilla/mux"
+	"github.com/goydb/goydb/pkg/client"
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func setupPartitionDB(t *testing.T) (http.Handler, func()) {
+func setupPartitionDB(t *testing.T) (*client.Client, func()) {
 	t.Helper()
-	s, router, cleanup := setupRevsDiffTest(t)
+	s, c, cleanup := setupRevsDiffTest(t)
 
 	_, err := s.CreateDatabase(t.Context(), "partdb")
 	require.NoError(t, err)
 
 	// Create documents in two partitions.
 	for _, id := range []string{"sensors:temp1", "sensors:temp2", "sensors:humidity1", "users:alice", "users:bob"} {
-		req := httptest.NewRequest("PUT", "/partdb/"+id, strings.NewReader(`{"type":"doc"}`))
-		req.Header.Set("Content-Type", "application/json")
-		req.SetBasicAuth("admin", "secret")
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-		require.Equal(t, http.StatusCreated, w.Code, "creating %s: %s", id, w.Body.String())
+		_, err := c.DB("partdb").Put(t.Context(), &model.Document{ID: id, Data: map[string]interface{}{"type": "doc"}})
+		require.NoError(t, err, "creating %s", id)
 	}
-	return router, cleanup
+	return c, cleanup
 }
 
 func TestPartitionInfo(t *testing.T) {
-	router, cleanup := setupPartitionDB(t)
+	c, cleanup := setupPartitionDB(t)
 	defer cleanup()
 
-	req := httptest.NewRequest("GET", "/partdb/_partition/sensors", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.DB("partdb").Partition("sensors").Info(t.Context())
+	require.NoError(t, err)
 
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var resp map[string]interface{}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "partdb", resp["db_name"])
 	assert.Equal(t, "sensors", resp["partition"])
 	assert.Equal(t, float64(3), resp["doc_count"])
 }
 
 func TestPartitionInfo_UsersPartition(t *testing.T) {
-	router, cleanup := setupPartitionDB(t)
+	c, cleanup := setupPartitionDB(t)
 	defer cleanup()
 
-	req := httptest.NewRequest("GET", "/partdb/_partition/users", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.DB("partdb").Partition("users").Info(t.Context())
+	require.NoError(t, err)
 
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var resp map[string]interface{}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "users", resp["partition"])
 	assert.Equal(t, float64(2), resp["doc_count"])
 }
 
 func TestPartitionInfo_EmptyPartition(t *testing.T) {
-	router, cleanup := setupPartitionDB(t)
+	c, cleanup := setupPartitionDB(t)
 	defer cleanup()
 
-	req := httptest.NewRequest("GET", "/partdb/_partition/nonexistent", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.DB("partdb").Partition("nonexistent").Info(t.Context())
+	require.NoError(t, err)
 
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var resp map[string]interface{}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, float64(0), resp["doc_count"])
 }
 
 func TestPartitionAllDocs(t *testing.T) {
-	router, cleanup := setupPartitionDB(t)
+	c, cleanup := setupPartitionDB(t)
 	defer cleanup()
 
-	req := httptest.NewRequest("GET", "/partdb/_partition/sensors/_all_docs", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var resp AllDocsResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	resp, err := c.DB("partdb").Partition("sensors").AllDocs(t.Context(), client.AllDocsQuery{})
+	require.NoError(t, err)
 	assert.Len(t, resp.Rows, 3)
 
 	// Verify all rows are in the sensors partition.
@@ -108,18 +77,11 @@ func TestPartitionAllDocs(t *testing.T) {
 }
 
 func TestPartitionAllDocs_IncludeDocs(t *testing.T) {
-	router, cleanup := setupPartitionDB(t)
+	c, cleanup := setupPartitionDB(t)
 	defer cleanup()
 
-	req := httptest.NewRequest("GET", "/partdb/_partition/users/_all_docs?include_docs=true", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var resp AllDocsResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	resp, err := c.DB("partdb").Partition("users").AllDocs(t.Context(), client.AllDocsQuery{IncludeDocs: true})
+	require.NoError(t, err)
 	assert.Len(t, resp.Rows, 2)
 	for _, row := range resp.Rows {
 		assert.NotNil(t, row.Doc)
@@ -128,81 +90,50 @@ func TestPartitionAllDocs_IncludeDocs(t *testing.T) {
 }
 
 func TestPartitionAllDocs_Limit(t *testing.T) {
-	router, cleanup := setupPartitionDB(t)
+	c, cleanup := setupPartitionDB(t)
 	defer cleanup()
 
-	req := httptest.NewRequest("GET", "/partdb/_partition/sensors/_all_docs?limit=1", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var resp AllDocsResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	resp, err := c.DB("partdb").Partition("sensors").AllDocs(t.Context(), client.AllDocsQuery{Limit: 1})
+	require.NoError(t, err)
 	assert.Len(t, resp.Rows, 1)
 }
 
 func TestPartitionFind(t *testing.T) {
-	router, cleanup := setupPartitionDB(t)
+	c, cleanup := setupPartitionDB(t)
 	defer cleanup()
 
-	body := `{"selector":{"type":"doc"}}`
-	req := httptest.NewRequest("POST", "/partdb/_partition/sensors/_find", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.DB("partdb").Partition("sensors").Find(t.Context(), client.FindQuery{
+		Selector: map[string]interface{}{"type": "doc"},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.Docs, 3)
 
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var resp map[string]interface{}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	docs, ok := resp["docs"].([]interface{})
-	require.True(t, ok)
-	assert.Len(t, docs, 3)
-
-	for _, d := range docs {
-		doc := d.(map[string]interface{})
+	for _, doc := range resp.Docs {
 		id := doc["_id"].(string)
 		assert.True(t, strings.HasPrefix(id, "sensors:"), "expected sensors: prefix, got %s", id)
 	}
 }
 
 func TestPartitionFind_UsersOnly(t *testing.T) {
-	router, cleanup := setupPartitionDB(t)
+	c, cleanup := setupPartitionDB(t)
 	defer cleanup()
 
-	body := `{"selector":{"type":"doc"}}`
-	req := httptest.NewRequest("POST", "/partdb/_partition/users/_find", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var resp map[string]interface{}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	docs := resp["docs"].([]interface{})
-	assert.Len(t, docs, 2)
+	resp, err := c.DB("partdb").Partition("users").Find(t.Context(), client.FindQuery{
+		Selector: map[string]interface{}{"type": "doc"},
+	})
+	require.NoError(t, err)
+	assert.Len(t, resp.Docs, 2)
 }
 
 func TestPartitionExplain(t *testing.T) {
-	router, cleanup := setupPartitionDB(t)
+	c, cleanup := setupPartitionDB(t)
 	defer cleanup()
 
-	body := `{"selector":{"type":"doc"},"limit":10}`
-	req := httptest.NewRequest("POST", "/partdb/_partition/sensors/_explain", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var resp map[string]interface{}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	resp, err := c.DB("partdb").Partition("sensors").Explain(t.Context(), client.FindQuery{
+		Selector: map[string]interface{}{"type": "doc"},
+		Limit:    10,
+	})
+	require.NoError(t, err)
 	assert.Equal(t, "partdb", resp["dbname"])
 	assert.Equal(t, "sensors", resp["partition"])
 	assert.Equal(t, true, resp["partitioned"])
@@ -212,9 +143,9 @@ func TestPartitionExplain(t *testing.T) {
 // setupPartitionViewDB creates a database with partitioned documents and a
 // design doc containing a simple view, using setupViewTest (which provides
 // JavaScript engine and task controller needed for view indexing).
-func setupPartitionViewDB(t *testing.T) (*mux.Router, func()) {
+func setupPartitionViewDB(t *testing.T) (*client.Client, func()) {
 	t.Helper()
-	s, router, cleanup := setupViewTest(t)
+	s, c, cleanup := setupViewTest(t)
 
 	ctx := t.Context()
 	db, err := s.CreateDatabase(ctx, "partdb")
@@ -236,7 +167,7 @@ func setupPartitionViewDB(t *testing.T) (*mux.Router, func()) {
 	}
 
 	// Create a design doc with a view that emits by type.
-	putDesignDoc(t, router, "partdb", "myddoc", map[string]interface{}{
+	putDesignDoc(t, c, "partdb", "myddoc", map[string]interface{}{
 		"views": map[string]interface{}{
 			"by_type": map[string]interface{}{
 				"map":    `function(doc) { emit(doc.type, 1); }`,
@@ -245,63 +176,59 @@ func setupPartitionViewDB(t *testing.T) (*mux.Router, func()) {
 		},
 	})
 
-	return router, cleanup
+	return c, cleanup
 }
 
 func TestPartitionView(t *testing.T) {
-	router, cleanup := setupPartitionViewDB(t)
+	c, cleanup := setupPartitionViewDB(t)
 	defer cleanup()
 
 	// Query the partition view for "sensors" with reduce=false.
-	req := httptest.NewRequest("GET", "/partdb/_partition/sensors/_design/myddoc/_view/by_type?reduce=false", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	resp, err := c.DB("partdb").Raw(t.Context(), http.MethodGet, "/_partition/sensors/_design/myddoc/_view/by_type?reduce=false", nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-
-	var resp ViewResponse
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	var result client.RowsResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 
 	// Only sensors:* documents should appear.
-	assert.Len(t, resp.Rows, 2, "expected 2 sensor rows, got %d", len(resp.Rows))
-	for _, row := range resp.Rows {
+	assert.Len(t, result.Rows, 2, "expected 2 sensor rows, got %d", len(result.Rows))
+	for _, row := range result.Rows {
 		assert.True(t, strings.HasPrefix(row.ID, "sensors:"),
 			"expected sensors: prefix, got %s", row.ID)
 	}
 
 	// Verify users:* documents are excluded.
-	for _, row := range resp.Rows {
+	for _, row := range result.Rows {
 		assert.False(t, strings.HasPrefix(row.ID, "users:"),
 			"unexpected users: document %s", row.ID)
 	}
 }
 
 func TestPartitionView_Reduce(t *testing.T) {
-	router, cleanup := setupPartitionViewDB(t)
+	c, cleanup := setupPartitionViewDB(t)
 	defer cleanup()
 
 	// Query the partition view for "sensors" with reduce=true (default).
-	req := httptest.NewRequest("GET", "/partdb/_partition/sensors/_design/myddoc/_view/by_type", nil)
-	req.SetBasicAuth("admin", "secret")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp, err := c.DB("partdb").Raw(t.Context(), http.MethodGet, "/_partition/sensors/_design/myddoc/_view/by_type", nil, nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	// Parse the reduce response — it returns rows with aggregated values.
-	var resp struct {
+	var result struct {
 		Rows []struct {
 			Key   interface{} `json:"key"`
 			Value interface{} `json:"value"`
 		} `json:"rows"`
 	}
-	require.NoError(t, json.NewDecoder(bytes.NewReader(w.Body.Bytes())).Decode(&resp))
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 
 	// With _count reduce over the sensors partition, we expect count=2
 	// (sensors:temp1 and sensors:temp2 both have type "sensor").
-	require.Len(t, resp.Rows, 1, "expected 1 reduced row")
+	require.Len(t, result.Rows, 1, "expected 1 reduced row")
 	// _count returns a number; JSON decodes as float64.
-	assert.Equal(t, float64(2), resp.Rows[0].Value,
+	assert.Equal(t, float64(2), result.Rows[0].Value,
 		"expected count of 2 for sensors partition")
 }
