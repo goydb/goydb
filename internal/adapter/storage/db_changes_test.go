@@ -9,6 +9,7 @@ import (
 
 	"github.com/goydb/goydb/pkg/model"
 	"github.com/goydb/goydb/pkg/port"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -455,6 +456,95 @@ func TestTransaction_DeleteDocument_NotifiesExactlyOnce(t *testing.T) {
 	select {
 	case extra := <-notified:
 		t.Fatalf("got an unexpected extra notification for %q (rev %q) -- delete notified more than once", extra.ID, extra.Rev)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// TestDatabaseTransaction_EmptyTransactionDoesNotNotify covers the zero-write
+// edge case: a Transaction callback that succeeds without writing or
+// deleting any document (e.g. a read-only lookup, or a no-op branch in a
+// bulk operation) must not notify listeners at all -- tx.notifications
+// should simply stay nil/empty, not panic or spuriously fire.
+func TestDatabaseTransaction_EmptyTransactionDoesNotNotify(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	notified := make(chan string, 10)
+	err = db.AddListener(ctx, port.ChangeListenerFunc(func(_ context.Context, doc *model.Document) error {
+		notified <- doc.ID
+		return nil
+	}))
+	require.NoError(t, err)
+
+	err = db.Transaction(ctx, func(tx port.DatabaseTx) error {
+		_, err := tx.GetDocument(ctx, "does-not-exist")
+		return err
+	})
+	require.NoError(t, err)
+
+	select {
+	case id := <-notified:
+		t.Fatalf("listener was notified for %q from a transaction that wrote nothing", id)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// TestDatabaseTransaction_NotifiesEachWriteToSameDocumentInOneTransaction
+// covers writing the same document ID twice within a single transaction
+// (e.g. a bulk operation that happens to touch one ID more than once): both
+// writes are real, successive edits, so both must notify -- the
+// accumulation in Transaction.notifications must not dedupe by document ID.
+func TestDatabaseTransaction_NotifiesEachWriteToSameDocumentInOneTransaction(t *testing.T) {
+	s, cleanup := openStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	db, err := s.CreateDatabase(ctx, "testdb")
+	require.NoError(t, err)
+
+	notified := make(chan *model.Document, 10)
+	err = db.AddListener(ctx, port.ChangeListenerFunc(func(_ context.Context, doc *model.Document) error {
+		if doc.ID == "doc1" {
+			notified <- doc
+		}
+		return nil
+	}))
+	require.NoError(t, err)
+
+	err = db.Transaction(ctx, func(tx port.DatabaseTx) error {
+		doc := &model.Document{ID: "doc1", Data: map[string]interface{}{"n": 1}}
+		if _, err := tx.PutDocument(ctx, doc); err != nil {
+			return err
+		}
+		// doc.Rev now holds the first write's generated revision. Reuse it
+		// directly rather than reading it back via tx.GetDocument: bbolt
+		// defers writes to a separate commit phase, so they aren't visible
+		// to reads within the same transaction (see PutDocumentForReplication's
+		// comment on this same quirk).
+		_, err := tx.PutDocument(ctx, &model.Document{ID: "doc1", Rev: doc.Rev, Data: map[string]interface{}{"n": 2}})
+		return err
+	})
+	require.NoError(t, err)
+
+	var revs []string
+	for i := 0; i < 2; i++ {
+		select {
+		case doc := <-notified:
+			revs = append(revs, doc.Rev)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("only got %d of 2 expected notifications", i)
+		}
+	}
+	require.Len(t, revs, 2)
+	assert.NotEqual(t, revs[0], revs[1], "the two writes produced different revisions and both must be reported")
+
+	select {
+	case extra := <-notified:
+		t.Fatalf("got an unexpected 3rd notification for doc1 (rev %q)", extra.Rev)
 	case <-time.After(300 * time.Millisecond):
 	}
 }
